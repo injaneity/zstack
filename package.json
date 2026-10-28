@@ -1,0 +1,10 @@
+{
+  "name": "zstack",
+  "version": "0.1.0",
+  "description": "pstack forked for one thread: rigorous agent workflows with no subagents.",
+  "license": "MIT",
+  "keywords": ["pi-package", "skills", "workflow", "principles"],
+  "pi": {
+    "skills": ["./skills"]
+  }
+}
