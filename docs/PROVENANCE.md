@@ -42,6 +42,10 @@ Every one of these exists to spawn, supervise, or fan out across agents, or to s
 - Skills: `poteto-mode`, `poteto-help`, `arena`, `swarm`, `interrogate`, `reflect`, `orchestrate`, `autopilot-full`, `autopilot-stack`, `teach`, `statechart`, `no-comments`, `ketchup`, `ketchup-video`, `recall`, `in-your-own-words`, `bro`, `setup-pstack`, `make-bot-ui`, `create-formal-verification-skill`, `maintain-formal-verification-skill`.
 - `references/source-playbook.md` survives inside `why`; the playbooks `bugbot-triage` moved to `skills/onigiri-mode/references/`.
 
+Tooling: upstream ships 2,436 lines of TypeScript behind `scripts/watch-pr`, plus `check-plan.mjs`, `bootstrap.ts`, and a bun lockfile, all inside `poteto-mode/scripts`. Dropped, because `watch-pr` is a second merge-gate implementation competing with the one that already runs, and `check-plan.mjs` hardcodes the coordinator plan shape removed from `multi-phase-plan` (it demands "Spawn owners", `/loop 1h`, and "status message" markers, so it rejects every plan this fork writes). `babysit` and `shipping` read PR state with `gh` directly.
+
+Kept tooling: `worktree-audit.sh` (134 lines, bash, no dependencies) and `show-me-your-work/scripts/log.sh` (42 lines). Both are things prose can't do reliably.
+
 `deslop` was never pstack's. It is a plain paragraph in the work prompt: remove narrating comments, unsupported guards, dead compatibility paths, and unrelated edits.
 
 ## Not yet ruled on
