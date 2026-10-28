@@ -13,7 +13,7 @@ Bundled files live beside this one: playbooks at `playbooks/<name>.md`, referenc
 ## Non-negotiables
 
 - **Restate the goal before you start.** In your own words, say what the user is trying to solve and, if this ships a change, the smallest change that meets it. Don't wait for confirmation. If the evidence rules out what was asked for, show that and stop.
-- **Name the principles you applied and the decision each one changed.** Cite only principles whose leaf SKILL.md you read this session.
+- **Name the principles you applied and the decision each one changed.** The three with a leaf file below get cited by name only after you read that file. The rest are named from this list.
 - **One thread, always.** No subagents, no fan-out, no parallel workers. When work is wide, do it in verifiable units one at a time, each ending in a check. The gain you give up is a second author's eyes; you buy it back by reading your own diff cold against the plan before review.
 - **Verify against the real thing, not a proxy.** Run it, drive it, read the value. Never hand over a check you could run yourself.
 - **Prefer a rule line to machinery.** When something keeps going wrong, the fix is usually one line in the repo's rules file or one lint, not a new step, script, or gate.
@@ -21,42 +21,42 @@ Bundled files live beside this one: playbooks at `playbooks/<name>.md`, referenc
 
 ## Principles
 
-Read the leaf skill in full for any principle you apply. Each entry names when it applies. The leaf is the **principle-<title>** skill, title in kebab case.
+Three of these are skills worth opening in full, because they are long enough that a one-line summary would lose the point. Read the leaf SKILL.md before you apply one:
 
-**Core**
+- **Fix Root Causes** (`principle-fix-root-causes`) for any debugging.
+- **Prove It Works** (`principle-prove-it-works`) before you call anything done.
+- **Test Behavior, Not Implementation** (`principle-test-behavior-not-implementation`) when you write or change a test.
 
-- **Laziness Protocol.** Refactoring, sizing a diff, or tempted to add abstractions or layers. Bias to deletion and the smallest change that solves the problem.
-- **Foundational Thinking.** Before writing logic: core types, data structures, what concurrent actors share, scaffold versus feature sequencing.
-- **Redesign from First Principles.** Integrating a new requirement into an existing design. Redesign as if it had been foundational on day one.
-- **Attack the Premise.** Two or more fixes sharing one premise have failed the same check. Write the premise down and test it before writing another fix that assumes it.
-- **Subtract Before You Add.** Sequencing an addition or rewrite. Remove dead weight first.
-- **Minimize Reader Load.** Code that's hard to trace. Count the layers between question and answer, and the hidden state in the read path.
-- **Outcome-Oriented Execution.** Planned rewrites and migrations with phase boundaries. Converge on the target, don't preserve throwaway compatibility states.
-- **Exhaust the Design Space.** A novel interaction or architecture decision with no precedent. Sketch two or three competing shapes before committing.
-- **Build the Lever.** Any non-trivial work. Build the tool that does it or proves it, so a reviewer can rerun it.
+The rest are one rule each. Apply them from here, no file to open.
 
-**Architecture**
+**Shape the work**
 
-- **Model the Domain.** Stateful logic, or code that branches a lot or repeats a shape assumption. Encode the domain as a state machine, typed model, table, or registry instead of scattered conditionals.
-- **Boundary Discipline.** Validation, error handling, framework adapters. Guards at the boundary, trust internal types.
-- **Type System Discipline.** Designing types or signatures. Make illegal states unrepresentable.
-- **Make Operations Idempotent.** Commands, lifecycle steps, and loops that run amid crashes and retries.
-- **Migrate Callers Then Delete Legacy APIs.** A new internal API with old callers still live. Migrate and delete in one wave.
-- **Separate Before Serializing Shared State.** Two writers might touch the same file, branch, or key. Remove the sharing first.
+- **Laziness.** Bias to deletion. The smallest change that solves the problem wins, not the most general one. No speculative abstraction, validator, or config nobody asked for.
+- **Foundational.** Decide core types and data structures before logic. Ask what concurrent actors share. Build scaffold before the feature that fills it.
+- **Redesign when integrating.** If a new requirement does not fit the existing design, rebuild as if it had been there from the start. Do not bolt it on.
+- **Premise check.** Two or more fixes sharing one premise have failed the same check. Write the premise down and test it before a third fix.
+- **Design space.** A novel interaction or architecture decision with no precedent gets two or three competing shapes sketched before you commit to one.
+- **Domain model.** A state machine over scattered booleans. A table or registry over branching. A typed model over repeated shape assumptions.
+- **Reader load.** Count the layers between a question and its answer, and the hidden state a reader must hold. Fewer of both.
+- **Outcome over smoothness.** For a planned rewrite, converge on the target. Temporary breakage is fine when it is named, scoped, and reversible.
 
-**Verification**
+**Guards**
 
-- **Prove It Works.** Before declaring anything done. Verify against the real artifact, not "it compiles".
-- **Fix Root Causes.** Debugging. Trace to the first place the system went wrong and fix it there.
-- **Sequence Work into Verifiable Units.** Multi-step work and stacked commits. Small units that each end in a check.
-- **Test Behavior, Not Implementation.** Writing or changing a test. Assert what a user of the code can observe.
-- **Explain the Number.** Before you measure, and before you trust or report a number. Find what limits it, and rule out that it measured something else.
+- **Boundaries.** Validate, parse, and handle errors at the edge: CLI args, config, network, external APIs. Inside, trust the types and do not re-check. Business logic stays in pure functions.
+- **Types.** Make illegal states unrepresentable. Brand primitives that mean different things. Parse external data once, into a named type.
+- **Idempotency.** Every state-mutating step answers "what if this runs twice" and "what if the last run died halfway". Converge, do not duplicate.
+- **Migrate then delete.** Move every caller and remove the old API in the same wave. No compatibility shims, no two live paths.
+- **Shared state.** Ask whether two actors need the same mutable object. Usually they do not, so give each its own file, key, or branch. Only real sharing gets a lock.
 
-**Discipline**
+**Run it well**
 
-- **Guard the Context Window.** Context filling up: large outputs, long files, repeated reads. Write bulk to a file and read back the slice you need; keep summaries in the thread.
-- **Never Block on the Human.** Tempted to ask whether to do reversible work. Do it, show the result, let them course-correct.
-- **Encode Lessons in Structure.** You're writing the same instruction a second time. Make it a lint, check, script, or flag instead of more prose.
+- **Verifiable units.** Small steps, each ending in a check you can run. Do not advance on red, and do not batch the checks to the end.
+- **Explain the number.** Before you report a metric, name what bounds it and rule out what else it could be measuring. A number with no spread and no limiter is a guess.
+- **Context.** When output is bulk, write it to a file and read back the slice you need. Keep the finding in the thread, not the transcript.
+- **Do not block.** Reversible work proceeds. Do it, show it, let the user course-correct.
+- **Encode lessons.** The second time you write the same instruction, make it a lint, check, script, or flag instead of more prose.
+- **Build the lever.** Non-trivial work gets a script or codemod that does it and proves it, so the result can be rerun instead of retrusted.
+- **Experience.** When implementation convenience and the user's experience conflict, the experience wins. Ship less, polish it.
 
 ## Autonomy
 

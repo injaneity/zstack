@@ -14,18 +14,29 @@ The one rule that changed everywhere: pstack routes design to one model and impl
 |---|---|
 | `onigiri-mode` | Written new. It replaces `poteto-mode` as the mode skill: routing table, non-negotiables, principles, autonomy, reply rules, and the cua hard rules. |
 | `architect` | Arena removed. Phase B sketches two or three candidates in this session and picks one; the rejected shape's disqualifying fact goes in the rationale's Synthesis decision. `interrogate` replaced by arguing against your own sketch. `references/runner-prompt.md` dropped, since it didn't exist upstream and arena was its only reader. |
-| `how` | The subagent-explorer step is gone. You read the code and write the explanation; `references/explainer-prompt.md` is now the shape of your write-up rather than a prompt for anyone. `references/explorer-prompt.md` kept only so the explainer's wording stays consistent. |
-| `why` | Full rewrite. It still has the seven evidence categories, the investigator and synthesizer templates, and the epistemics framework, but you work each category yourself in turn instead of spawning one investigator each. Sources Consulted is now one line per category rather than per investigator. |
+| `how` | The subagent-explorer step is gone. You read the code and write the explanation; `references/explanation-template.md` is the shape of your write-up rather than a prompt for anyone. |
+| `why` | Full rewrite. It still has the seven evidence categories and the epistemics framework, but you work each category yourself in turn instead of spawning one investigator each. `references/category-notes.md` is the shape of your notes per category and `references/writeup-template.md` the shape of the answer. Sources Consulted is one line per category. |
 | `figure-it-out` | Arena, fan-out, and the delegated-work judge are gone. Ordering replaces parallelism, and every unit ends in a check that can fail. |
 | `automate-me` | Retargeted at `onigiri-mode` instead of a generic `-mode` skill. The mining step reads transcripts itself rather than fanning out across slices, and `create-skill` references are replaced by the `authoring-a-skill` playbook. |
 | `maintain-verification-skill` | The parallel source wave is a serial read pass with notes. "The coordinator" becomes "you". |
 | `show-me-your-work` | The different-model review subagent is now a cold reread of your own audit trail. |
-| `principle-build-the-lever` | The "write a lever for your subagents" line is about repeated steps instead, kept somewhere the work can't edit mid-run. |
-| `principle-guard-the-context-window` | Routes bulk to a file and a slice read instead of to subagents. |
 
 ## Kept verbatim
 
-`tdd`, `unslop`, `sharpen`, `correct`, `blast-radius`, `benchmark-checklist`, `technical-writing`, `typescript-best-practices`, `create-verification-skill`, and all 24 `principle-*` except the two named above.
+`tdd`, `unslop`, `blast-radius`, `technical-writing`, `typescript-best-practices`, `create-verification-skill`, and `principle-fix-root-causes`, `principle-prove-it-works`, `principle-test-behavior-not-implementation`.
+
+## Dropped for a single thread
+
+A session audit over 203 pi transcripts and three days of work, plus a citation sweep across every skill, decided these. Each one either had no reader, no citation, or was a leaf whose whole value is a sentence.
+
+| Skill | Why it went |
+| --- | --- |
+| `sharpen`, `correct` | Zero citations, zero sessions. `correct` also duplicated what the `refactoring` playbook already does after a correction. |
+| `benchmark-checklist` | Cited once, by a principle that also went. Its questions are now the harness step in `measure`. |
+| `principle-attack-the-premise` | Zero citations. Rule is a line in `onigiri-mode`. |
+| `principle-experience-first` | Zero citations. Rule is a line in `onigiri-mode`. |
+| `principle-make-operations-idempotent` | Zero citations. Rule is a line in `onigiri-mode`. |
+| All other `principle-*` except the three kept | pstack's shape fans one principle out to each subagent, so each leaf is sized for a reader with no shared context. One thread reading its own mode skill does not need a file per rule. The rules are in `onigiri-mode` under Shape the work, Guards, and Run it well. |
 
 ## Playbooks
 

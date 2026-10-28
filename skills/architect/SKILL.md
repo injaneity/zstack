@@ -27,7 +27,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 Sketch two or three structurally distinct candidates yourself, in this session, against the Phase A grounding. There is no arena and no runner: you are the only sketcher.
 
-Design it twice. Require at least two structurally distinct candidates before choosing one, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape. Sketch each candidate far enough that its differences are visible: types, the public surface, and where the state lives. Don't implement any of them yet.
+Design it twice. Require at least two structurally distinct candidates before choosing one, even when the first looks sufficient. This is the whole point of a sketch. Whole-shape alternatives, not point fixes inside one shape. Sketch each candidate far enough that its differences are visible: types, the public surface, and where the state lives. Don't implement any of them yet.
 
 Screen every candidate against [`references/design-red-flags.md`](references/design-red-flags.md) before synthesis. Assume the next contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Prefer the design where a change that looks right from one file is right for the whole repo.
 
@@ -41,7 +41,7 @@ Default: proceed directly to implementation with the synthesized design. No huma
 
 Opt in to a checkpoint when the invoker explicitly asks: "/architect with checkpoint," "stop and show me before implementing," or similar. Then surface the synthesized design and pause for sign-off.
 
-The sketch can ship as its own commit either way, as the "scaffold first" mode of the **foundational-thinking** principle skill. Planned and scoped breakage during fill-in is fine, per the **outcome-oriented-execution** principle skill. For adversarial pressure on the design before implementing, argue hardest against your own chosen sketch: name the case where it's wrong, and check whether the rejected candidate answers it.
+The sketch can ship as its own commit either way, with scaffold landing before the feature that fills it in. Planned and scoped breakage during fill-in is fine as long as it is reversible and named. For adversarial pressure on the design before implementing, argue hardest against your own chosen sketch: name the case where it's wrong, and check whether the rejected candidate answers it.
 
 If the human pushes back on the shape (in a checkpoint or after the fact), treat that as Phase A evidence. Re-ground and re-sketch in Phase B before writing more code.
 
@@ -51,7 +51,7 @@ Replace `not implemented` bodies with code, pseudocode with logic. The synthesiz
 
 ## Phase E: Scrap when the architecture is wrong
 
-If implementation keeps producing friction the sketch can't absorb, throw the sketch out. Don't bolt fixes onto a wrong design, per the **redesign-from-first-principles** and **fix-root-causes** principle skills.
+If implementation keeps producing friction the sketch can't absorb, throw the sketch out. Don't bolt fixes onto a wrong design. If the sketch is wrong, rebuild it as if the requirement had been there from the start, and fix the cause rather than the symptom.
 
 The signal is a *pattern*, not single instances. Tells:
 
@@ -68,7 +68,7 @@ When you scrap:
 
 1. Re-run the **how** skill over what's been built.
 2. Redesign as if the new constraints had been day-one assumptions, per redesign-from-first-principles.
-3. Subtract before adding, per the **subtract-before-you-add** principle skill. The new sketch should be smaller than the old one before it grows.
+3. Subtract before adding. The new sketch should be smaller than the old one before it grows.
 4. Return to Phase B and sketch fresh candidates against the new constraints.
 
 ## Outputs

@@ -32,13 +32,15 @@ pi -e git:github.com/injaneity/zstack
 
 **Fourteen playbooks.** Diagnose, bug fix, measure, experiment, feature, refactoring, visual parity, authoring a skill, babysit, shipping, opening a PR, multi-phase plan, resume, worktree cleanup. Diagnose absorbs what pstack split across investigation and two forensics playbooks, measure merges perf issue and hillclimb, and experiment merges prototype and eval, because each pair was one job that differed only in who captured the evidence or whether the loop ran once or until a target.
 
-**Twenty-four principle skills.** The same ones pstack ships, minus nothing, with the two that assumed subagents rewritten.
+**Three principle skills.** `principle-fix-root-causes`, `principle-prove-it-works`, `principle-test-behavior-not-implementation`. These three are the ones long enough that a summary loses the point, and the ones the model actually opens. Every other pstack principle is a one-line rule inside `onigiri-mode`, because a single thread reads a rule where it is written instead of fetching a leaf file per principle.
 
-**Eleven utility skills.** `architect`, `how`, `why`, `figure-it-out`, `automate-me`, `tdd`, `unslop`, `sharpen`, `correct`, `blast-radius`, `benchmark-checklist`, plus `technical-writing`, `typescript-best-practices`, and the two verification-skill generators.
+**Ten utility skills.** `architect`, `how`, `why`, `figure-it-out`, `automate-me`, `tdd`, `unslop`, `blast-radius`, `show-me-your-work`, plus `technical-writing` and `typescript-best-practices` and the two verification-skill generators.
 
 ## what's gone
 
 `poteto-mode`, `poteto-help`, `arena`, `swarm`, `interrogate`, `reflect`, `orchestrate`, `autopilot-full`, `autopilot-stack`, `teach`, `statechart`, `no-comments`, `ketchup`, `ketchup-video`, `recall`, `in-your-own-words`, `bro`, `setup-pstack`, `make-bot-ui`, and both formal-verification skills. Every one of them exists to spawn, supervise, or fan out across agents, or to serve a chat assistant rather than a coding session.
+
+Also dropped in the single-thread pass: `sharpen`, `correct`, `benchmark-checklist`, and twenty-one principle skills that no session had ever opened. Their rules survive as lines in `onigiri-mode`. `benchmark-checklist`'s questions folded into `measure`'s harness step, and `sharpen` and `correct` had no reader and no citation.
 
 `docs/PROVENANCE.md` records kept, edited, and dropped for every skill, with the reason.
 

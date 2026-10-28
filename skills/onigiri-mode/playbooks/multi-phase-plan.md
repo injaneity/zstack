@@ -3,16 +3,16 @@
 **You own the plan and then the code, one PR at a time. The plan is a checklist you run box by box and the operator audits from the evidence.**
 
 1. When the change is one or two files with an obvious approach, skip the plan. Say so and stop.
-2. Settle open questions by prototype before you write. Run `playbooks/experiment.md` for each. Keep the branch, the SHA, and the screenshots for Appendix A. Ask the operator only about a product or preference call that no run can settle. Give options (the **never-block-on-the-human** principle skill).
-3. Explore in this thread, one area at a time, writing notes to a scratch file so the context stays small (the **guard-the-context-window** principle skill). Each area's note records file pointers, conventions, test commands, and entry points. No inlined dumps in the plan.
-4. Copy the skeleton below into the plan file and fill every placeholder. Unless the operator names a path, write the file under the agent store's `docs/`. Keep every heading and sub-block in the order shown. One section per PR. One PR is one change with its own evidence (the **sequence-verifiable-units** principle skill).
+2. Settle open questions by prototype before you write. Run `playbooks/experiment.md` for each. Keep the branch, the SHA, and the screenshots for Appendix A. Ask the operator only about a product or preference call that no run can settle. Give options.
+3. Explore in this thread, one area at a time, writing notes to a scratch file so the context stays small. Each area's note records file pointers, conventions, test commands, and entry points. No inlined dumps in the plan.
+4. Copy the skeleton below into the plan file and fill every placeholder. Unless the operator names a path, write the file under the agent store's `docs/`. Keep every heading and sub-block in the order shown. One section per PR. One PR is one change with its own evidence.
 5. Write with the **technical-writing** skill in full, then the **unslop** skill. The body is one Diátaxis mode, how-to. Appendices hold explanation and reference. Each heading states the task or the finding.
-6. Check the plan against the shape below and fix every gap (the **encode-lessons-in-structure** principle skill).
+6. Check the plan against the shape below and fix every gap.
 7. Hand back. Post the plan path and what step 6 found, then stop. Execution starts on the operator's explicit go.
 
-**Verification.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked (the **prove-it-works** principle skill). Every verification block opens with that sentence. The live block is mandatory: it names the surface, how to drive it, and the screen state or log line that proves the behavior. Drive it yourself; a lane is one box with a concrete scenario, the screenshot or output it saves, and its pass predicate. Keep the lane count to what the change actually touches. One lane runs the same load-bearing scenario on trunk and head, so a regression is visible; if trunk lacks the feature, record that and check the behavior the diff adds instead. The perf block names the metric, how it is measured at both trunk and head, and the number that fails. A PR that changes an interaction is review-gated: the operator reviews it in chat with screenshots before merge. A PR that changes no interaction writes `**Review gate.** None. <PR id> is not review-gated.`
+**Verification.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Every verification block opens with that sentence. The live block is mandatory: it names the surface, how to drive it, and the screen state or log line that proves the behavior. Drive it yourself; a live check is one box with a concrete scenario, the screenshot or output it saves, and its pass predicate. Keep the check count to what the change actually touches. One check runs the same load-bearing scenario on trunk and head, so a regression is visible; if trunk lacks the feature, record that and check the behavior the diff adds instead. The perf block names the metric, how it is measured at both trunk and head, and the number that fails. A PR that changes an interaction is review-gated: the operator reviews it in chat with screenshots before merge. A PR that changes no interaction writes `**Review gate.** None. <PR id> is not review-gated.`
 
-**Driving the surface.** Pick the tool by surface. Browser and web UIs get whatever the repo uses to drive a browser. CLIs and TUIs get the repo's own harness. Native mobile gets whatever simulator-driving the repo has. A PR that touches two surfaces gets lanes on both. A surface with no way to drive it is a risk in Appendix C, and its live block still names how each lane is checked.
+**Driving the surface.** Pick the tool by surface. Browser and web UIs get whatever the repo uses to drive a browser. CLIs and TUIs get the repo's own harness. Native mobile gets whatever simulator-driving the repo has. A PR that touches two surfaces gets a live check on each. Its live check still names how each scenario is checked. A surface with no way to drive it is a risk in Appendix C, and Its live check still names how each scenario is checked.
 
 ````markdown
 # <Program> plan
@@ -51,7 +51,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Verdict and merge, for every PR
 
 - [ ] Run the unit, live, and perf boxes at the code-ready head. A new head gets a fresh pass over the boxes whose evidence the change invalidates.
-- [ ] Judge every finding by the playbook's blocking rule. The verdict is clean when none blocks. A failure on trunk behavior in the regression lane is recorded against trunk and does not block the PR.
+- [ ] Judge every finding by the playbook's blocking rule. The verdict is clean when none blocks. A failure on trunk behavior in the regression check is recorded against trunk and does not block the PR.
 - [ ] <The merge or handoff rule, with the patch-id rule from `playbooks/shipping.md`.>
 
 ## <Task as a verb phrase> (<PR id>)
@@ -78,9 +78,9 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Lane 1. Regression lane against trunk. Run <the same load-bearing scenario> at trunk and head. If trunk lacks the feature, record that and check <the behavior the diff adds plus the end state the user waits for>. Save `<slug>.png`. Pass when <predicate>.
-- [ ] Lane 2. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
-- [ ] Lane 3. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
+- [ ] Check 1. Regression against trunk. Run <the same load-bearing scenario> at trunk and head. If trunk lacks the feature, record that and check <the behavior the diff adds plus the end state the user waits for>. Save `<slug>.png`. Pass when <predicate>.
+- [ ] Check 2. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
+- [ ] Check 3. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -91,7 +91,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Copy lane <n> screenshots into `<media path>/<pr-id>-review-<slug>.png`.
+- [ ] Copy check <n> screenshots into `<media path>/<pr-id>-review-<slug>.png`.
 - [ ] Post the screenshots in chat. Stop at merge-ready. Wait for the operator's click.
 
 **Merge.**
