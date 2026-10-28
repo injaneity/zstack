@@ -7,7 +7,7 @@ description: "Use for 'why does X work this way', 'why we picked Y', design rati
 
 Investigate the motivation and intent behind code. The companion `how` skill answers what the code does and how it works. `why` answers what forces led to its shape.
 
-Do this yourself, in this session. There is no spawn. `references/investigator-prompt.md` and `references/synthesizer-prompt.md` describe the investigation you run and the shape you write it in, not prompts to hand to anyone.
+Do this yourself, in this session. There is no spawn. `references/category-notes.md` is the shape of the notes you keep per evidence category and `references/writeup-template.md` is the shape of the answer you write, neither a prompt to hand to anyone.
 
 ## Operating Posture
 
@@ -17,7 +17,7 @@ Operate as a **careful, cautious, and precise investigator**. Be honest about wh
 
 The **target** is usually a chunk of code, a pattern, a feature, or a named design decision. The **question** is usually a design rationale, a tradeoff, a motivating edge case, an external constraint, dead code, or a broad history sweep.
 
-If the target is vague ("why do we do it this way?" with no clear referent), make your best guess from conversation context (open files, recent edits, cursor location, what was just discussed). State your interpretation briefly so the user can redirect if you're off, then proceed.
+If the target is vague ("why do we do it this way?" with no clear referent), make your best guess from conversation context (open files, recent edits, the code you were just reading, what was just discussed). State your interpretation briefly so the user can redirect if you're off, then proceed.
 
 ## Step 2. Establish the code anchor
 
@@ -43,7 +43,7 @@ Source control is always available through git and `gh`. For the other six, clas
 
 Work each category that has a tool, one at a time. Keep per-category notes so the write-up can say which category taught you what, including the ones that came back empty.
 
-For each category, the search you run is `references/investigator-prompt.md` applied to that source. Adapt the query shape from `references/source-playbook.md` and the matching file in `references/sources/`. Add `references/sources/incident-postmortem.md` **if the target code looks defensive** (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers).
+For each category, the search you run is `references/category-notes.md` applied to that source. Adapt the query shape from `references/source-playbook.md` and the matching file in `references/sources/`. Add `references/sources/incident-postmortem.md` **if the target code looks defensive** (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers).
 
 ### The roster, one per available evidence category
 
@@ -73,7 +73,7 @@ Write the synthesis yourself. It gets:
 2. the code anchor
 3. the user's original question
 4. the epistemics framework from `references/epistemics.md`
-5. the structure from `references/synthesizer-prompt.md`
+5. the structure from `references/writeup-template.md`
 
 ## Step 5. Present
 
@@ -81,7 +81,7 @@ Present the write-up to the user. You may lightly edit for clarity or add contex
 
 ## Output Format
 
-The structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per category, including the ones that returned nothing or were skipped, with the reason.
+The structure is the one in `references/writeup-template.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per category, including the ones that returned nothing or were skipped, with the reason.
 
 After Sources Consulted, if the user's `why` question is a precursor to changing this code, convert the lineage findings into a Preserve / Change / Avoid / Risk constraint set for planning the change.
 

@@ -1,6 +1,6 @@
 ---
 name: onigiri-mode
-description: "The working mode for zane's coding work, including trycua/cua. Routes any non-trivial coding task to the right skill and playbook, one thread, no subagents. Use for /onigiri-mode, or whenever the task is a real change rather than a quick answer."
+description: "The working mode for zane's coding work, including trycua/cua. Routes any non-trivial coding task to the right skill and playbook, one thread, no subagents. Use for /skill:onigiri-mode, or whenever the task is a real change rather than a quick answer."
 license: MIT
 ---
 
@@ -100,7 +100,7 @@ A large or cross-cutting effort, or work the user steps away from to trust later
 - **Opening a PR.** Invoked at the end of every playbook that ships code.
 - **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs.
 - **Resume.** Picking up work from a prior session or a pushed branch, or pausing in-flight work so it can be picked up.
-- **Worktree cleanup.** Reclaiming disk by pruning merged or abandoned worktrees.
+- **Worktree cleanup.** Reclaiming disk by pruning merged or abandoned worktrees and stale caches.
 
 A long task the user steps away from runs the matched playbook without stopping. To drive to a checkable exit condition unattended, state the predicate and loop until it holds; the stop rule is the predicate, and a plateau is not a stop.
 

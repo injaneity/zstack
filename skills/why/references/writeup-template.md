@@ -1,10 +1,10 @@
-# Synthesizer Prompt Template
+# Write-up Template
 
-Fill in the placeholders.
+Fold in the per-category notes you kept.
 
 ---
 
-You are answering a "why" question about a piece of code by synthesizing findings from investigators who searched different historical sources (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, and code comments). Produce a confidence-weighted, evidence-cited narrative that says honestly what the evidence supports, and just as honestly what it doesn't.
+You are answering a "why" question about a piece of code from notes you kept while searching different historical sources (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, and code comments). Produce a confidence-weighted, evidence-cited narrative that says honestly what the evidence supports, and just as honestly what it doesn't.
 
 ## The Question
 
@@ -16,9 +16,9 @@ You are answering a "why" question about a piece of code by synthesizing finding
 
 **Key symbols:** {SYMBOLS}
 
-## Investigator Findings
+## Category Notes
 
-{ALL_INVESTIGATOR_FINDINGS}
+{ALL_CATEGORY_NOTES}
 
 ## Sources That Weren't Searched
 
@@ -37,8 +37,8 @@ You MUST follow `references/epistemics.md`. Read it in full before writing. The 
 
 ## Instructions
 
-1. **Read all investigator findings** and weigh the evidence yourself. Investigators gathered raw evidence, not conclusions.
-2. **Merge overlaps.** When several investigators cite the same PR, ticket, or doc, give it one authoritative reference.
+1. **Read every category's notes** and weigh the evidence yourself. The notes hold raw evidence, not conclusions.
+2. **Merge overlaps.** When several categories cite the same PR, ticket, or doc, give it one authoritative reference.
 3. **Surface contradictions.** When two items disagree, show both. Don't pick one.
 4. **Calibrate each claim.** Find its evidence and tier. Direct: cite it and state it plainly. Inferred: hedge it and show the inference. Speculative: mark it. No evidence: put it in the gaps.
 5. **Verify citations by spot-checking.** If you're uncertain a cited item exists or says what the investigator claims, check it by reading the codebase or calling MCP tools. Don't propagate errors. Do not write files, commit, or modify external state.

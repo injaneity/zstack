@@ -48,7 +48,9 @@ pi -e git:github.com/injaneity/zstack
 
 **`multi-phase-plan` is rewritten.** Upstream it is a coordinator that spawns one owner per PR and runs a ten-lane swarm on each. Here it is a plan one thread runs box by box, with lanes scaled to what the change touches.
 
-**`why` works its evidence categories in turn.** Still seven categories, still the same epistemics framework and templates, just no fan-out. Sources Consulted is one line per category.
+**`why` works its evidence categories in turn.** Still seven categories, still the same epistemics framework, just no fan-out. `references/category-notes.md` is the shape of the notes you keep per category and `references/writeup-template.md` the shape of the answer. Sources Consulted is one line per category.
+
+**Everything runs on pi's own tools.** No `/loop`, no Cursor cloud agents, no `control-ui` and `control-cli` skills, no PR tool with its own state. Playbooks drive the app and read PRs with `gh`. Project-local verification skills get written to `.pi/skills/`, which is where pi looks. Session history is read from `~/.pi/agent/sessions/`. The bundled scripts need only `bash`, `git`, `gh`, `jq`, and `grep`.
 
 **`architect` sketches competing candidates itself.** No arena, no runner models. Two or three whole-shape candidates, one picked, the rejected shape's disqualifying fact written into the rationale.
 

@@ -1,30 +1,28 @@
-# Explainer Prompt Template
+# Explainer Template
 
-This template is the shape of the explanation you write. Fill in the placeholders with what you found.
+The shape of the explanation you write. Fill in the placeholders with what you found.
 
 ---
 
-You are writing an architectural explanation for a senior engineer. Multiple explorer agents have traced different slices of the codebase in parallel and gathered findings. Synthesize their findings into one coherent, well-structured explanation.
+You are writing an architectural explanation for a senior engineer who does not know this subsystem. The reader should finish it with a mental model solid enough to start working in the code.
 
 ## Original Question
 
 > {QUESTION}
 
-## Explorer Findings
+## Your Findings
 
-{EXPLORER_FINDINGS_ALL}
+{FINDINGS}
 
 ## Instructions
 
-The explorers each investigated a different angle of the same subsystem. Their findings will overlap in places and may occasionally contradict. Reconcile them. Merge overlapping descriptions, resolve contradictions by checking the code yourself, and combine the separate slices into a unified picture.
+Your notes came from reading several angles of the same subsystem in turn. They will overlap in places and may contradict where your reading was thin. Reconcile them before writing. Where two angles disagree, go back to the code and settle it rather than presenting both.
 
-Write an explanation a senior engineer unfamiliar with this area could read and walk away with a solid mental model, understanding the architecture well enough to start working in it confidently.
-
-You have read-only access to the codebase to check anything, clarify a detail, or fill a gap. Use Read, Grep, and Glob as needed. The explorers did the work, so you shouldn't need to re-explore from scratch.
+Write an explanation a senior engineer unfamiliar with this area could read and walk away confident enough to change it.
 
 ## Output Format
 
-Use this structure, adapted to what makes sense for the question. Not every section is needed for every question.
+Use this structure, adapted to the question. Not every section is needed for every question.
 
 ### Overview
 1-2 paragraphs. What is this thing, what does it do, why does it exist. Someone should be able to read just this and decide whether to keep reading.
@@ -52,4 +50,4 @@ Non-obvious things, surprising behavior, historical context, pitfalls. Skip this
 - When something is complex, explain why it's complex. Don't just describe the complexity
 - When something is simple, don't pad it out
 - If there's a helpful analogy, use it. If there isn't, don't force one
-- If the explorers flagged open questions or gaps, acknowledge them rather than hiding them
+- Name the open questions you could not settle rather than hiding them

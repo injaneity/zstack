@@ -22,7 +22,7 @@ Revise mode changes the rest of the flow:
 
 ### 1. Mine the history
 
-Read the transcripts yourself, in this session. There is no fan-out. Use `ReadTranscript` over this agent's recent sessions, oldest slice first, and keep a running note of every candidate pattern with the session it came from. Work one slice at a time and stop when a slice adds nothing new.
+Read the transcripts yourself, in this session. There is no fan-out. pi keeps its sessions under `~/.pi/agent/sessions/--<mangled-cwd>--/`, newest last, so read the ones for this project from oldest to newest and keep a running note of every candidate pattern with the session it came from. Work one slice at a time and stop when a slice adds nothing new. If you are reading a different agent's history, read only the sessions for this working directory and never a neighbouring project's.
 
 Hunt for these signals:
 

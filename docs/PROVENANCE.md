@@ -39,6 +39,12 @@ Fourteen files. pstack's twenty were one job split across several names, so four
 
 **Rewritten:** `multi-phase-plan`. It was a 150-line coordinator that spawned one owner per PR and ran a ten-lane swarm on each. It is now a plan one thread runs box by box, with the lane count scaled to what the change touches.
 
+**pi-native.** Nothing in zstack now names a Cursor-only tool. The sweep replaced the `control-ui` and `control-cli` skills with driving the real surface, `/loop` with the plain instruction to keep one session and re-read your dead hypotheses, `/deslop` with the four-item list it stands for, and `create-skill` with matching the neighbouring SKILL.md files. `.cursor/skills/verify-<app>/` became `.pi/skills/verify-<app>/`, which is the directory pi actually scans. `agent-transcripts` reads became pi session reads under `~/.pi/agent/sessions/--<mangled-cwd>--/`, and `automate-me`'s `ReadTranscript` call became the same path. Slash-command hints are `/skill:<name>`, pi's skill command shape.
+
+**Playbooks speak `gh` only.** The VM has no `origin` CLI, so `opening-a-pr`, `babysit`, `shipping` and `worktree-audit.sh` lost their Origin branches and kept the GitHub ones. `shipping` also lost the Cursor cloud-agent verifier, which one thread cannot produce.
+
+**Swarm-shaped reference files rewritten.** `how`'s `explainer-prompt.md` told the reader to synthesize findings from parallel explorer agents; `explorer-prompt.md` existed only for that and is deleted. `why`'s `investigator-prompt.md` and `synthesizer-prompt.md` were prompts for other agents and are now `category-notes.md` and `writeup-template.md`, the shapes of the notes and the answer you write yourself. `feature` no longer says to delegate implementation or write a throughput checkpoint for workers.
+
 **Dead references fixed.** pstack's playbooks point at things that only exist in Cursor: a `control-ui` and `control-cli` skill, `/deslop` and `/no-comments` from `cursor-team-kit`, the `create-skill` built-in, `/loop`, and `agent-transcripts` paths. None of them are in zstack and none exist in pi. In `shipping`, the verifier was a Cursor cloud agent explicitly credited for not having written the code, which cannot happen in one thread; it now asks for evidence a wrong implementation could not produce. `worktree-audit.sh` read `~/.cursor/projects/<slug>/agent-transcripts`, which is empty on the VM, so it now reads pi's `~/.pi/agent/sessions/--<slug>--/`.
 
 ## Dropped

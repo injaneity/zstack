@@ -6,7 +6,7 @@
 2. Settle open questions by prototype before you write. Run `playbooks/experiment.md` for each. Keep the branch, the SHA, and the screenshots for Appendix A. Ask the operator only about a product or preference call that no run can settle. Give options (the **never-block-on-the-human** principle skill).
 3. Explore in this thread, one area at a time, writing notes to a scratch file so the context stays small (the **guard-the-context-window** principle skill). Each area's note records file pointers, conventions, test commands, and entry points. No inlined dumps in the plan.
 4. Copy the skeleton below into the plan file and fill every placeholder. Unless the operator names a path, write the file under the agent store's `docs/`. Keep every heading and sub-block in the order shown. One section per PR. One PR is one change with its own evidence (the **sequence-verifiable-units** principle skill).
-5. Write under `/technical-writing` in full, then `/unslop`. The body is one Diátaxis mode, how-to. Appendices hold explanation and reference. Each heading states the task or the finding.
+5. Write with the **technical-writing** skill in full, then the **unslop** skill. The body is one Diátaxis mode, how-to. Appendices hold explanation and reference. Each heading states the task or the finding.
 6. Check the plan against the shape below and fix every gap (the **encode-lessons-in-structure** principle skill).
 7. Hand back. Post the plan path and what step 6 found, then stop. Execution starts on the operator's explicit go.
 
