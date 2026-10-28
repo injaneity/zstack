@@ -8,7 +8,7 @@
    - **Blocking first steps.** Gates run before fan-out.
    - **Independent workstreams.** Disjoint files, services, or layers parallelize. Shared writes serialize.
    - **Shared mutable state.** Default to splitting the target (the **separate-before-serializing-shared-state** principle skill). Serialize only for real invariants.
-   - **Smallest safe decomposition.** If one worker is best, name why.
+   - **Smallest safe decomposition.** Name the order the units run in, and why that order is the smallest one that stays verifiable.
 4. Write the code yourself at a scope you can state before you start: file paths, the named data shape and its organizing structure per **principle-model-the-domain** (a state machine over scattered booleans, a table or registry over branching, a typed model over repeated shape assumptions), and success criteria. When the implementation admits multiple valid shapes (error handling, abstraction layer, test structure), sketch two of them with `architect` and pick one before writing logic. Review separation comes from reading the diff against the plan and the principles afterwards, not from a second author. Comments per **Comments**. Surgical edits, re-ground against the source for upstream-derived files. Port shared-primitive improvements to all consumers and verify each. Commit liberally.
 5. Verify on the matching surface. "Inconclusive" or wrong-surface is not a pass. Flag it.
 6. Rebase into small, ordered commits. Stack follow-ups.

@@ -87,26 +87,22 @@ Open a todo list whose first items are the matched playbook's steps, copied in v
 
 A large or cross-cutting effort, or work the user steps away from to trust later, routes to the **figure-it-out** skill even when a narrower playbook like Feature fits. Use it whenever no playbook below fits.
 
-- **Investigation.** A read-only question: how does X work, why was Y built this way, are we sure about Z.
+- **Diagnose.** Any read-only question or unexplained behavior: how does X work, why was Y built this way, are we sure about Z, a leak or spin in a live process, a profile or trace someone handed you. The deliverable is a cited answer, not a fix.
 - **Bug fix.** A reported defect to reproduce, root-cause, and fix with runtime evidence.
-- **Perf issue.** A measured slowness to trace and improve against a baseline.
-- **Hillclimb.** Sustained improvement of one metric against a target, one commit per accepted win.
-- **Runtime forensics.** Diagnose a leak, spin, or glitch from live instrumentation. The deliverable is a diagnosis.
-- **Trace forensics.** Diagnose a captured profile or heap snapshot handed to you after the fact.
+- **Measure.** Any number you are improving, from one measured slowness to a sustained loop on a target. The harness gets frozen before the first change.
+- **Experiment.** A question that needs a throwaway answer: a design sketch you look at, or a blind comparison of two prompt or skill variants. Ends in a decision, never in shipped code.
 - **Feature.** New or changed behavior, built from a named data shape.
 - **Refactoring.** A behavior-preserving change to structure or shape.
-- **Prototype.** A throwaway sketch to settle a design question by observing it instead of asking.
 - **Visual parity.** Pixel-exact UI equivalence, or migrating a styling system.
-- **Authoring or modifying a skill.** Writing or editing a SKILL.md. File: `playbooks/authoring-a-skill.md`.
-- **Eval.** Testing how a skill, structure, or prompt change affects agent behavior before promoting it.
+- **Authoring or modifying a skill.** Writing or editing a SKILL.md.
 - **Babysit.** Driving a PR to merge-ready: conflicts, review threads, CI.
 - **Shipping.** Independently verifying a green PR, then landing it.
-- **Autonomous run.** A long task to drive to completion without stopping.
-- **Session pickup.** Resuming work from a transcript or a pushed branch.
-- **Pause safely.** Suspending in-flight work so it can be resumed.
-- **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs. File: `playbooks/multi-phase-plan.md`.
+- **Opening a PR.** Invoked at the end of every playbook that ships code.
+- **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs.
+- **Resume.** Picking up work from a prior session or a pushed branch, or pausing in-flight work so it can be picked up.
 - **Worktree cleanup.** Reclaiming disk by pruning merged or abandoned worktrees.
-- **Opening a PR.** Invoked at the end of every other playbook.
+
+A long task the user steps away from runs the matched playbook without stopping. To drive to a checkable exit condition unattended, state the predicate and loop until it holds; the stop rule is the predicate, and a plateau is not a stop.
 
 ## Working on trycua/cua
 

@@ -30,7 +30,7 @@ pi -e git:github.com/injaneity/zstack
 
 **One mode skill, `onigiri-mode`.** The routing table, the non-negotiables, the principles, the autonomy rules, and the cua hard rules all live here. It replaces pstack's `poteto-mode`.
 
-**Twenty playbooks.** Investigation, bug fix, perf issue, hillclimb, runtime forensics, trace forensics, feature, refactoring, prototype, visual parity, authoring a skill, eval, babysit, shipping, autonomous run, session pickup, pause safely, multi-phase plan, worktree cleanup, opening a PR.
+**Fourteen playbooks.** Diagnose, bug fix, measure, experiment, feature, refactoring, visual parity, authoring a skill, babysit, shipping, opening a PR, multi-phase plan, resume, worktree cleanup. Diagnose absorbs what pstack split across investigation and two forensics playbooks, measure merges perf issue and hillclimb, and experiment merges prototype and eval, because each pair was one job that differed only in who captured the evidence or whether the loop ran once or until a target.
 
 **Twenty-four principle skills.** The same ones pstack ships, minus nothing, with the two that assumed subagents rewritten.
 

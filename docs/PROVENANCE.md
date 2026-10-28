@@ -31,9 +31,15 @@ The one rule that changed everywhere: pstack routes design to one model and impl
 
 All live under `skills/onigiri-mode/playbooks/`.
 
-Kept with de-subagent edits: `investigation`, `bug-fix`, `perf-issue`, `hillclimb`, `runtime-forensics`, `trace-forensics`, `feature`, `refactoring`, `prototype`, `visual-parity`, `authoring-a-skill`, `eval`, `babysit`, `shipping`, `autonomous-run`, `session-pickup`, `pause-safely`, `worktree-cleanup`, `opening-a-pr`.
+Fourteen files. pstack's twenty were one job split across several names, so four of them merged and one absorbed the rest.
 
-Rewritten: `multi-phase-plan`. It was a 150-line coordinator that spawned one owner per PR and ran a ten-lane swarm on each. It is now a plan one thread runs box by box, with the lane count scaled to what the change touches.
+**Merged.** `diagnose` is `investigation` plus `runtime-forensics` plus `trace-forensics`, because all three produce the same deliverable and differ only in where the evidence comes from: the code, a live process, or an artifact someone handed you. `measure` is `perf-issue` plus `hillclimb`, because hillclimb already told you a one-off fix was the perf playbook and the only real difference was whether the loop ran once or until a target. `experiment` is `prototype` plus `eval`, because a design sketch and a blind prompt comparison are both a question you answer with a throwaway. `resume` is `session-pickup` plus `pause-safely`, the two ends of the same handoff, with `autonomous-run`'s stop rule folded into the mode skill instead of keeping a playbook for it.
+
+**Kept with de-subagent edits:** `bug-fix`, `feature`, `refactoring`, `visual-parity`, `authoring-a-skill`, `babysit`, `shipping`, `worktree-cleanup`, `opening-a-pr`.
+
+**Rewritten:** `multi-phase-plan`. It was a 150-line coordinator that spawned one owner per PR and ran a ten-lane swarm on each. It is now a plan one thread runs box by box, with the lane count scaled to what the change touches.
+
+**Dead references fixed.** pstack's playbooks point at things that only exist in Cursor: a `control-ui` and `control-cli` skill, `/deslop` and `/no-comments` from `cursor-team-kit`, the `create-skill` built-in, `/loop`, and `agent-transcripts` paths. None of them are in zstack and none exist in pi. In `shipping`, the verifier was a Cursor cloud agent explicitly credited for not having written the code, which cannot happen in one thread; it now asks for evidence a wrong implementation could not produce. `worktree-audit.sh` read `~/.cursor/projects/<slug>/agent-transcripts`, which is empty on the VM, so it now reads pi's `~/.pi/agent/sessions/--<slug>--/`.
 
 ## Dropped
 
