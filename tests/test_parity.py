@@ -51,6 +51,7 @@ class RealPRParity(unittest.TestCase):
     """Every captured PR, in every gate state the gate can be in."""
 
     def test_every_real_pr_in_every_gate_state(self):
+        tick_module()  # outside the loop: a missing tick must skip this test, not fail its count assertion
         prs = fixtures()
         n = 0
         for key, pr in sorted(prs.items()):
