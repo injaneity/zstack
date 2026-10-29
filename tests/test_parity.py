@@ -245,6 +245,46 @@ class CheckStateParity(unittest.TestCase):
         self.assertEqual(engine.check_state([], ZSTACK_CFG), ("empty", [], set()))
 
 
+class FuzzParity(unittest.TestCase):
+    """Random rollups and labels, fixed seed: parity beyond the states we happened to capture."""
+
+    def test_check_state_fuzz(self):
+        import random
+        rnd = random.Random(20261029)
+        tick = tick_module()
+        names = ["build", "test", "cla", "ci-gate", "e2e", "validate", "x"]
+        for _ in range(400):
+            rollup = []
+            for _ in range(rnd.randrange(0, 7)):
+                c = {"name": rnd.choice(names), "workflowName": rnd.choice(["CI", "CD", ""])}
+                kind = rnd.randrange(3)
+                if kind == 0:
+                    c.update(__typename="StatusContext", state=rnd.choice(["PENDING", "EXPECTED", "SUCCESS", "FAILURE", "ERROR"]))
+                elif kind == 1:
+                    c.update(__typename="CheckRun", status=rnd.choice(["COMPLETED", "IN_PROGRESS", "QUEUED"]),
+                             conclusion=rnd.choice(["SUCCESS", "FAILURE", "NEUTRAL", "SKIPPED", "CANCELLED", None]),
+                             detailsUrl=rnd.choice([f"https://github.com/x/y/actions/runs/{rnd.randrange(1, 9)}/job/1", ""]))
+                else:
+                    c.update(state=rnd.choice(["SUCCESS", "FAILURE", "PENDING"]))
+                c["startedAt"] = rnd.choice(["", "2026-10-25T01:00:00Z", "2026-10-26T01:00:00Z", "2026-10-27T01:00:00Z"])
+                rollup.append(c)
+            with self.subTest(rollup=rollup):
+                self.assertEqual(tick.check_state(rollup), engine.check_state(rollup, CUA_CFG))
+
+    def test_declared_risk_fuzz(self):
+        import random
+        rnd = random.Random(7)
+        tick = tick_module()
+        words = ["light", "low", "standard", "high", "deep", "human", "bogus", "", "Light"]
+        for _ in range(200):
+            labels = [rnd.choice(["risk:", "sev:", "other"]) + rnd.choice(words) for _ in range(rnd.randrange(0, 3))]
+            body = "\n".join(rnd.choice([f"risk: {rnd.choice(words)}", f"risk:{rnd.choice(words)}",
+                                         f"RISK: {rnd.choice(words)}", "nothing"]) for _ in range(rnd.randrange(0, 4)))
+            with self.subTest(labels=labels, body=body):
+                self.assertEqual(tick.declared_risk(labels, body),
+                                 engine.declared_risk(labels, body, CUA_CFG))
+
+
 class RetriggerParity(unittest.TestCase):
     def test_plan(self):
         tick = tick_module()
