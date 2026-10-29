@@ -38,6 +38,7 @@ class Config:
         self.non_required_checks = frozenset(n.lower() for n in d.get("non_required_checks") or ())
         self.preapproved = frozenset(d.get("preapproved") or ())
         self.clef_script = d.get("clef_script") or None
+        self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read the repo; None means the caller's cwd
         self.sensitive = re.compile(d["sensitive"], re.I) if d.get("sensitive") else NEVER
         self.outside_sensitive = re.compile(d["outside_sensitive"]) if d.get("outside_sensitive") else NEVER
 

@@ -7,6 +7,7 @@ came out of the onigiri tick unchanged; what used to be module constants for `tr
 bin/gate.py --config gate/zstack.json                  decisions, changes nothing
 bin/gate.py --config gate/zstack.json --apply          undraft, rerun a red head once, merge
 bin/gate.py --config gate/zstack.json --clone ../zstack --runs ../zstack
+bin/gate.py --config gate/cua.json --score --score-limit 4   run Clef on PRs that have no score at their head
 ```
 
 `--clone` lets a verify PASS survive a merge of main into the branch, the way the tick did: it fetches
@@ -35,6 +36,7 @@ Every key is read by `engine.py`; a key the engine ignores fails a test in `test
 | `non_required_checks` | check names that never block, wait or rerun a merge |
 | `preapproved` | PR numbers that skip Clef entirely |
 | `clef_script` | risk classifier; omit and the repo never waits for a Clef score |
+| `clef_cwd` | where Clef may read the repo while scoring; defaults to the caller's cwd |
 | `sensitive` | regex: a high Clef score on a match promotes to `human` (urgent) |
 | `outside_sensitive` | regex: the same, but only for outside contributors |
 
@@ -48,7 +50,9 @@ tier is used only when the PR declares nothing. A Clef `deep` or `human` PR neve
 is preapproved.
 
 `gate/clef-risk.sh` pipes the PR into one read-only `pi` pass and reads back `Risk: low|standard|high`. It stays on
-this box. It needs `pi` and about 10 seconds per PR.
+this box. It needs `pi` and about 10 seconds per PR, so `--score` caps a run with `--score-limit` (default 4) and
+scores the rest next time. Drafts are not scored; the exception is a PR with a verify PASS at head, because the gate
+cannot undraft it without a score.
 
 ## tests
 
