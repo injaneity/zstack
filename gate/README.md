@@ -21,7 +21,8 @@ Two things the gate will not do without evidence in the PR itself:
   run passed with `--runs`, or a PASS carried by `--clone`. That is `skip: no verify PASS at head`, and it is why
   zstack #1 reads as a skip today.
 - **Merge on checks that all skipped.** An empty rollup is `wait`, never `green`. A repo with no CI therefore never
-  reaches `merge`.
+  reaches `merge`, which is why this repo has `.github/workflows/test.yml`: without it the gate could undraft a zstack
+  PR but never land one.
 
 ## config
 
