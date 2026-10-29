@@ -58,15 +58,11 @@ def load(path):
 HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "hands-off-path", "exception")
 
 
-class HoldsUnreadable(RuntimeError):
-    """The holds file exists but could not be parsed. Never act on a partial read: a dropped hold is a merge."""
-
-
 def parse_holds(text):
     """The tick's holds format, unchanged: `kind | target | rules(yes/no) | note`.
 
     -> {"hold": {n}, "no_move": {n}, "users": {login}, "paths": [path], "exceptions": [...]}
-    Raises HoldsUnreadable on a malformed row, exactly as the tick did.
+    Raises ValueError on a malformed row, exactly as the tick did.
     """
     h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": []}
     for ln, raw in enumerate(text.splitlines(), 1):
@@ -75,17 +71,17 @@ def parse_holds(text):
             continue
         f = [x.strip() for x in line.split("|")]
         if len(f) < 4 or f[0] not in HOLD_KINDS or f[2] not in ("yes", "no") or not f[1]:
-            raise HoldsUnreadable(f"holds file line {ln}: {line[:80]}")
+            raise ValueError(f"holds file line {ln}: {line[:80]}")
         kind, target = f[0], f[1]
         if kind == "exception":
             if len(f) < 6 or not all(f[3:6]):
-                raise HoldsUnreadable(f"holds file line {ln}: exception needs match | scope | source")
+                raise ValueError(f"holds file line {ln}: exception needs match | scope | source")
             h["exceptions"].append({"path": target, "match": f[3], "scope": f[4], "source": f[5]})
         elif kind in ("hold", "no-move"):
             try:
                 (h["hold"] if kind == "hold" else h["no_move"]).add(int(target.lstrip("#")))
             except ValueError:
-                raise HoldsUnreadable(f"holds file line {ln}: {kind} needs a PR number, got {target!r}")
+                raise ValueError(f"holds file line {ln}: {kind} needs a PR number, got {target!r}")
         elif kind in ("hands-off-user", "skip-author"):
             h["users"].add(target)
         else:
@@ -102,11 +98,8 @@ def load_holds(path):
     """
     if not path:
         return None
-    try:
-        with open(path) as f:
-            return parse_holds(f.read())
-    except OSError as e:
-        raise HoldsUnreadable(f"{path}: {e}")
+    with open(path) as f:
+        return parse_holds(f.read())
 
 
 def path_hit(path, holds):
@@ -258,17 +251,16 @@ def merge_decision(pr, *, cfg, local_pass, clef, held, rerun_head):
 # ---------------- git and gh ----------------
 
 # GIT_NO_LAZY_FETCH=1: on a blob:none clone git will otherwise fetch missing objects on demand. One `git log -S`
-# lazy-fetched for 35 minutes and filled the tick's disk (27 Oct). Every child gets this, and a pinned HOME and
-# GH_CONFIG_DIR so `gh` acts as the configured account rather than whoever last logged in.
+# lazy-fetched for 35 minutes and filled the tick's disk (27 Oct). Every child gets this, and GH_CONFIG_DIR set from
+# HOME so `gh` reads the login there rather than one a caller exported.
 def child_env():
     """The environment every child gets. These are forced, not defaulted: a caller that already has
     GIT_NO_LAZY_FETCH=0 in its environment is exactly the case the 27 Oct disk incident came from, and a
     setdefault would have preserved it."""
     e = dict(os.environ)
     e["GIT_NO_LAZY_FETCH"] = "1"
-    home = e.get("HOME")
-    if home:
-        e["GH_CONFIG_DIR"] = e.get("GH_CONFIG_DIR") or os.path.join(home, ".config", "gh")
+    if e.get("HOME"):
+        e["GH_CONFIG_DIR"] = os.path.join(e["HOME"], ".config", "gh")
     return e
 
 

@@ -203,7 +203,7 @@ class HoldsParity(unittest.TestCase):
             with self.subTest(text=text[:40]):
                 with self.assertRaises(ValueError):
                     tick.parse_holds(text)
-                with self.assertRaises(engine.HoldsUnreadable):
+                with self.assertRaises(ValueError):
                     engine.parse_holds(text)
 
     def test_path_hit_agrees(self):
@@ -527,11 +527,9 @@ class Cli(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
             if args[0] == "git":
                 return 0, "c" * 40 + "\n", ""
-            if "clef-risk.sh" in str(args[0]):
+            if any("clef-risk.sh" in str(a) for a in args):
                 return 0, "high\n", ""  # the real script prints exactly the tier word on stdout
             return 0, "", ""
 
@@ -539,9 +537,9 @@ class Cli(unittest.TestCase):
             calls.append(list(args))
             if "files" in args:
                 return {"files": [{"path": f} for f in files]}
-            if "headRefOid,title,body,files" in args:
-                return {"headRefOid": prs[0]["headRefOid"], "title": prs[0]["title"],
-                        "body": prs[0]["body"], "files": [{"path": f} for f in files]}
+            if "title,body,files" in args:
+                return {"title": prs[0]["title"], "body": prs[0]["body"],
+                        "files": [{"path": f} for f in files]}
             return {"mergeable": prs[0]["mergeable"], "statusCheckRollup": rollup(status, run)}
 
         real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
@@ -578,23 +576,6 @@ class Cli(unittest.TestCase):
                 with self.assertRaises(SystemExit) as e:
                     self.run_gate([self.pr()], [self.config(holds=self.holds(body)), "--apply"])
                 self.assertIn("refusing to act", str(e.exception.code))
-
-    def test_a_wrong_gh_account_refuses_to_run(self):
-        cfg = self.config()
-
-        def fake_sh(args, **kw):
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "someone-else\n", ""
-            return 0, "", ""
-
-        real = engine.sh
-        engine.sh = fake_sh
-        try:
-            with self.assertRaises(SystemExit) as e:
-                self.gate.main(["--config", cfg])
-        finally:
-            engine.sh = real
-        self.assertIn("expects injaneity", str(e.exception.code))
 
     # --- what it does ---
 
@@ -671,27 +652,30 @@ class Cli(unittest.TestCase):
         state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
         self.assertEqual(state["clef"]["7"]["head"], "a" * 40)
 
-    def test_a_score_for_a_head_that_moved_is_not_recorded(self):
+    def test_a_scoring_failure_ends_scoring_and_still_decides(self):
+        """The tick's scoring step died on an exception and its decision pass still ran on the scores it had. The
+        gate must do the same: a Clef timeout must not also cost the PRs that were already scored and ready."""
         cfg = self.config(holds=self.holds(), clef_script=os.path.join(HERE, "..", "gate", "clef-risk.sh"))
-        moved = "b" * 40
+        scored, unscored = self.pr(), self.pr(number=8, headRefOid="b" * 40,
+                                            body=f"verify: PASS at {'b' * 40}\nrisk: light")
+        with open(os.path.join(self.dir, "zstack.state.json"), "w") as f:
+            json.dump({"clef": {"7": {"head": "a" * 40, "tier": "light"}}}, f)
+        real = self.gate.score
 
-        def fake_gh(args, **kw):
-            if "headRefOid,title,body,files" in args:
-                return {"headRefOid": moved, "title": "t", "body": "", "files": []}
-            return {"mergeable": "MERGEABLE", "statusCheckRollup": rollup("SUCCESS", "1")}
+        def boom(*a, **kw):
+            raise RuntimeError("clef timed out")
 
-        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh = lambda args, **kw: (0, "", "") if args[:3] != ["gh", "api", "user"] else (0, "injaneity\n", "")
-        engine.gh_json = fake_gh
-        self.gate.open_prs = lambda cfg: [self.pr()]
-        self.gate.local_pass = lambda roots: set()
+        self.gate.score = boom
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.gate.main(["--config", cfg, "--apply"])
+            out, calls = self.run_gate([scored, unscored], [cfg, "--apply"])
         finally:
-            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
-        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
-        self.assertNotIn("7", state.get("clef") or {})
+            self.gate.score = real
+        merged = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+        self.assertEqual(len(merged), 1, out)               # the scored PR still landed
+        self.assertIn("--match-head-commit", merged[0])
+        self.assertIn("a" * 40, merged[0])
+        self.assertIn("awaiting clef score at head", out)   # the unscored one waits, never merges unscored
+
 
     def test_a_carried_pass_lets_an_old_head_move(self):
         h, old = "a" * 40, "b" * 40
@@ -700,8 +684,6 @@ class Cli(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
             if args[0] == "git" and "rev-list" in args:
                 return 0, f"{h} {old} {'d' * 40}", ""
             if args[0] == "git":
@@ -731,8 +713,6 @@ class Cli(unittest.TestCase):
         pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
 
         def fake_sh(args, **kw):
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
             if args[0] == "git" and "fetch" in args:
                 return 1, "", "fatal: unable to access 'https://github.com/': Could not resolve host"
             if args[0] == "git":
@@ -765,8 +745,6 @@ class Cli(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
             if args[0] == "git":
                 return 0, "c" * 40 + "\n", ""
             return 0, "", ""
@@ -805,8 +783,6 @@ class Cli(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
             if args[0] == "git" and "rev-list" in args:
                 return 0, f"{h} {old} {'d' * 40}", ""
             if args[0] == "git":

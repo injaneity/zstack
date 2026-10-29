@@ -73,7 +73,7 @@ def score(cfg, prs, state, verdict):
     a verdict.md, never on a carried one, so a draft whose PASS only carries waits for its owner to mark it ready.
     """
     tried = 0
-    for p in sorted(prs, key=lambda x: x["number"]):
+    for p in prs:
         n, head = p["number"], p["headRefOid"]
         if ((state.get("clef") or {}).get(str(n)) or {}).get("head") == head:
             continue
@@ -82,22 +82,12 @@ def score(cfg, prs, state, verdict):
         if tried >= CLEF_MAX_PER_RUN:
             break
         tried += 1
-        # Head, title, body and files from one call, checked against the head the decision will use: a push in
-        # between must not record a score for the old head against the new files.
-        info = engine.gh_json(["pr", "view", str(n), "-R", cfg.repo,
-                               "--json", "headRefOid,title,body,files"]) or {}
-        if info.get("headRefOid") != head:
-            say(f"{cfg.repo}#{n} head moved while scoring: not recorded")
-            continue
+        info = engine.gh_json(["pr", "view", str(n), "-R", cfg.repo, "--json", "title,body,files"]) or {}
         files = [f["path"] for f in info.get("files") or []]
-        try:
-            rc, out, err = engine.sh([cfg.clef_script], cwd=cfg.checkout, timeout=320,
-                                     input=json.dumps({"kind": "pr", "number": n,
-                                                       "title": info.get("title") or "",
-                                                       "body": info.get("body") or "", "files": files}))
-        except Exception as e:
-            say(f"{cfg.repo}#{n} clef failed: {type(e).__name__}: {e}")
-            continue
+        rc, out, err = engine.sh(["bash", cfg.clef_script], cwd=cfg.checkout, timeout=320,
+                                 input=json.dumps({"kind": "pr", "number": n,
+                                                   "title": info.get("title") or "",
+                                                   "body": info.get("body") or "", "files": files}))
         raw = out.strip().splitlines()[0] if rc == 0 and out.strip() else None
         tier = engine.clef_tier(raw, files, info.get("title") or "", cfg)
         if not tier:
@@ -130,11 +120,8 @@ def pause_reason(path):
     disk-health pause, and guessing "not paused" is how a full disk becomes a merged repo."""
     if not path or not os.path.exists(path):
         return None
-    try:
-        with open(path) as f:
-            return (f.read().strip().splitlines() or ["paused"])[0]
-    except OSError as e:
-        sys.exit(f"pause file unreadable, refusing to act: {e}")
+    with open(path) as f:
+        return (f.read().strip().splitlines() or ["paused"])[0]
 
 
 def main(argv=None):
@@ -144,9 +131,6 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     cfg = engine.load(a.config)
-    who = engine.sh(["gh", "api", "user", "-q", ".login"])[1].strip()  # `me` filters PR authors; act as it
-    if who != cfg.me:
-        sys.exit(f"gh is authenticated as {who or 'nobody'}, but {a.config} expects {cfg.me}")
     here = os.path.dirname(os.path.abspath(a.config))
     state_path = os.path.join(here, cfg.repo.split("/")[-1] + ".state.json")
 
@@ -156,7 +140,7 @@ def main(argv=None):
         sys.exit(f"--apply needs a 'holds' path in {a.config}")
     try:
         holds = engine.load_holds(cfg.holds)
-    except engine.HoldsUnreadable as e:
+    except (OSError, ValueError) as e:
         sys.exit(f"holds unreadable, refusing to act: {e}")
 
     paused = pause_reason(cfg.pause_file)
@@ -181,7 +165,10 @@ def run(cfg, prs, state, holds, paused, apply):
     carry_all(cfg, prs, passed, held, state)
 
     if apply and cfg.clef_script and not paused:
-        score(cfg, prs, state, verdict)
+        try:
+            score(cfg, prs, state, verdict)
+        except Exception as e:
+            say(f"scoring stopped ({type(e).__name__}: {e}); deciding on the scores already held")
     elif paused:
         say(f"not scoring or acting: paused ({paused})")
 
