@@ -49,8 +49,17 @@ class Config:
         self.checkout = d.get("checkout") or None
 
 def load(path):
+    """Read a config. A relative path in it means relative to the config file, not to whatever directory the
+    caller happened to be in: cron runs from HOME, and a config that only works from its own clone is a config
+    that silently refuses to act."""
     with open(path) as f:
-        return Config(json.load(f))
+        cfg = Config(json.load(f))
+    here = os.path.dirname(os.path.abspath(path))
+    for k in ("holds", "pause_file", "checkout", "clef_script"):
+        v = getattr(cfg, k)
+        if v and not os.path.isabs(v):
+            setattr(cfg, k, os.path.join(here, v))
+    return cfg
 
 
 # ---------------- holds ----------------
