@@ -121,7 +121,6 @@ def main(argv=None):
             if olds and done.get("head") != head and carry(a.clone[0], cfg.repo, n, head, set(olds) | local,
                                                            "refs/onigiri-tick/main"):
                 local.add(head)
-                p["carried"] = True
                 state.setdefault("carried", {})[str(n)] = {"head": head, "ok": True}
         c = (state.get("clef") or {}).get(str(n)) or {}
         action, why = engine.merge_decision(
