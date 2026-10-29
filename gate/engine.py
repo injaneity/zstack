@@ -15,8 +15,6 @@ import os
 import re
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -30,7 +28,16 @@ NEVER = re.compile(r"(?!)")  # stands in for a config that names no sensitive pa
 class Config:
     """One repo's knobs. Load with `load(path)`; every field is required except where noted."""
 
+    KNOWN = frozenset({
+        "repo", "me", "merge_method", "label_prefix", "non_required_checks", "preapproved", "clef_script",
+        "clef_cwd", "clef_required", "sensitive", "outside_sensitive",
+    })
+
     def __init__(self, d):
+        unknown = set(d) - self.KNOWN
+        if unknown:
+            # a typo'd key would otherwise just do nothing, and the knob it meant to set stays at its default
+            raise ValueError(f"{d.get('repo')}: unknown config key(s) {sorted(unknown)}; known: {sorted(self.KNOWN)}")
         self.repo = d["repo"]
         self.me = d["me"]
         self.merge_method = d["merge_method"]
@@ -38,13 +45,24 @@ class Config:
         self.non_required_checks = frozenset(n.lower() for n in d.get("non_required_checks") or ())
         self.preapproved = frozenset(d.get("preapproved") or ())
         self.clef_script = d.get("clef_script") or None
-        self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read the repo; None means the caller's cwd
+        self.clef_required = bool(d["clef_required"]) if "clef_required" in d else bool(self.clef_script)
+        self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read while scoring; None means the caller's cwd
         self.sensitive = re.compile(d["sensitive"], re.I) if d.get("sensitive") else NEVER
         self.outside_sensitive = re.compile(d["outside_sensitive"]) if d.get("outside_sensitive") else NEVER
 
     @property
     def requires_clef(self):
-        """Does a PR wait for a Clef score at its head before this repo's gate may move it?"""
+        """Does a PR wait for a Clef score at its head before this repo's gate may move it?
+
+        Separate from having a script to run: `clef_script` says the gate *may* score, this says it *must*
+        wait for one. They are the same today, but tying them together meant a repo with a script it never
+        wants to gate on could not be expressed.
+        """
+        return self.clef_required
+
+    @property
+    def can_score(self):
+        """May this gate run Clef itself? False means a score has to be handed in."""
         return bool(self.clef_script)
 
     def __repr__(self):
@@ -54,6 +72,70 @@ class Config:
 def load(path):
     with open(path) as f:
         return Config(json.load(f))
+
+
+# ---------------- holds ----------------
+
+HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "hands-off-path", "exception")
+
+
+class HoldsUnreadable(RuntimeError):
+    """The holds file exists but could not be parsed. Never act on a partial read: a dropped hold is a merge."""
+
+
+def parse_holds(text):
+    """The tick's holds format, unchanged: `kind | target | rules(yes/no) | note`.
+
+    -> {"hold": {n}, "no_move": {n}, "users": {login}, "paths": [path], "exceptions": [...]}
+    Raises HoldsUnreadable on a malformed row, exactly as the tick did.
+    """
+    h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": []}
+    for ln, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        f = [x.strip() for x in line.split("|")]
+        if len(f) < 4 or f[0] not in HOLD_KINDS or f[2] not in ("yes", "no") or not f[1]:
+            raise HoldsUnreadable(f"holds file line {ln}: {line[:80]}")
+        kind, target = f[0], f[1]
+        if kind == "exception":
+            if len(f) < 6 or not all(f[3:6]):
+                raise HoldsUnreadable(f"holds file line {ln}: exception needs match | scope | source")
+            h["exceptions"].append({"path": target, "match": f[3], "scope": f[4], "source": f[5]})
+        elif kind in ("hold", "no-move"):
+            try:
+                (h["hold"] if kind == "hold" else h["no_move"]).add(int(target.lstrip("#")))
+            except ValueError:
+                raise HoldsUnreadable(f"holds file line {ln}: {kind} needs a PR number, got {target!r}")
+        elif kind in ("hands-off-user", "skip-author"):
+            h["users"].add(target)
+        else:
+            h["paths"].append(target)
+    return h
+
+
+def load_holds(path):
+    """None when there is no holds file. Raises HoldsUnreadable when it exists and will not parse: the caller
+    must then act on nothing, which is what the tick did (a hold must never be silently dropped)."""
+    if not path:
+        return None
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return parse_holds(f.read())
+    except OSError as e:
+        raise HoldsUnreadable(f"{path}: {e}")
+
+
+def path_hit(path, holds):
+    """The hands-off path a changed file matches (by file name), or None."""
+    return next((p for p in holds["paths"] if re.search(r"(^|/)" + re.escape(p) + "$", path)), None)
+
+
+def pr_held(n, holds):
+    """True if the merge pass must never undraft or merge this PR."""
+    return bool(holds) and (n in holds["hold"] or n in holds["no_move"])
 
 
 # ---------------- pure rules ----------------
@@ -123,22 +205,6 @@ def gate_started(rollup):
     """startedAt of the latest ci-gate check run, or None."""
     times = [c.get("startedAt") or "" for c in rollup or [] if (c.get("name") or c.get("context")) == "ci-gate"]
     return max(times) if times else None
-
-
-def retrigger_plan(prs, tracked, sha, when, done):
-    """PRs to send a fresh pull_request event after main commit sha (at when, ISO Z) changed a required workflow.
-    prs: open PRs with number, isCrossRepository, statusCheckRollup.
-    -> [(n, "toggle" | "fork")]: forks also need a fork CI approval, so a caller buffers them."""
-    out = []
-    for p in sorted(prs, key=lambda p: p["number"]):
-        n = p["number"]
-        started = gate_started(p.get("statusCheckRollup"))
-        if n not in tracked or f"{n}@{sha}" in done or (started and started >= when):
-            continue
-        out.append((n, "fork" if p.get("isCrossRepository") else "toggle"))
-    return out
-
-
 # ---------------- checks ----------------
 
 def latest_checks(rollup):
@@ -234,8 +300,21 @@ def merge_decision(pr, *, cfg, local_pass, clef, held, rerun_head):
 
 # ---------------- git and gh ----------------
 
-def sh(args, cwd=None, timeout=120, input=None):
-    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input)
+# GIT_NO_LAZY_FETCH=1: on a blob:none clone git will otherwise fetch missing objects on demand. One `git log -S`
+# lazy-fetched for 35 minutes and filled the tick's disk (27 Oct). Every child gets this, and a pinned HOME and
+# GH_CONFIG_DIR so `gh` acts as the configured account rather than whoever last logged in.
+def child_env(env=None):
+    e = dict(os.environ if env is None else env)
+    e.setdefault("GIT_NO_LAZY_FETCH", "1")
+    home = e.get("HOME")
+    if home:
+        e.setdefault("GH_CONFIG_DIR", os.path.join(home, ".config", "gh"))
+    return e
+
+
+def sh(args, cwd=None, timeout=120, input=None, env=None):
+    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input,
+                       env=child_env(env))
     return r.returncode, r.stdout, r.stderr
 
 
@@ -281,12 +360,6 @@ def fp_match(old, new):
     if len(oh) < 7 or not nh.startswith(oh):
         return False
     return bool(old.get("seeded")) or all(old.get(k) == new.get(k) for k in ("state", "draft", "review", "labels", "updated"))
-
-
-def dedupe_key(kind, ident, head):
-    return f"{kind}|{ident}|{head or '-'}"
-
-
 def load_pending(path):
     try:
         with open(path) as f:
@@ -308,27 +381,6 @@ def now(tz=None):
 
 
 # ---------------- merge watch ----------------
-
-def tick_merge_log(events, short):
-    """PR numbers the gate itself merged, from "<short>#N" lines like "2026-10-27T01:00:00+08:00 merged cua#6124 ..."."""
-    pat = re.compile(rf"^\S+ merged {re.escape(short)}#(\d+) ")
-    return {int(m.group(1)) for l in events for m in [pat.search(l)] if m}
-
-
-def merge_audit(merged, tick_merged, known, me):
-    """Merges the gate didn't make. merged: gh pr list --state merged JSON (number, mergedBy, mergedAt);
-    known: {str(n): record} already handled or acknowledged.
-    -> [(n, action, by)]: alert (merged as `me`, not by the gate), log (another human), ignore (bot)."""
-    out = []
-    for p in sorted(merged, key=lambda p: p.get("mergedAt") or ""):
-        n, by = p["number"], (p.get("mergedBy") or {}).get("login") or ""
-        if n in tick_merged or str(n) in known:
-            continue
-        bot = (p.get("mergedBy") or {}).get("is_bot") or by.startswith("app/") or by.endswith("[bot]")
-        out.append((n, "ignore" if bot else "alert" if by == me else "log", by))
-    return out
-
-
 # ---------------- backlog lines (a gate that runs on queued items) ----------------
 
 def strip_negated(text):
@@ -336,39 +388,6 @@ def strip_negated(text):
     neg = re.compile(r"\b(never|don't|do not|not touch|untouched|hands-off|leave|outside|blocked|excluded|avoid|"
                      r"without|off limits|no code)\b", re.I)
     return " ".join(c for c in re.split(r"[;:()]|\.(?=\s|$)", text) if not neg.search(c))
-
-
-def flip_failed(lines, failed):
-    """Flip "- [started RID...] body" to "- [failed RID STAMP (gate: ERROR...)] body" for each run that ended failed.
-    failed: {rid: (error, stamp)}. A note after the id ("; retry of failed X") is kept. Returns (new lines, [(idx, rid)])."""
-    out, flipped = list(lines), []
-    for i, line in enumerate(lines):
-        m = re.match(r"^- \[started ([\w.-]+)([^\]]*)\] (.*)$", line)
-        if not m or m.group(1) not in failed:
-            continue
-        err, stamp = failed[m.group(1)]
-        why = re.sub(r"[\[\]\s]+", " ", err or "failed").strip()[:140]
-        note = re.sub(r"^[,;]?\s*\d{1,2} \w{3} \d{2}:\d{2} SGT", "", m.group(2)).strip(" ,;")
-        out[i] = f"- [failed {m.group(1)} {stamp} (tick: {why}{'; ' + note if note else ''})] {m.group(3)}"
-        flipped.append((i, m.group(1)))
-    return out, flipped
-
-
-def flip_done(lines, done):
-    """Flip "- [started RID...] body" to "- [done RID STAMP] body" ("[done RID STAMP: note]" when a note follows
-    the id) for each run that ended done. done: {rid: stamp}. Returns (new lines, [(idx, rid)])."""
-    out, flipped = list(lines), []
-    for i, line in enumerate(lines):
-        m = re.match(r"^- \[started ([\w.-]+)([^\]]*)\] (.*)$", line)
-        if not m or m.group(1) not in done:
-            continue
-        rid, note, body = m.groups()
-        note = re.sub(r"^[\s,;:]*(\d{1,2} \w{3} \d{2}:\d{2} SGT)?[\s,;:]*", "", note).rstrip()
-        out[i] = f"- [done {rid} {done[rid]}{': ' + note if note else ''}] {body}"
-        flipped.append((i, rid))
-    return out, flipped
-
-
 def replace_rules_block(text, block, begin, end):
     """text with only the lines strictly between `begin` and `end` replaced by block's inner lines.
 
@@ -390,66 +409,4 @@ def replace_rules_block(text, block, begin, end):
 # ---------------- disk guard ----------------
 
 DEFAULT_GUARD_FREE_GB = 10
-
-
-def disk_guard_plan(free_gb, runs, limit=None):
-    """Runs the disk guard stops: every live running run, when free_gb is under limit."""
-    limit = DEFAULT_GUARD_FREE_GB if limit is None else limit
-    if free_gb >= limit:
-        return []
-    return [r for r in runs if r.get("state") == "running" and r.get("alive")]
-
-
-def pg_alive(pgid):
-    """Is any process left in process group pgid?"""
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 # ---------------- urgent webhook ----------------
-
-def webhook_config(env_file, key_file, url=None, environ=None):
-    """(url, key) or None. The key file (key only, 0600) wins; a legacy env file still works.
-    The URL comes from `url`, then <ENV>_WEBHOOK_URL, then the env file. No URL is baked in: this repo is public."""
-    cfg = {}
-    if os.path.exists(env_file):
-        with open(env_file) as f:
-            for line in f:
-                if "=" in line and not line.lstrip().startswith("#"):
-                    k, v = line.strip().split("=", 1)
-                    cfg[k.strip()] = v.strip().strip("'\"")
-    key = cfg.get("WEBHOOK_KEY", "")
-    if os.path.exists(key_file):
-        with open(key_file) as f:
-            key = f.read().strip()
-    environ = os.environ if environ is None else environ
-    url = url or environ.get("GATE_WEBHOOK_URL") or cfg.get("WEBHOOK_URL") or ""
-    return (url, key) if key and url else None
-
-
-def webhook_body(kind, ident, reason, when=None):
-    m = re.search(r"#(\d+)$", ident or "")
-    return {"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason,
-            "time": when or now()}
-
-
-def post_webhook(kind, ident, reason, cfg):
-    """POST one urgent event. Returns a log-safe status line; never echoes the key or the body."""
-    wh = webhook_config(cfg["env_file"], cfg["key_file"], cfg.get("url"), cfg.get("environ"))
-    if not wh:
-        return "webhook not configured"
-    url, key = wh
-    req = urllib.request.Request(url, data=json.dumps(webhook_body(kind, ident, reason)).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return f"webhook sent ({r.status})"
-    except urllib.error.HTTPError as e:
-        return f"webhook failed: HTTP {e.code}"
-    except Exception as e:
-        return f"webhook failed: {type(e).__name__}"
