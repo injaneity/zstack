@@ -63,8 +63,10 @@ Every key is read by `engine.py`; a key the engine ignores fails a test in `test
 
 `gate/cua.json` is `trycua/cua` as the tick ran it. `gate/zstack.json` is the minimal one, and it has no
 `clef_script`: Clef scoring zstack PRs would be zstack gating itself, and a repo holding up its own merges on its own
-classifier is the one queue it can never drain. A test asserts the first equals the tick's own constants field by
-field.
+classifier is the one queue it can never drain. Without Clef the risk has to be declared, so a zstack PR carries a
+`risk:` label or a `risk: <word>` body line; with neither it reads `buffer: risk unknown` and stays put. Its holds file
+is `gate/zstack-holds.txt`, empty but present, so `--apply` has something to fail closed on. A test asserts `cua.json`
+equals the tick's own constants field by field.
 
 ## risk
 
