@@ -311,15 +311,16 @@ class RiskParity(unittest.TestCase):
     def test_clef_tier(self):
         tick = tick_module()
         title = "fix(cua-driver): a thing"
-        cases = [("low", [], title, False), ("standard", ["src/a.rs"], title, False),
-                 ("high", ["src/a.rs"], title, False), ("high", ["auth/token.rs"], title, False),
-                 ("high", ["src/a.rs"], "add oauth", False), ("high", [".github/workflows/ci.yml"], title, False),
-                 ("high", [".github/workflows/ci.yml"], title, True), ("bogus", [], title, False),
-                 (None, [], title, False), ("HIGH", ["pairing.rs"], title, False)]
-        for raw, files, t, outside in cases:
-            with self.subTest(raw=raw, files=files, outside=outside):
-                self.assertEqual(tick.clef_tier(raw, files, t, outside=outside),
-                                 engine.clef_tier(raw, files, t, outside, CUA_CFG))
+        cases = [("low", [], title), ("standard", ["src/a.rs"], title), ("high", ["src/a.rs"], title),
+                 ("high", ["auth/token.rs"], title), ("high", ["src/a.rs"], "add oauth"), ("bogus", [], title),
+                 (None, [], title), ("HIGH", ["pairing.rs"], title)]
+        for raw, files, t in cases:
+            with self.subTest(raw=raw, files=files):
+                self.assertEqual(tick.clef_tier(raw, files, t, outside=False),
+                                 engine.clef_tier(raw, files, t, CUA_CFG))
+        # the tick's outside rule stays in the tick: the gate only ever lists PRs by `me`
+        self.assertEqual(tick.clef_tier("high", [".github/workflows/ci.yml"], title, outside=True), "human")
+        self.assertEqual(engine.clef_tier("high", [".github/workflows/ci.yml"], title, CUA_CFG), "deep")
 
     def test_norm_tier(self):
         tick = tick_module()
@@ -464,7 +465,6 @@ class ConfigIsTheOldConstants(unittest.TestCase):
         self.assertEqual(CUA_CFG.clef_script, tick.CLEF)
         self.assertEqual(CUA_CFG.sensitive.pattern, tick.SENSITIVE.pattern)
         self.assertEqual(CUA_CFG.sensitive.flags, tick.SENSITIVE.flags)
-        self.assertEqual(CUA_CFG.outside_sensitive.pattern, tick.OUTSIDE_SENSITIVE.pattern)
 
     def test_a_third_repo_config_reproduces_pi_onigiri(self):
         """The tick also gated injaneity/pi-onigiri, with no Clef. Same decisions from a config, no code change."""
@@ -717,7 +717,7 @@ class Cli(unittest.TestCase):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                self.gate.main(["--config", self.config(holds=self.holds(), checkouts=["/tmp/fake-clone"])])
+                self.gate.main(["--config", self.config(holds=self.holds(), checkout="/tmp/fake-clone")])
             out = buf.getvalue()
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
@@ -747,7 +747,7 @@ class Cli(unittest.TestCase):
         try:
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-                self.gate.main(["--config", self.config(holds=self.holds(), checkouts=["/tmp/fake-clone"])])
+                self.gate.main(["--config", self.config(holds=self.holds(), checkout="/tmp/fake-clone")])
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
         state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
@@ -795,6 +795,51 @@ class Cli(unittest.TestCase):
         self.assertEqual((state.get("rerun") or {}).get("10"), "a" * 40,
                          "the rerun already spent this pass was not saved")
 
+    def test_a_draft_whose_pass_only_carried_is_not_scored(self):
+        """The tick scores a draft on a PASS in its body or a verdict.md, never on a carried one, so such a draft
+        waits for its owner to mark it ready. Scoring it and then undrafting it is a rewrite, not a port."""
+        h, old = "a" * 40, "b" * 40
+        pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
+        calls = []
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
+            if args[0] == "git" and "rev-list" in args:
+                return 0, f"{h} {old} {'d' * 40}", ""
+            if args[0] == "git":
+                return 0, "c" * 40 + "\n", ""
+            return 0, "", ""
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = fake_sh
+        # a full PR view, so scoring would succeed if it were reached at all: the test has to be able to tell
+        engine.gh_json = lambda args, **kw: (calls.append(list(args)),
+                                             {"headRefOid": h, "title": "t", "body": pr["body"], "files": [],
+                                              "mergeable": "MERGEABLE", "statusCheckRollup": []})[1]
+        self.gate.open_prs = lambda cfg: [pr]
+        self.gate.local_pass = lambda root: set()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.gate.main(["--config", self.config(holds=self.holds(), checkout="/tmp/fake-clone",
+                                                        clef_script="/tmp/clef"), "--apply"])
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        self.assertNotIn("/tmp/clef", [c[0] for c in calls], "the draft was scored on a carried PASS")
+        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
+        self.assertNotIn("7", state.get("clef") or {})
+        self.assertEqual((state.get("carried") or {}).get("7"), {"head": h, "ok": True})
+
+    def test_a_corrupt_state_file_stops_the_run(self):
+        """The tick raised on a corrupt state.json and ran nothing. Reading it as empty reruns every red PR again
+        and re-buys scores it already holds, and a score that came back lower could merge."""
+        path = os.path.join(self.dir, "zstack.state.json")
+        with open(path, "w") as f:
+            f.write("{not json")
+        with self.assertRaises(ValueError):
+            self.gate.load_state(path)
+
 
 def rollup(status="SUCCESS", run="111"):
     return [chk("build", conclusion=status, run=run)]
@@ -829,7 +874,7 @@ class KnobsBite(unittest.TestCase):
     def cfg(self, **over):
         d = {"repo": "x/y", "me": "u", "merge_method": "squash", "label_prefix": "risk:",
              "non_required_checks": [], "preapproved": [], "clef_script": "/dev/null",
-             "sensitive": "secret", "outside_sensitive": "workflows"}
+             "sensitive": "secret"}
         d.update(over)
         return engine.Config(d)
 
@@ -852,11 +897,9 @@ class KnobsBite(unittest.TestCase):
         self.assertEqual(engine.merge_decision(p, cfg=self.cfg(label_prefix="sev:"), local_pass=set(), clef="light",
                                                held=None, rerun_head=None)[0], "buffer")
 
-    def test_sensitive_and_outside_sensitive(self):
-        self.assertEqual(engine.clef_tier("high", ["src/a.rs"], "t", False, self.cfg()), "deep")
-        self.assertEqual(engine.clef_tier("high", ["src/secret.rs"], "t", False, self.cfg()), "human")
-        self.assertEqual(engine.clef_tier("high", ["workflows/ci.yml"], "t", False, self.cfg()), "deep")
-        self.assertEqual(engine.clef_tier("high", ["workflows/ci.yml"], "t", True, self.cfg()), "human")
+    def test_sensitive(self):
+        self.assertEqual(engine.clef_tier("high", ["src/a.rs"], "t", self.cfg()), "deep")
+        self.assertEqual(engine.clef_tier("high", ["src/secret.rs"], "t", self.cfg()), "human")
 
     def test_no_clef_script_means_no_clef_wait(self):
         p = self.pr(labels=[], body=f"verify: PASS at {'a'*40}")
@@ -867,7 +910,7 @@ class KnobsBite(unittest.TestCase):
 
     def test_empty_sensitive_names_nothing(self):
         cfg = engine.Config({"repo": "x/y", "me": "u", "merge_method": "squash", "label_prefix": "risk:"})
-        self.assertEqual(engine.clef_tier("high", ["auth/token.rs"], "oauth", False, cfg), "deep")
+        self.assertEqual(engine.clef_tier("high", ["auth/token.rs"], "oauth", cfg), "deep")
 
 class Webhook(unittest.TestCase):
     def test_no_webhook_url_in_the_tree(self):

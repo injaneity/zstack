@@ -25,7 +25,7 @@ class Config:
 
     KNOWN = frozenset({
         "repo", "me", "merge_method", "label_prefix", "non_required_checks", "preapproved", "clef_script",
-        "clef_cwd", "sensitive", "outside_sensitive", "holds", "pause_file", "checkouts",
+        "sensitive", "holds", "pause_file", "checkout",
     })
 
     def __init__(self, d):
@@ -40,20 +40,13 @@ class Config:
         self.non_required_checks = frozenset(n.lower() for n in d.get("non_required_checks") or ())
         self.preapproved = frozenset(d.get("preapproved") or ())
         self.clef_script = d.get("clef_script") or None
-        self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read while scoring; None means the caller's cwd
         self.sensitive = re.compile(d["sensitive"], re.I) if d.get("sensitive") else NEVER
-        self.outside_sensitive = re.compile(d["outside_sensitive"]) if d.get("outside_sensitive") else NEVER
         # Where this repo's holds and pause live. Named here so a deploy cannot forget them: --apply refuses to
         # run without a holds file, because "no holds given" and "nothing is held" must not look the same.
         self.holds = d.get("holds") or None
         self.pause_file = d.get("pause_file") or None
-        # This repo's checkouts: `runs` reads .git/onigiri/v2 verdicts from them, `clone` fetches into them to
-        # carry a PASS. Always the same directories, and in practice the same one, so it is one list.
-        self.checkouts = tuple(d.get("checkouts") or ())
-
-    def __repr__(self):
-        return f"Config({self.repo})"
-
+        # This repo's clone: run verdicts are read from it and Clef runs in it, and a PASS carry fetches into it.
+        self.checkout = d.get("checkout") or None
 
 def load(path):
     with open(path) as f:
@@ -135,12 +128,11 @@ def declared_risk(labels, body, cfg):
     return norm_tier(lab or (found[-1] if found else None))
 
 
-def clef_tier(raw, files, title, outside, cfg):
-    """Clef prints low|standard|high. It has no human tier: high on a sensitive path (or, for outside PRs, the
-    outside_sensitive paths) counts as human; any other high is deep."""
+def clef_tier(raw, files, title, cfg):
+    """Clef prints low|standard|high. It has no human tier: high on a sensitive path counts as human, any other
+    high is deep."""
     t = norm_tier(raw)
-    if t == "deep" and (any(cfg.sensitive.search(x) for x in [title, *files])
-                        or outside and any(cfg.outside_sensitive.search(f) for f in files)):
+    if t == "deep" and any(cfg.sensitive.search(x) for x in [title, *files]):
         return "human"
     return t
 
@@ -268,11 +260,11 @@ def merge_decision(pr, *, cfg, local_pass, clef, held, rerun_head):
 # GIT_NO_LAZY_FETCH=1: on a blob:none clone git will otherwise fetch missing objects on demand. One `git log -S`
 # lazy-fetched for 35 minutes and filled the tick's disk (27 Oct). Every child gets this, and a pinned HOME and
 # GH_CONFIG_DIR so `gh` acts as the configured account rather than whoever last logged in.
-def child_env(env=None):
+def child_env():
     """The environment every child gets. These are forced, not defaulted: a caller that already has
     GIT_NO_LAZY_FETCH=0 in its environment is exactly the case the 27 Oct disk incident came from, and a
     setdefault would have preserved it."""
-    e = dict(os.environ if env is None else env)
+    e = dict(os.environ)
     e["GIT_NO_LAZY_FETCH"] = "1"
     home = e.get("HOME")
     if home:
@@ -280,9 +272,9 @@ def child_env(env=None):
     return e
 
 
-def sh(args, cwd=None, timeout=120, input=None, env=None):
+def sh(args, cwd=None, timeout=120, input=None):
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input,
-                       env=child_env(env))
+                       env=child_env())
     return r.returncode, r.stdout, r.stderr
 
 

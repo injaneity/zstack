@@ -21,12 +21,13 @@ Two overlapping runs are prevented by whatever schedules this: `cron-wrap.sh` ru
 gate takes no lock of its own.
 
 The gate also checks `gh` is authenticated as the config's `me` before it does anything, since `me` filters which PRs
-it looks at and the wrong account would gate someone else's.
+it looks at and the wrong account would gate someone else's. A missing state file is a fresh start; a corrupt one
+stops the run, as it did in the tick, because reading it as empty would rerun red PRs and re-buy scores it holds.
 
 A verify PASS survives a merge of main into the branch, the way the tick did: the gate fetches `refs/pull/N/head` and
-main into its own refs in the config's `checkouts` directory, then asks `engine.carry_pass` whether the head is a
+main into its own refs in the config's `checkout`, then asks `engine.carry_pass` whether the head is a
 two-parent merge whose first parent passed and whose tree equals a clean `git merge-tree` of its parents. A `PASS <sha>`
-line in a `verdict.md` under that directory counts as evidence too. A fetch that fails records nothing and the
+line in a `verdict.md` under that checkout counts as evidence too. A fetch that fails records nothing and the
 question is asked again next run, so a network blip does not strand the PR on "no verify PASS at head".
 
 Two things the gate will not do without evidence in the PR itself:
@@ -49,13 +50,11 @@ Every key is read by `engine.py`; a key the engine ignores fails a test in `test
 | `label_prefix` | the label that carries a declared risk, e.g. `risk:` |
 | `non_required_checks` | check names that never block, wait or rerun a merge |
 | `preapproved` | PR numbers that skip Clef entirely |
-| `clef_script` | risk classifier; set, and a PR waits for a score at its head; omit and it never does |
-| `clef_cwd` | where Clef may read the repo while scoring; defaults to the caller's cwd |
+| `clef_script` | risk classifier, run in `checkout`; set, and a PR waits for a score at its head; omit and it never does |
 | `sensitive` | regex: a high Clef score on a match promotes to `human` (urgent) |
-| `outside_sensitive` | regex: the same, but only for outside contributors |
 | `holds` | this repo's holds file; `--apply` refuses to run without it |
 | `pause_file` | this repo's pause file |
-| `checkouts` | this repo's checkout, for `PASS <sha>` verdicts and for the fetch a PASS carry needs |
+| `checkout` | this repo's clone: run verdicts are read from it, Clef runs in it, a PASS carry fetches into it |
 
 `gate/cua.json` is `trycua/cua` as the tick ran it. `gate/zstack.json` is the minimal one. A test asserts the first
 equals the tick's own constants field by field.
@@ -68,8 +67,9 @@ is preapproved.
 
 `gate/clef-risk.sh` pipes the PR into one read-only `pi` pass and prints the tier word. It stays on this box. It needs
 `pi` and about 10 seconds per PR, so a pass scores at most four (`CLEF_MAX_PER_RUN`, the tick's `CLEF_MAX_PER_TICK`) and
-the rest are scored next time. Drafts are not scored; the exception is a PR with a verify PASS at head, because the
-gate cannot undraft it without a score. To override a tier by hand, edit the PR's `risk:` label or add a
+the rest are scored next time. Drafts are not scored; the exception is a PR with a verify PASS at head in its body or
+a `verdict.md`, because the gate cannot undraft it without a score. A PASS that only carried across a merge does not
+count for that exception, which is the tick's rule: such a draft waits for its owner to mark it ready. To override a tier by hand, edit the PR's `risk:` label or add a
 `risk: <word>` line to its body, and the gate reads it from there on the next pass.
 
 ## tests
