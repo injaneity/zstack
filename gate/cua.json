@@ -3,15 +3,15 @@
   "me": "injaneity",
   "merge_method": "squash",
   "label_prefix": "risk:",
-  "non_required_checks": [
-    "cla"
-  ],
-  "preapproved": [
-    5775,
-    5072
-  ],
+  "non_required_checks": ["cla"],
+  "preapproved": [5775, 5072],
   "clef_script": "/home/box/agent-data/onigiri/v01/clef-risk.sh",
+  "clef_cwd": "/home/box/agent-data/onigiri/cua",
+  "clef_max_per_run": 4,
   "sensitive": "(?<![a-z])auth(?!or)|credential|secret|password|passkey|keyring|keychain|1password|onepassword|oauth|teleport|keyvault|pairing\\.rs",
   "outside_sensitive": "(^|/)\\.github/workflows/",
-  "clef_cwd": "/home/box/agent-data/onigiri/cua"
+  "holds": "/srv/onigiri/hold-prs.txt",
+  "pause_file": "/srv/onigiri/tick/PAUSED",
+  "runs": ["/home/box/agent-data/onigiri/cua"],
+  "clone": ["/home/box/agent-data/onigiri/cua"]
 }

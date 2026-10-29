@@ -27,7 +27,8 @@ class Config:
 
     KNOWN = frozenset({
         "repo", "me", "merge_method", "label_prefix", "non_required_checks", "preapproved", "clef_script",
-        "clef_cwd", "clef_required", "sensitive", "outside_sensitive", "holds", "pause_file",
+        "clef_cwd", "clef_required", "clef_max_per_run", "sensitive", "outside_sensitive", "holds",
+        "pause_file", "list_limit", "runs", "clone",
     })
 
     def __init__(self, d):
@@ -50,6 +51,12 @@ class Config:
         # run without a holds file, because "no holds given" and "nothing is held" must not look the same.
         self.holds = d.get("holds") or None
         self.pause_file = d.get("pause_file") or None
+        # A checkout holding .git/onigiri/v2 run verdicts, and a clone of this repo for the PASS carry. Paths, not
+        # flags: the same repo run by the same cron on the same machine always means the same directories.
+        self.runs = tuple(d.get("runs") or ())
+        self.clone = tuple(d.get("clone") or ())
+        self.list_limit = int(d.get("list_limit") or 100)
+        self.clef_max_per_run = int(d.get("clef_max_per_run") or 4)
 
     @property
     def requires_clef(self):

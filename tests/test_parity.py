@@ -7,6 +7,7 @@ disagreement is a bug in the extraction, not a test to adjust.
 The tick is read-only here: imported as a module from ONIGIRI_TICK (default the box's inspection copy).
 """
 import contextlib
+import fcntl
 import gzip
 import io
 import itertools
@@ -447,291 +448,6 @@ class CarryPass(unittest.TestCase):
                     self.assertEqual(tick.carry_pass(git, h, passed), engine.carry_pass(git, h, passed))
 
 
-class CliApply(unittest.TestCase):
-    """The --apply actions, driven with a fake `sh` so no live PR is touched."""
-
-    def setUp(self):
-        sys.path.insert(0, os.path.join(HERE, "..", "bin"))
-        import gate
-        self.gate = gate
-
-    def run_gate(self, prs, apply=False, extra=(), state=None):
-        """`state` is a path to share between calls: the rerun budget lives there, so a second call is the only
-        way to observe "rerun once, then stop". --apply always gets a holds file, which the gate now demands."""
-        calls = []
-        tree = "c" * 40
-
-        def fake_sh(args, **kw):
-            calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
-            if args[0] == "git" and "rev-list" in args:
-                return 0, f"{prs[0]['headRefOid']} {'b' * 40} {'d' * 40}", ""  # first parent, second, tree
-            if args[0] == "git" and "merge-tree" in args:
-                return 0, f"{tree}\n", ""
-            if args[0] == "git" and "rev-parse" in args:
-                return 0, f"{tree}\n", ""
-            return 0, "", ""
-
-        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh = fake_sh
-        engine.gh_json = lambda args, **kw: (calls.append(list(args)),
-                                             {"mergeable": "MERGEABLE", "statusCheckRollup": prs[0]["statusCheckRollup"]})[1]
-        self.gate.open_prs = lambda cfg, limit: prs
-        self.gate.local_pass = lambda roots: set()
-        try:
-            import io
-            import contextlib
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                argv = ["--config", os.path.join(HERE, "..", "gate", "zstack.json"), "--state",
-                        state or os.path.join(self._tmp(), "s.json")] + (["--apply"] if apply else []) + list(extra)
-                if apply and not any(x == "--holds" for x in argv):
-                    argv += ["--holds", self._empty_holds()]
-                self.gate.main(argv)
-            return buf.getvalue(), calls
-        finally:
-            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
-
-    def _empty_holds(self):
-        """A holds file that holds nothing: --apply requires one, and "empty" is different from "absent"."""
-        d = self._tmp()
-        p = os.path.join(d, "holds.txt")
-        with open(p, "w") as f:
-            f.write("# nothing held\n")
-        return p
-
-    def _tmp(self):
-        import tempfile
-        d = tempfile.mkdtemp()
-        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
-        return d
-
-    def pr(self, **kw):
-        h = "a" * 40
-        base = {"number": 1, "headRefOid": h, "isDraft": False, "mergeable": "MERGEABLE", "labels": [],
-                "body": f"verify: PASS at {h}\nrisk: light", "statusCheckRollup": [chk("build")], "title": "t"}
-        base.update(kw)
-        return base
-
-    def test_no_apply_runs_no_gh_that_changes_anything(self):
-        out, calls = self.run_gate([self.pr(isDraft=True)])
-        self.assertIn("ready", out)
-        self.assertFalse([c for c in calls if "merge" in c or "ready" in c])
-
-    def test_apply_undrafts(self):
-        out, calls = self.run_gate([self.pr(isDraft=True)], apply=True)
-        self.assertTrue(any(c[:3] == ["gh", "pr", "ready"] for c in calls), calls)
-
-    def test_apply_merges_with_the_configured_method_and_head_guard(self):
-        out, calls = self.run_gate([self.pr()], apply=True)
-        merge = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
-        self.assertTrue(merge, calls)
-        self.assertIn("--squash", merge[0])
-        self.assertIn("--match-head-commit", merge[0])
-        self.assertIn("a" * 40, merge[0])
-
-    def test_apply_reruns_once_then_stops(self):
-        """Two runs over one state file: the first reruns the red head, the second must not rerun it again.
-
-        A fresh state file per call would pass whichever way the budget behaved, so the second call is the test.
-        """
-        red = self.pr(statusCheckRollup=[chk("build", conclusion="FAILURE", run="999")])
-        state = os.path.join(self._tmp(), "s.json")
-        out1, calls1 = self.run_gate([red], apply=True, state=state)
-        reruns = [c for c in calls1 if c[:3] == ["gh", "run", "rerun"]]
-        self.assertEqual(len(reruns), 1, calls1)
-        self.assertIn("999", reruns[0])
-        self.assertFalse([c for c in calls1 if c[:3] == ["gh", "pr", "merge"]])
-
-        out2, calls2 = self.run_gate([red], apply=True, state=state)
-        self.assertFalse([c for c in calls2 if c[:3] == ["gh", "run", "rerun"]],
-                         f"reran a second time: {calls2}")
-        self.assertFalse([c for c in calls2 if c[:3] == ["gh", "pr", "merge"]])
-        self.assertIn("buffer", out2.lower() + out1.lower())
-
-    def test_carried_pass_makes_an_old_head_legitimate(self):
-        """A PASS carried across a clean main merge is not in the body. With --clone the gate checks and records it,
-        so the PR is decided on its real merits instead of being skipped forever."""
-        h, old = "a" * 40, "b" * 40
-        pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
-        calls = []
-        tree = "c" * 40
-
-        def fake_sh(args, **kw):
-            calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
-            if args[0] == "git" and "rev-list" in args:
-                return 0, f"{h} {old} {'d'*40}", ""
-            if args[0] == "git" and "merge-tree" in args:
-                return 0, f"{tree}\n", ""
-            if args[0] == "git" and "rev-parse" in args:
-                return 0, f"{tree}\n", ""
-            return 0, "", ""
-
-        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh = fake_sh
-        engine.gh_json = lambda args, **kw: (calls.append(list(args)), {"mergeable": "MERGEABLE", "statusCheckRollup": []})[1]
-        self.gate.open_prs = lambda cfg, limit: [pr]
-        self.gate.local_pass = lambda roots: set()
-        try:
-            import io, contextlib, tempfile
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                self.gate.main(["--config", os.path.join(HERE, "..", "gate", "zstack.json"),
-                                "--state", os.path.join(tempfile.mkdtemp(), "s.json"), "--clone", "/tmp/fake-clone"])
-            out = buf.getvalue()
-        finally:
-            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
-        self.assertIn("refs/pull/1/head", " ".join(" ".join(c) for c in calls if c[:2] == ["git", "-C"]))
-        self.assertNotIn("no verify PASS", out, out)
-
-    def test_held_pr_never_moves_even_with_apply(self):
-        out, calls = self.run_gate([self.pr(isDraft=True)], apply=True, extra=["--held", "1"])
-        self.assertIn("hold", out)
-        self.assertFalse([c for c in calls if c[:3] in (["gh", "pr", "ready"], ["gh", "pr", "merge"])])
-
-
-class HoldsAndPause(unittest.TestCase):
-    """The safety surface the tick had and the first extraction dropped: a hold that cannot be read, a hold in
-    the file, a hands-off path, a pause file. Each one has to stop an --apply, not just be parsed."""
-
-    def setUp(self):
-        sys.path.insert(0, os.path.join(HERE, "..", "bin"))
-        import gate
-        self.gate = gate
-
-    def pr(self, **kw):
-        h = "a" * 40
-        base = {"number": 7, "headRefOid": h, "isDraft": False, "mergeable": "MERGEABLE", "labels": [],
-                "author": {"login": "someone"}, "title": "t",
-                "body": f"verify: PASS at {h}\nrisk: light", "statusCheckRollup": [chk("build")]}
-        base.update(kw)
-        return base
-
-    def write(self, name, text):
-        d = tempfile.mkdtemp()
-        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
-        p = os.path.join(d, name)
-        with open(p, "w") as f:
-            f.write(text)
-        return p
-
-    def run_gate(self, prs, extra=(), apply=True, files=()):
-        """Run main() with a fake sh and a fake gh. `files` is what `pr view --json files` returns."""
-        calls = []
-
-        def fake_sh(args, **kw):
-            calls.append(list(args))
-            if args[:3] == ["gh", "api", "user"]:
-                return 0, "injaneity\n", ""
-            if args[0] == "git":
-                return 0, "c" * 40 + "\n", ""
-            return 0, "", ""
-
-        def fake_gh(args, **kw):
-            calls.append(list(args))
-            if "files" in args:
-                return {"files": [{"path": f} for f in files]}
-            return {"mergeable": "MERGEABLE", "statusCheckRollup": prs[0]["statusCheckRollup"]}
-
-        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh, engine.gh_json = fake_sh, fake_gh
-        self.gate.open_prs = lambda cfg, limit: prs
-        self.gate.local_pass = lambda roots: set()
-        try:
-            buf = io.StringIO()
-            argv = ["--config", os.path.join(HERE, "..", "gate", "zstack.json"),
-                    "--state", os.path.join(tempfile.mkdtemp(), "s.json")] + (["--apply"] if apply else [])
-            argv += list(extra)
-            if apply and "--holds" not in argv:
-                argv += ["--holds", self.write("empty-holds.txt", "# nothing held\n")]
-            with contextlib.redirect_stdout(buf):
-                self.gate.main(argv)
-            return buf.getvalue(), calls
-        finally:
-            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
-
-    def acted(self, calls):
-        return [c for c in calls if c[:3] in (["gh", "pr", "ready"], ["gh", "pr", "merge"])]
-
-    def test_a_mergeable_pr_does_move_without_a_holds_file(self):
-        """The control: without this the other tests prove nothing."""
-        out, calls = self.run_gate([self.pr()])
-        self.assertTrue(self.acted(calls), out)
-
-    def test_a_pr_hold_in_the_file_stops_the_merge(self):
-        holds = self.write("holds.txt", "hold | 7 | yes | patent\n")
-        out, calls = self.run_gate([self.pr()], extra=["--holds", holds])
-        self.assertFalse(self.acted(calls), out)
-        self.assertIn("hold", out)
-
-    def test_no_move_stops_it_too(self):
-        holds = self.write("holds.txt", "no-move | #7 | yes | staging\n")
-        out, calls = self.run_gate([self.pr()], extra=["--holds", holds])
-        self.assertFalse(self.acted(calls), out)
-
-    def test_apply_without_a_holds_file_refuses_to_run(self):
-        """The default path must be closed too: no --holds and no config key is "I know nothing about holds",
-        which is not the same as "nothing is held"."""
-        with self.assertRaises(SystemExit) as e:
-            self.run_gate([self.pr()], apply=True, extra=["--holds", ""])
-        self.assertIn("needs a holds file", str(e.exception.code))
-
-    def test_apply_with_a_holds_path_that_does_not_exist_refuses_to_run(self):
-        """A typo'd or unmounted path is fatal, as it was in the tick: not "no holds"."""
-        with self.assertRaises(SystemExit) as e:
-            self.run_gate([self.pr()], apply=True, extra=["--holds", "/nonexistent/hold-prs.txt"])
-        self.assertIn("refusing to act", str(e.exception.code))
-
-    def test_a_hold_is_never_silently_dropped_because_the_file_is_bad(self):
-        """Fail closed: an unparseable holds file must stop the run, not merge everything it failed to read."""
-        holds = self.write("holds.txt", "hold | 7 | yes | patent\nthis row is nonsense\n")
-        with self.assertRaises(SystemExit) as e:
-            self.run_gate([self.pr()], extra=["--holds", holds])
-        self.assertIn("refusing to act", str(e.exception.code))
-
-    def test_a_hold_on_a_row_it_cannot_read_is_not_treated_as_no_hold(self):
-        holds = self.write("holds.txt", "hold | not-a-number | yes | patent\n")
-        with self.assertRaises(SystemExit):
-            self.run_gate([self.pr()], extra=["--holds", holds])
-
-    def test_a_hands_off_path_buffers_a_pr_that_touches_it(self):
-        holds = self.write("holds.txt", "hands-off-path | impl_.rs | yes | ours\n")
-        out, calls = self.run_gate([self.pr()], extra=["--holds", holds], files=["src/impl_.rs"])
-        self.assertFalse(self.acted(calls), out)
-        self.assertIn("hands-off path", out)
-
-    def test_a_hands_off_path_does_not_buffer_an_unrelated_pr(self):
-        holds = self.write("holds.txt", "hands-off-path | impl_.rs | yes | ours\n")
-        out, calls = self.run_gate([self.pr()], extra=["--holds", holds], files=["src/other.rs"])
-        self.assertTrue(self.acted(calls), out)
-
-    def test_the_pause_file_stops_everything(self):
-        pause = self.write("PAUSED", "paused for the patent hold\n")
-        out, calls = self.run_gate([self.pr()], extra=["--pause-file", pause])
-        self.assertFalse(self.acted(calls), out)
-        self.assertIn("paused", out)
-
-    def test_no_pause_file_means_act(self):
-        with tempfile.TemporaryDirectory() as d:
-            out, calls = self.run_gate([self.pr()], extra=["--pause-file", os.path.join(d, "PAUSED")])
-        self.assertTrue(self.acted(calls), out)
-
-    def test_set_risk_promotes_high_on_a_sensitive_path_to_human(self):
-        """Recording `high` on an auth path is a human decision; storing `deep` would only buffer it."""
-        cfg = engine.load(os.path.join(HERE, "..", "gate", "cua.json"))
-        self.assertTrue(cfg.sensitive.search("src/auth.rs"), cfg.sensitive.pattern)
-        self.assertEqual(engine.clef_tier("high", ["src/auth.rs"], "auth", outside=False, cfg=cfg), "human")
-        # and a high that touches nothing sensitive stays deep, so the promotion is the path doing it
-        self.assertEqual(engine.clef_tier("high", ["docs/x.md"], "docs", outside=False, cfg=cfg), "deep")
-
-    def test_set_risk_only_ever_escalates(self):
-        self.assertEqual(engine.stricter("human", "light"), "human")
-        self.assertEqual(engine.stricter(None, "light"), "light")
-
-
 class ConfigIsTheOldConstants(unittest.TestCase):
     """gate/cua.json must be exactly the constants that were compiled into the tick, or the parity above is luck."""
 
@@ -771,103 +487,258 @@ class ConfigIsTheOldConstants(unittest.TestCase):
                         engine.merge_decision(p, cfg=cfg, local_pass=set(), clef=clef, held=None, rerun_head=None))
 
 
-class SetRiskAndScoreThroughTheCli(unittest.TestCase):
-    """--set-risk and --score, driven through bin/gate.py. The previous pair of tests called engine helpers
-    directly and never ran the code that reads the flag, which is where the bugs were."""
+class Cli(unittest.TestCase):
+    """bin/gate.py end to end, with a fake gh and sh. The CLI is what can merge, so this is where the safety
+    tests live: what it refuses to do matters more than what it decides."""
 
     def setUp(self):
         sys.path.insert(0, os.path.join(HERE, "..", "bin"))
         import gate
         self.gate = gate
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.dir, ignore_errors=True))
 
-    def call(self, argv, prs, files=(), view=None):
-        """main(argv) with fake gh/sh. `view` overrides the per-PR gh view result."""
+    def pr(self, **kw):
+        h = "a" * 40
+        base = {"number": 7, "headRefOid": h, "isDraft": False, "mergeable": "MERGEABLE", "labels": [],
+                "body": f"verify: PASS at {h}\nrisk: light", "title": "t",
+                "author": {"login": "injaneity"}, "statusCheckRollup": [chk("build")]}
+        base.update(kw)
+        return base
+
+    def config(self, **kw):
+        """A zstack config in a temp dir, so state and locks land there too."""
+        cfg = {"repo": "injaneity/zstack", "me": "injaneity", "merge_method": "squash", "label_prefix": "risk:"}
+        cfg.update(kw)
+        path = os.path.join(self.dir, f"c{len(os.listdir(self.dir))}.json")
+        with open(path, "w") as f:
+            json.dump(cfg, f)
+        return path
+
+    def holds(self, text="# nothing held\n"):
+        path = os.path.join(self.dir, "holds.txt")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def run_gate(self, prs, argv=(), status="SUCCESS", run="999", files=()):
         calls = []
-        state_dir = tempfile.mkdtemp()
-        self.addCleanup(lambda: shutil.rmtree(state_dir, ignore_errors=True))
-        state_path = os.path.join(state_dir, "s.json")
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
+            if args[0] == "git":
+                return 0, "c" * 40 + "\n", ""
+            if "clef-risk.sh" in str(args[0]):
+                return 0, "high\n", ""  # the real script prints exactly the tier word on stdout
+            return 0, "", ""
 
         def fake_gh(args, **kw):
             calls.append(list(args))
             if "files" in args:
                 return {"files": [{"path": f} for f in files]}
-            # a realistic view: head/title/body/files together, which is what the head pin compares
-            return view if view is not None else {"headRefOid": prs[0]["headRefOid"], "title": prs[0]["title"],
-                                                  "body": prs[0]["body"],
-                                                  "files": [{"path": f} for f in files]}
+            if "headRefOid,title,body,files" in args:
+                return {"headRefOid": prs[0]["headRefOid"], "title": prs[0]["title"],
+                        "body": prs[0]["body"], "files": [{"path": f} for f in files]}
+            return {"mergeable": prs[0]["mergeable"], "statusCheckRollup": rollup(status, run)}
 
         real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh = lambda args, **kw: (calls.append(list(args)),
-                                        (0, "injaneity\n" if args[:3] == ["gh", "api", "user"] else "", ""))[1]
-        engine.gh_json = fake_gh
-        self.gate.open_prs = lambda cfg, limit: list(prs)
+        engine.sh, engine.gh_json = fake_sh, fake_gh
+        self.gate.open_prs = lambda cfg: list(prs)
         self.gate.local_pass = lambda roots: set()
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                self.gate.main(["--config", os.path.join(HERE, "..", "gate", "cua.json"),
-                                "--state", state_path] + list(argv))
+                self.gate.main(["--config", argv[0]] + list(argv[1:]))
+            return buf.getvalue(), calls
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
-        return buf.getvalue(), calls, state_path
 
-    def pr(self, **kw):
-        h = "a" * 40
-        base = {"number": 7, "headRefOid": h, "isDraft": True, "mergeable": "UNKNOWN", "labels": [],
-                "body": "", "title": "t", "author": {"login": "injaneity"}, "statusCheckRollup": []}
-        base.update(kw)
-        return base
+    def acted(self, calls):
+        return [c for c in calls if c[:3] in (["gh", "pr", "ready"], ["gh", "pr", "merge"])]
 
-    def test_set_risk_goes_through_clef_tier_and_records_under_the_canonical_key(self):
-        out, _, state_path = self.call(["--set-risk", "07=high"], [self.pr()], files=["src/auth.rs"])
-        with open(state_path) as f:
-            st = json.load(f)
-        self.assertEqual(list(st["clef"]), ["7"], "07 must be stored as 7, or the decision never reads it")
-        self.assertEqual(st["clef"]["7"]["tier"], "human")  # high on an auth path is the owner's call
-        self.assertEqual(st["clef"]["7"]["by"], "hand")
+    # --- what it refuses ---
 
-    def test_set_risk_only_ever_escalates(self):
-        with tempfile.TemporaryDirectory() as d:
-            state_path = os.path.join(d, "s.json")
-            with open(state_path, "w") as f:
-                json.dump({"clef": {"7": {"head": "a" * 40, "tier": "human", "by": "clef"}}}, f)
-            out, _, _ = self.call(["--set-risk", "7=light", "--state", state_path], [self.pr()],
-                                  files=["docs/x.md"])
-            with open(state_path) as f:
-                self.assertEqual(json.load(f)["clef"]["7"]["tier"], "human", out)
+    def test_apply_without_a_holds_file_refuses_to_run(self):
+        """Absent and empty are different answers. This is the finding that failed the first two reviews."""
+        with self.assertRaises(SystemExit) as e:
+            self.run_gate([self.pr()], [self.config(), "--apply"])
+        self.assertIn("needs a 'holds' path", str(e.exception.code))
 
-    def test_a_typo_in_set_risk_is_loud_not_silent(self):
-        for bad in ("7=hgih", "seven=high", "99=high"):
-            with self.subTest(spec=bad):
-                with self.assertRaises(SystemExit):
-                    self.call(["--set-risk", bad], [self.pr()])
+    def test_a_holds_path_that_does_not_exist_refuses_to_run(self):
+        with self.assertRaises(SystemExit) as e:
+            self.run_gate([self.pr()], [self.config(holds="/nonexistent/holds.txt"), "--apply"])
+        self.assertIn("refusing to act", str(e.exception.code))
 
-    def test_a_hand_set_tier_does_not_satisfy_the_wait_for_a_score_rule(self):
-        """Clef may be more cautious than the person typing, so a hand-set tier must not stop Clef running."""
-        with tempfile.TemporaryDirectory() as d:
-            state_path = os.path.join(d, "s.json")
-            with open(state_path, "w") as f:
-                json.dump({"clef": {"7": {"head": "a" * 40, "tier": "light", "by": "hand"}}}, f)
-            out, calls, _ = self.call(["--score", "--state", state_path], [self.pr(isDraft=False)],
-                                      files=["src/x.rs"])
-            self.assertTrue([c for c in calls if any("clef-risk" in str(x) for x in c)],
-                            f"Clef never ran: {calls}")
+    def test_an_unparseable_holds_file_refuses_to_run(self):
+        for body in ("hold | 7 | yes | patent\nnonsense\n", "hold | abc | yes | x\n"):
+            with self.subTest(body=body):
+                with self.assertRaises(SystemExit) as e:
+                    self.run_gate([self.pr()], [self.config(holds=self.holds(body)), "--apply"])
+                self.assertIn("refusing to act", str(e.exception.code))
 
-    def test_scoring_does_not_run_while_paused(self):
-        with tempfile.TemporaryDirectory() as d:
-            pause = os.path.join(d, "PAUSED")
-            with open(pause, "w") as f:
-                f.write("disk health\n")
-            out, calls, _ = self.call(["--score", "--pause-file", pause], [self.pr(isDraft=False)],
-                                      files=["src/x.rs"])
-            self.assertFalse([c for c in calls if any("clef-risk" in str(x) for x in c)], calls)
+    def test_a_wrong_gh_account_refuses_to_run(self):
+        cfg = self.config()
+
+        def fake_sh(args, **kw):
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "someone-else\n", ""
+            return 0, "", ""
+
+        real = engine.sh
+        engine.sh = fake_sh
+        try:
+            with self.assertRaises(SystemExit) as e:
+                self.gate.main(["--config", cfg])
+        finally:
+            engine.sh = real
+        self.assertIn("expects injaneity", str(e.exception.code))
+
+    # --- what it does ---
+
+    def test_a_clean_pr_merges_with_the_head_pinned(self):
+        out, calls = self.run_gate([self.pr()], [self.config(holds=self.holds()), "--apply"])
+        merge = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+        self.assertTrue(merge, out)
+        self.assertIn("--squash", merge[0])
+        self.assertIn("--match-head-commit", merge[0])
+        self.assertIn("a" * 40, merge[0])
+
+    def test_print_mode_changes_nothing(self):
+        out, calls = self.run_gate([self.pr(isDraft=True)], [self.config(holds=self.holds())])
+        self.assertIn("ready", out)
+        self.assertFalse(self.acted(calls))
+
+    def test_apply_undrafts(self):
+        out, calls = self.run_gate([self.pr(isDraft=True, body="", statusCheckRollup=[])]
+                                   if False else [self.pr(isDraft=True)],
+                                   [self.config(holds=self.holds()), "--apply"])
+        self.assertTrue(any(c[:3] == ["gh", "pr", "ready"] for c in calls), calls)
+
+    def test_a_pr_hold_stops_the_merge(self):
+        out, calls = self.run_gate([self.pr()],
+                                   [self.config(holds=self.holds("hold | 7 | yes | patent\n")), "--apply"])
+        self.assertFalse(self.acted(calls), out)
+        self.assertIn("hold", out)
+
+    def test_no_move_stops_it_too(self):
+        out, calls = self.run_gate([self.pr()],
+                                   [self.config(holds=self.holds("no-move | #7 | yes | staging\n")), "--apply"])
+        self.assertFalse(self.acted(calls), out)
+
+    def test_a_hands_off_path_buffers_and_elsewhere_does_not(self):
+        h = self.holds("hands-off-path | impl_.rs | yes | ours\n")
+        out, calls = self.run_gate([self.pr()], [self.config(holds=h), "--apply"], files=["src/impl_.rs"])
+        self.assertFalse(self.acted(calls), out)
+        self.assertIn("hands-off path", out)
+        out, calls = self.run_gate([self.pr()], [self.config(holds=h), "--apply"], files=["src/other.rs"])
+        self.assertTrue(self.acted(calls), out)
+
+    def test_a_rerun_happens_once_and_then_stops(self):
+        """Two runs over one state file: a fresh state per call would pass either way."""
+        cfg, h = self.config(holds=self.holds()), self.holds()
+        red = self.pr(statusCheckRollup=[chk("build", conclusion="FAILURE", run="999")])
+        out1, calls1 = self.run_gate([red], [cfg, "--apply"], status="FAILURE", run="999")
+        reruns = [c for c in calls1 if c[:3] == ["gh", "run", "rerun"]]
+        self.assertEqual(len(reruns), 1, out1)
+        self.assertIn("999", reruns[0])
+        out2, calls2 = self.run_gate([red], [cfg, "--apply"], status="FAILURE", run="999")
+        self.assertFalse([c for c in calls2 if c[:3] == ["gh", "run", "rerun"]], out2)
+
+    def test_a_pause_stops_everything(self):
+        pause = os.path.join(self.dir, "PAUSED")
+        with open(pause, "w") as f:
+            f.write("patent hold\n")
+        out, calls = self.run_gate([self.pr()], [self.config(holds=self.holds(), pause_file=pause), "--apply"])
+        self.assertFalse(self.acted(calls), out)
+        self.assertIn("paused", out)
+
+    def test_a_pause_does_not_spend_clef_tokens(self):
+        pause = os.path.join(self.dir, "PAUSED")
+        with open(pause, "w") as f:
+            f.write("disk health\n")
+        cfg = self.config(holds=self.holds(), pause_file=pause,
+                          clef_script=os.path.join(HERE, "..", "gate", "clef-risk.sh"))
+        out, calls = self.run_gate([self.pr(isDraft=False)], [cfg, "--apply"])
+        self.assertFalse([c for c in calls if any("clef-risk" in str(x) for x in c)], calls)
+
+    def test_scoring_runs_inside_apply_and_records_at_the_head(self):
+        cfg = self.config(holds=self.holds(), clef_script=os.path.join(HERE, "..", "gate", "clef-risk.sh"))
+        out, calls = self.run_gate([self.pr()], [cfg, "--apply"])
+        self.assertTrue([c for c in calls if any("clef-risk" in str(x) for x in c)], out)
+        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
+        self.assertEqual(state["clef"]["7"]["head"], "a" * 40)
 
     def test_a_score_for_a_head_that_moved_is_not_recorded(self):
-        out, _, state_path = self.call(["--score"], [self.pr(isDraft=False)],
-                                       view={"headRefOid": "b" * 40, "title": "t", "body": "", "files": []})
-        with open(state_path) as f:
-            st = json.load(f) if os.path.exists(state_path) else {}
-        self.assertNotIn("7", st.get("clef") or {}, out)
+        cfg = self.config(holds=self.holds(), clef_script=os.path.join(HERE, "..", "gate", "clef-risk.sh"))
+        moved = "b" * 40
+
+        def fake_gh(args, **kw):
+            if "headRefOid,title,body,files" in args:
+                return {"headRefOid": moved, "title": "t", "body": "", "files": []}
+            return {"mergeable": "MERGEABLE", "statusCheckRollup": rollup("SUCCESS", "1")}
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = lambda args, **kw: (0, "", "") if args[:3] != ["gh", "api", "user"] else (0, "injaneity\n", "")
+        engine.gh_json = fake_gh
+        self.gate.open_prs = lambda cfg: [self.pr()]
+        self.gate.local_pass = lambda roots: set()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.gate.main(["--config", cfg, "--apply"])
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
+        self.assertNotIn("7", state.get("clef") or {})
+
+    def test_a_second_run_refuses_while_the_lock_is_held(self):
+        cfg = self.config()
+        path = os.path.join(self.dir, "zstack.state.json.lock")
+        holder = open(path, "w")
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with self.assertRaises(SystemExit) as e:
+                self.run_gate([self.pr()], [cfg])
+        finally:
+            fcntl.flock(holder, fcntl.LOCK_UN)
+            holder.close()
+        self.assertIn("another run holds", str(e.exception.code))
+
+    def test_a_carried_pass_lets_an_old_head_move(self):
+        h, old = "a" * 40, "b" * 40
+        pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
+        calls = []
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
+            if args[0] == "git" and "rev-list" in args:
+                return 0, f"{h} {old} {'d' * 40}", ""
+            if args[0] == "git":
+                return 0, "c" * 40 + "\n", ""
+            return 0, "", ""
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = fake_sh
+        engine.gh_json = lambda args, **kw: (calls.append(list(args)),
+                                             {"mergeable": "MERGEABLE", "statusCheckRollup": []})[1]
+        self.gate.open_prs = lambda cfg: [pr]
+        self.gate.local_pass = lambda roots: set()
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.gate.main(["--config", self.config(holds=self.holds(), clone=["/tmp/fake-clone"])])
+            out = buf.getvalue()
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        self.assertIn("refs/pull/7/head", " ".join(" ".join(c) for c in calls if c[:2] == ["git", "-C"]))
+        self.assertNotIn("no verify PASS", out, out)
+
+
+def rollup(status="SUCCESS", run="111"):
+    return [chk("build", conclusion=status, run=run)]
 
 
 class ConfigIsChecked(unittest.TestCase):
