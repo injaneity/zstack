@@ -30,11 +30,11 @@ pi -e git:github.com/injaneity/zstack
 
 **One mode skill, `onigiri-mode`.** The routing table, the non-negotiables, the principles, the autonomy rules, and the cua hard rules all live here. It replaces pstack's `poteto-mode`.
 
-**Fourteen playbooks.** Diagnose, bug fix, measure, experiment, feature, refactoring, visual parity, authoring a skill, babysit, shipping, opening a PR, multi-phase plan, resume, worktree cleanup. Diagnose absorbs what pstack split across investigation and two forensics playbooks, measure merges perf issue and hillclimb, and experiment merges prototype and eval, because each pair was one job that differed only in who captured the evidence or whether the loop ran once or until a target.
+**Playbooks.** Diagnose, bug fix, measure, experiment, feature, refactoring, visual parity, authoring a skill, verify a PR, babysit, shipping, opening a PR, multi-phase plan, resume, worktree cleanup. Diagnose absorbs what pstack split across investigation and two forensics playbooks, measure merges perf issue and hillclimb, and experiment merges prototype and eval, because each pair was one job that differed only in who captured the evidence or whether the loop ran once or until a target.
 
 **Three principle skills.** `principle-fix-root-causes`, `principle-prove-it-works`, `principle-test-behavior-not-implementation`. These three are the ones long enough that a summary loses the point, and the ones the model actually opens. Every other pstack principle is a one-line rule inside `onigiri-mode`, because a single thread reads a rule where it is written instead of fetching a leaf file per principle.
 
-**Ten utility skills.** `architect`, `how`, `why`, `figure-it-out`, `automate-me`, `tdd`, `unslop`, `blast-radius`, `show-me-your-work`, plus `technical-writing` and `typescript-best-practices` and the two verification-skill generators.
+**Utility skills.** `architect`, `how`, `why`, `figure-it-out`, `automate-me`, `tdd`, `unslop`, `blast-radius`, `show-me-your-work`, plus `technical-writing` and `typescript-best-practices` and the two verification-skill generators.
 
 ## what's gone
 
