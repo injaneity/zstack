@@ -9,11 +9,10 @@ runs lives beside it. `--apply` is the whole pass, in the tick's order: score wh
 across a main merge, decide, then move. There is no separate scoring mode and no way to hand-type a risk tier,
 because the tick had neither and every bug in this file's first draft came from adding them.
 
-Locking, retries and timeouts belong to whatever schedules this (cron-wrap.sh runs the tick under flock and timeout).
-Needs `gh` authenticated as the config's `me`.
+Locking, retries and timeouts belong to whatever schedules this: cron-wrap.sh already runs each job under `flock -n`
+and `timeout`, so a second run cannot start and a hung one is killed. Needs `gh` authenticated as the config's `me`.
 """
 import argparse
-import fcntl
 import json
 import os
 import sys
@@ -21,12 +20,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gate"))
 import engine  # noqa: E402
 
+CLEF_MAX_PER_RUN = 4  # ~10s each; the first pass over ~300 open PRs takes about a day
+
 
 def open_prs(cfg):
     """Open PRs by `me`. mergeable and statusCheckRollup come per PR, because asking gh for them on a list call
     times out on a repo with this many checks."""
     prs = engine.gh_json(["pr", "list", "-R", cfg.repo, "--state", "open", "--author", cfg.me,
-                          "--limit", str(cfg.list_limit), "--json",
+                          "--limit", "100", "--json",
                           "number,headRefOid,isDraft,labels,body,title,author"]) or []
     for p in prs:
         p["labels"] = [l["name"] if isinstance(l, dict) else l for l in p.get("labels") or []]
@@ -59,15 +60,16 @@ def carry(root, n, head, passed, main_ref):
     """May head's verify PASS survive a main merge? Fetches the PR head and main into our own refs first, so it
     never races a run's origin/main."""
     git = git_in(root)
-    rc, _ = git("fetch", "-q", "--no-write-fetch-head", "origin",
-                f"+refs/pull/{n}/head:refs/onigiri-gate/pr/{n}", f"+refs/heads/main:{main_ref}")
+    rc, _, err = engine.sh(["git", "-C", root, "fetch", "-q", "--no-write-fetch-head", "origin",
+                            f"+refs/pull/{n}/head:refs/onigiri-gate/pr/{n}", f"+refs/heads/main:{main_ref}"],
+                           timeout=300)
     if rc:
-        return False
+        raise RuntimeError(f"fetch failed: {err.strip()[:120]}")
     parent, _why = engine.carry_pass(git, head, passed, main_ref)
     return bool(parent)
 
 
-def score(cfg, prs, state, log):
+def score(cfg, prs, state, passed, log):
     """Run Clef on PRs with no score at their head, and record it. Failures count toward the cap: Clef spends up to
     320s per PR and can fail every time, and uncounted failures would retry the whole repo every run, silently.
 
@@ -78,9 +80,9 @@ def score(cfg, prs, state, log):
         n, head = p["number"], p["headRefOid"]
         if ((state.get("clef") or {}).get(str(n)) or {}).get("head") == head:
             continue
-        if p["isDraft"] and not p.get("_has_pass"):
+        if p["isDraft"] and not engine.verify_pass(head, p.get("body"), passed):
             continue
-        if tried >= cfg.clef_max_per_run:
+        if tried >= CLEF_MAX_PER_RUN:
             break
         tried += 1
         # Head, title, body and files from one call, checked against the head the decision will use: a push in
@@ -136,13 +138,6 @@ def pause_reason(path):
         sys.exit(f"pause file unreadable, refusing to act: {e}")
 
 
-def check_identity(cfg, config_name):
-    """`me` filters PR authors, so being authenticated as someone else would gate the wrong PRs."""
-    rc, who, _ = engine.sh(["gh", "api", "user", "-q", ".login"])
-    if rc or who.strip() != cfg.me:
-        sys.exit(f"gh is authenticated as {who.strip() or 'nobody'}, but {config_name} expects {cfg.me}")
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", required=True)
@@ -150,7 +145,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     cfg = engine.load(a.config)
-    check_identity(cfg, a.config)
+    who = engine.sh(["gh", "api", "user", "-q", ".login"])[1].strip()  # `me` filters PR authors; act as it
+    if who != cfg.me:
+        sys.exit(f"gh is authenticated as {who or 'nobody'}, but {a.config} expects {cfg.me}")
     here = os.path.dirname(os.path.abspath(a.config))
     state_path = os.path.join(here, cfg.repo.split("/")[-1] + ".state.json")
 
@@ -167,13 +164,11 @@ def main(argv=None):
     log = []
     prs = open_prs(cfg)
 
-    with open(state_path + ".lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            sys.exit(f"another run holds {state_path}.lock: not starting")
-        state = load_state(state_path)
+    state = load_state(state_path)
+    try:
         run(cfg, prs, state, holds, paused, log, a.apply)
+    finally:
+        # a gh error halfway through still saves: the Clef scores and reruns already spent are not paid for twice
         save_state(state, state_path)
 
     for line in log:
@@ -184,19 +179,15 @@ def main(argv=None):
 def run(cfg, prs, state, holds, paused, log, apply):
     """One pass, in the order the merge depends on: PASS evidence first, then score, then decide, then move."""
     held = set(holds["hold"]) | set(holds["no_move"]) if holds else set()
-    passed = local_pass(cfg.runs)
+    passed = local_pass(cfg.checkouts)
     for c in (state.get("carried") or {}).values():
         if c.get("ok"):
             passed.add(c["head"])
 
-    for p in prs:
-        p["_has_pass"] = engine.verify_pass(p["headRefOid"], p.get("body"), passed)
     carry_all(cfg, prs, passed, held, state, log)
-    for p in prs:
-        p["_has_pass"] = engine.verify_pass(p["headRefOid"], p.get("body"), passed)
 
     if apply and cfg.clef_script and not paused:
-        score(cfg, prs, state, log)
+        score(cfg, prs, state, passed, log)
     elif paused:
         log.append(f"not scoring or acting: paused ({paused})")
 
@@ -211,7 +202,7 @@ def run(cfg, prs, state, holds, paused, log, apply):
 def carry_all(cfg, prs, passed, held, state, log):
     """Record whether a verify PASS survives a main merge, once per head. A fetch failure is not recorded, so the
     question is asked again next run rather than stranding the PR until its next push."""
-    if not cfg.clone:
+    if not cfg.checkouts:
         return
     for p in prs:
         n, head = p["number"], p["headRefOid"]
@@ -221,20 +212,12 @@ def carry_all(cfg, prs, passed, held, state, log):
         done = (state.get("carried") or {}).get(str(n)) or {}
         if not olds or done.get("head") == head:
             continue
-        ok, err = False, None
-        for root in cfg.clone:
-            try:
-                ok = carry(root, n, head, set(olds) | passed, "refs/onigiri-gate/main")
-            except Exception as e:
-                err = f"{type(e).__name__}: {e}"
-                continue
-            if ok:
-                break
-        if ok or err is None:
-            state.setdefault("carried", {})[str(n)] = {"head": head, "ok": bool(ok)}
-        else:
-            log.append(f"{cfg.repo}#{n} carry unanswered ({err}): will retry next run")
+        try:
+            ok = carry(cfg.checkouts[0], n, head, set(olds) | passed, "refs/onigiri-gate/main")
+        except Exception as e:
+            log.append(f"{cfg.repo}#{n} carry unanswered ({type(e).__name__}: {e}): will retry next run")
             continue
+        state.setdefault("carried", {})[str(n)] = {"head": head, "ok": ok}
         if ok:
             passed.add(head)
 

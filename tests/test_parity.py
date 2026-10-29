@@ -7,7 +7,6 @@ disagreement is a bug in the extraction, not a test to adjust.
 The tick is read-only here: imported as a module from ONIGIRI_TICK (default the box's inspection copy).
 """
 import contextlib
-import fcntl
 import gzip
 import io
 import itertools
@@ -92,7 +91,7 @@ class RealPRParity(unittest.TestCase):
             cfg = ZSTACK_CFG if pr["repo"] == "injaneity/zstack" else CUA_CFG
             cases = want[key]["decisions"]
             helds = (None, "hold list", "no-move")
-            clefs = (None, "light", "standard", "deep", "human") if cfg.requires_clef else (None, "deep")
+            clefs = (None, "light", "standard", "deep", "human") if cfg.clef_script else (None, "deep")
             reruns = (None, pr["headRefOid"])
             locs = locals_(pr["headRefOid"])
             for clef, held, rerun, loc in itertools.product(clefs, helds, reruns, locs):
@@ -110,7 +109,7 @@ class RealPRParity(unittest.TestCase):
         tick_module()  # a missing tick skips here, and only here
         for key, pr in sorted(fixtures().items()):
             cfg = ZSTACK_CFG if pr["repo"] == "injaneity/zstack" else CUA_CFG
-            clefs = ("light", "standard", "deep", "human") if cfg.requires_clef else (None, "deep")
+            clefs = ("light", "standard", "deep", "human") if cfg.clef_script else (None, "deep")
             for clef in clefs:
                 with self.subTest(pr=key, clef=clef):
                     old, new = both(pr, cfg=cfg, clef=clef, held=None, rerun_head=None)
@@ -188,11 +187,15 @@ class HoldsParity(unittest.TestCase):
         "hold | 5900 | yes | x\nbroken\n",  # one bad row after a good one
     ]
 
+    KEYS = ("hold", "no_move", "users", "paths", "exceptions")  # everything the gate reads; not the tick's
+    # `entries`, which exists only for the rules block it writes into PR bodies and this gate never writes
+
     def test_good_files_parse_identically(self):
         tick = tick_module()
         for text in self.LINES:
             with self.subTest(text=text[:40]):
-                self.assertEqual(tick.parse_holds(text), engine.parse_holds(text))
+                old, new = tick.parse_holds(text), engine.parse_holds(text)
+                self.assertEqual({k: old[k] for k in self.KEYS}, {k: new[k] for k in self.KEYS})
 
     def test_bad_files_are_rejected_by_both(self):
         tick = tick_module()
@@ -293,7 +296,7 @@ class NamedCases(unittest.TestCase):
 
 
 class RiskParity(unittest.TestCase):
-    """declared_risk, clef_tier, norm_tier, stricter: the same words in, the same tier out."""
+    """declared_risk, clef_tier, norm_tier: the same words in, the same tier out."""
 
     def test_declared_risk(self):
         tick = tick_module()
@@ -318,12 +321,10 @@ class RiskParity(unittest.TestCase):
                 self.assertEqual(tick.clef_tier(raw, files, t, outside=outside),
                                  engine.clef_tier(raw, files, t, outside, CUA_CFG))
 
-    def test_norm_and_stricter(self):
+    def test_norm_tier(self):
         tick = tick_module()
         for w in ("low", "LIGHT", "standard", " high ", "deep", "human", "bogus", "", None):
             self.assertEqual(tick.norm_tier(w), engine.norm_tier(w))
-        for combo in itertools.product(("light", "standard", "deep", "human", None), repeat=3):
-            self.assertEqual(tick.stricter(*combo), engine.stricter(*combo))
 
 
 class CheckStateParity(unittest.TestCase):
@@ -459,7 +460,7 @@ class ConfigIsTheOldConstants(unittest.TestCase):
         self.assertEqual(CUA_CFG.label_prefix, "risk:")
         self.assertEqual(set(CUA_CFG.non_required_checks), set(tick.NON_REQUIRED_CHECKS))
         self.assertEqual(set(CUA_CFG.preapproved), {n for r, n in tick.PREAPPROVED if r == "trycua/cua"})
-        self.assertTrue(CUA_CFG.requires_clef)
+        self.assertTrue(CUA_CFG.clef_script)
         self.assertEqual(CUA_CFG.clef_script, tick.CLEF)
         self.assertEqual(CUA_CFG.sensitive.pattern, tick.SENSITIVE.pattern)
         self.assertEqual(CUA_CFG.sensitive.flags, tick.SENSITIVE.flags)
@@ -470,7 +471,7 @@ class ConfigIsTheOldConstants(unittest.TestCase):
         tick = tick_module()
         cfg = engine.Config({"repo": "injaneity/pi-onigiri", "me": tick.ME, "merge_method": "squash",
                              "label_prefix": "risk:"})
-        self.assertFalse(cfg.requires_clef)
+        self.assertFalse(cfg.clef_script)
         h = "a" * 40
         prs = [{"number": 1, "headRefOid": h, "isDraft": False, "mergeable": "MERGEABLE", "labels": [],
                 "body": f"verify: PASS at {h}\nrisk: standard", "statusCheckRollup": [chk("build")]},
@@ -692,19 +693,6 @@ class Cli(unittest.TestCase):
         state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
         self.assertNotIn("7", state.get("clef") or {})
 
-    def test_a_second_run_refuses_while_the_lock_is_held(self):
-        cfg = self.config()
-        path = os.path.join(self.dir, "zstack.state.json.lock")
-        holder = open(path, "w")
-        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            with self.assertRaises(SystemExit) as e:
-                self.run_gate([self.pr()], [cfg])
-        finally:
-            fcntl.flock(holder, fcntl.LOCK_UN)
-            holder.close()
-        self.assertIn("another run holds", str(e.exception.code))
-
     def test_a_carried_pass_lets_an_old_head_move(self):
         h, old = "a" * 40, "b" * 40
         pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
@@ -729,12 +717,83 @@ class Cli(unittest.TestCase):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                self.gate.main(["--config", self.config(holds=self.holds(), clone=["/tmp/fake-clone"])])
+                self.gate.main(["--config", self.config(holds=self.holds(), checkouts=["/tmp/fake-clone"])])
             out = buf.getvalue()
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
         self.assertIn("refs/pull/7/head", " ".join(" ".join(c) for c in calls if c[:2] == ["git", "-C"]))
         self.assertNotIn("no verify PASS", out, out)
+
+    def test_a_failed_carry_fetch_is_retried_not_recorded_as_a_no(self):
+        """The tick logged the error and recorded nothing, so the next tick asked again. Recording ok: False
+        strands the PR on "no verify PASS at head" until someone pushes, which is a merge the tick would make."""
+        h, old = "a" * 40, "b" * 40
+        pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
+
+        def fake_sh(args, **kw):
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
+            if args[0] == "git" and "fetch" in args:
+                return 1, "", "fatal: unable to access 'https://github.com/': Could not resolve host"
+            if args[0] == "git":
+                return 0, f"{h} {old} {'d' * 40}\n", ""
+            return 0, "", ""
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = fake_sh
+        engine.gh_json = lambda args, **kw: {"mergeable": "MERGEABLE", "statusCheckRollup": []}
+        self.gate.open_prs = lambda cfg: [pr]
+        self.gate.local_pass = lambda roots: set()
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.gate.main(["--config", self.config(holds=self.holds(), checkouts=["/tmp/fake-clone"])])
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
+        self.assertNotIn("7", state.get("carried") or {}, "a failed fetch must not answer the carry question")
+        self.assertIn("will retry next run", err.getvalue())
+
+    def test_a_gh_error_midway_still_saves_what_was_already_spent(self):
+        """A red PR is rerun on this pass and a later gh call raises. Without the save, the next pass reruns the
+        same PR again, and any Clef scores paid for in this pass are bought twice."""
+        red = self.pr(number=10, labels=["risk:light"], body="verify: PASS at " + "a" * 40, statusCheckRollup=[],
+                      mergeable="MERGEABLE")
+        other = self.pr(number=11, labels=["risk:light"])
+        calls = []
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
+            if args[0] == "git":
+                return 0, "c" * 40 + "\n", ""
+            return 0, "", ""
+
+        def fake_gh(args, **kw):
+            if args[:2] == ["pr", "view"] and args[2] == "10":
+                return {"mergeable": "MERGEABLE",
+                        "statusCheckRollup": [{"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+                                               "conclusion": "FAILURE",
+                                               "detailsUrl": "https://github.com/o/r/actions/runs/999"}]}
+            if args[:2] == ["pr", "view"] and args[2] == "11" and any("statusCheckRollup" in a for a in args):
+                raise RuntimeError("gh pr view: HTTP 502")
+            return {"mergeable": "MERGEABLE", "statusCheckRollup": []}
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = fake_sh
+        engine.gh_json = fake_gh
+        self.gate.open_prs = lambda cfg: [red, other]
+        self.gate.local_pass = lambda roots: {("a" * 40)}
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(RuntimeError):
+                    self.gate.main(["--config", self.config(holds=self.holds()), "--apply"])
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
+        self.assertEqual((state.get("rerun") or {}).get("10"), "a" * 40,
+                         "the rerun already spent this pass was not saved")
 
 
 def rollup(status="SUCCESS", run="111"):

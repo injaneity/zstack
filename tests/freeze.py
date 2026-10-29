@@ -55,7 +55,7 @@ def main():
     for key, pr in sorted(prs.items()):
         cfg = ZSTACK_CFG if pr["repo"] == "injaneity/zstack" else CUA_CFG
         helds = (None, "hold list", "no-move")
-        clefs = (None, "light", "standard", "deep", "human") if cfg.requires_clef else (None, "deep")
+        clefs = (None, "light", "standard", "deep", "human") if cfg.clef_script else (None, "deep")
         reruns = (None, pr["headRefOid"])
         locs = locals_(pr["headRefOid"])
         cases = {}

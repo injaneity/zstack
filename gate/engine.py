@@ -13,8 +13,6 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 
 TIERS = ["light", "standard", "deep", "human"]
@@ -27,8 +25,7 @@ class Config:
 
     KNOWN = frozenset({
         "repo", "me", "merge_method", "label_prefix", "non_required_checks", "preapproved", "clef_script",
-        "clef_cwd", "clef_required", "clef_max_per_run", "sensitive", "outside_sensitive", "holds",
-        "pause_file", "list_limit", "runs", "clone",
+        "clef_cwd", "sensitive", "outside_sensitive", "holds", "pause_file", "checkouts",
     })
 
     def __init__(self, d):
@@ -43,7 +40,6 @@ class Config:
         self.non_required_checks = frozenset(n.lower() for n in d.get("non_required_checks") or ())
         self.preapproved = frozenset(d.get("preapproved") or ())
         self.clef_script = d.get("clef_script") or None
-        self.clef_required = bool(d["clef_required"]) if "clef_required" in d else bool(self.clef_script)
         self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read while scoring; None means the caller's cwd
         self.sensitive = re.compile(d["sensitive"], re.I) if d.get("sensitive") else NEVER
         self.outside_sensitive = re.compile(d["outside_sensitive"]) if d.get("outside_sensitive") else NEVER
@@ -51,27 +47,9 @@ class Config:
         # run without a holds file, because "no holds given" and "nothing is held" must not look the same.
         self.holds = d.get("holds") or None
         self.pause_file = d.get("pause_file") or None
-        # A checkout holding .git/onigiri/v2 run verdicts, and a clone of this repo for the PASS carry. Paths, not
-        # flags: the same repo run by the same cron on the same machine always means the same directories.
-        self.runs = tuple(d.get("runs") or ())
-        self.clone = tuple(d.get("clone") or ())
-        self.list_limit = int(d.get("list_limit") or 100)
-        self.clef_max_per_run = int(d.get("clef_max_per_run") or 4)
-
-    @property
-    def requires_clef(self):
-        """Does a PR wait for a Clef score at its head before this repo's gate may move it?
-
-        Separate from having a script to run: `clef_script` says the gate *may* score, this says it *must*
-        wait for one. They are the same today, but tying them together meant a repo with a script it never
-        wants to gate on could not be expressed.
-        """
-        return self.clef_required
-
-    @property
-    def can_score(self):
-        """May this gate run Clef itself? False means a score has to be handed in."""
-        return bool(self.clef_script)
+        # This repo's checkouts: `runs` reads .git/onigiri/v2 verdicts from them, `clone` fetches into them to
+        # carry a PASS. Always the same directories, and in practice the same one, so it is one list.
+        self.checkouts = tuple(d.get("checkouts") or ())
 
     def __repr__(self):
         return f"Config({self.repo})"
@@ -97,7 +75,7 @@ def parse_holds(text):
     -> {"hold": {n}, "no_move": {n}, "users": {login}, "paths": [path], "exceptions": [...]}
     Raises HoldsUnreadable on a malformed row, exactly as the tick did.
     """
-    h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": [], "entries": []}
+    h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": []}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -119,7 +97,6 @@ def parse_holds(text):
             h["users"].add(target)
         else:
             h["paths"].append(target)
-        h["entries"].append({"kind": kind, "target": target, "rules": f[2] == "yes", "note": " | ".join(f[3:])})
     return h
 
 
@@ -156,11 +133,6 @@ def declared_risk(labels, body, cfg):
     lab = next((l[len(cfg.label_prefix):] for l in labels if l.startswith(cfg.label_prefix)), None)
     found = re.findall(rf"^{re.escape(cfg.label_prefix)} *(\w+)", body or "", re.M)
     return norm_tier(lab or (found[-1] if found else None))
-
-
-def stricter(*tiers):
-    known = [t for t in tiers if t in TIERS]
-    return max(known, key=TIERS.index) if known else None
 
 
 def clef_tier(raw, files, title, outside, cfg):
@@ -259,7 +231,7 @@ def merge_decision(pr, *, cfg, local_pass, clef, held, rerun_head):
         return "skip", "no verify PASS at head"
     pre = n in cfg.preapproved
     declared = declared_risk(pr.get("labels", []), pr.get("body"), cfg)
-    if cfg.requires_clef and clef is None and not pre:
+    if cfg.clef_script and clef is None and not pre:
         return "wait", "awaiting clef score at head"
     # Clef only escalates: human wakes the owner, deep buffers for them whatever the declared risk (a Clef
     # deep or human PR never merges without them unless preapproved).
