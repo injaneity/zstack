@@ -1,3 +1,0 @@
-# Holds for injaneity/zstack. The gate refuses to act without a readable file here, because a
-# dropped hold is a merge. Format is the tick's: kind | target | rules(yes/no) | note
-# kinds: hold, no-move, hands-off-user, skip-author, hands-off-path, exception

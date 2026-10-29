@@ -5,47 +5,26 @@ description: "Design an auditable playbook when no narrower one fits: a large mi
 
 # Figure it out
 
-When the task matches no playbook, design one. The deliverable before any code is the workflow itself: a sequence of phases that scales rigor to the task, runs the scientific method, and leaves a decision trail a human can audit after stepping away.
+When no playbook fits, design one first. The deliverable before any code is the workflow: phases sized to the risk, run as experiments, with a trail a human can audit later.
 
-## Start
+## A. Frame
 
-Open a todolist whose first item is to read the Principles section of the **onigiri-mode** skill. Then add the phases below as todos.
+Before the run, state the definition of done as a predicate that can fail, the scope in rough units and effort, and the rigor level. Bias rigor high for one-way doors and wide blast radius. Rigor means gates and artifacts, not trying harder. Show the framing before a multi-hour run.
 
-## Phase A: Frame
+## B. Design
 
-Ground first, then commit. Don't start the run until you can state:
+Split the work into small units that land on their own, riskiest unknown first. Build the verification harness and capture the baseline before changing anything. Run **architect** for one-way-door design decisions only. Write the phase list down, since that is what the human reviews.
 
-- The definition of done as a falsifiable predicate.
-- Scope, quantified: rough units and effort, plus the blockers grounding surfaced.
-- The rigor level, biased high. One-way doors and high blast radius get more. Reversible low-stakes steps get less. Rigor is gates and artifacts, not "try harder".
+## C. Run the loop
 
-Present the framing and tradeoffs before committing to a long run. Reversible work proceeds, but a multi-hour run earns one checkpoint.
+Each unit is an experiment: state the hypothesis, make the smallest change, check it against the predicate on the real artifact, and keep or revert. Every unit ends in a check that can fail. When something passes too easily, suspect the check. A verdict is VERIFIED, NOT VERIFIED, or INCONCLUSIVE, and inconclusive is not a pass.
 
-## Phase B: Design the workflow
+## D. Keep the trail
 
-Decompose into atomic, independently-landable units. Sequence riskiest-unknown-first. Scaffold and verification come before features.
+Log a row per decision with **show-me-your-work** as each unit lands. Work this size usually commits the trail, so the reviewer can read it in the PR.
 
-- Build the verification harness before the work, with the baseline captured from the pre-change state, so the check reads as "old value vs new value".
-- For one-way-door design decisions, run the **architect** skill, which sketches competing candidates in this session. Skip it for mechanical work whose shape is already concrete. A second round of candidate sketches over a settled design is over-engineering.
-- Decide the order. Work runs in one thread, one unit at a time, each unit ending in a check before the next starts. Where two steps would write the same branch or file, keep them sequential.
-- Write the designed phase list down. That list is what the human reviews.
+## E. Hand back
 
-Then execute the design. Add its steps to the todolist as concrete items between the Phase C and Phase D entries. Run each under the Phase C loop discipline, and weave the Phase D log through them, a row as each step lands, rather than saving the whole trail for the end.
+Check the whole against the predicate on the real product. Turn any recurring correction into a lint, check, or script.
 
-## Phase C: Run the loop
-
-Each unit is an experiment. State the hypothesis, make the smallest change, measure against the predicate on the real artifact, keep it if it advanced, revert it if it didn't. Verify each unit before starting the next instead of batching checks at the end.
-
-- Verify by inspecting the artifact, never a self-report. When something passes too easily, suspect the observation method before the system.
-- Every unit ends in a check that can fail: a test, a command, a repro. If a check can be gamed, harden the check itself rather than adding a second opinion. If the check is wrong, fix it in its own change rather than routing around it.
-- A verdict is VERIFIED, NOT VERIFIED, or INCONCLUSIVE. Inconclusive is not a pass. Don't hide a negative.
-
-## Phase D: Keep the audit trail
-
-Log the run via the **show-me-your-work** skill. figure-it-out's work is usually ambitious enough to commit the trail so the reviewer can read it in the PR. The trail plus the diff is what lets the human come back and trust the work.
-
-## Phase E: Verify and hand back
-
-Check the whole against the Phase A predicate on the real product, not just the harness. Encode any recurring correction as a gate, a lint rule, a check, or a script.
-
-**Reply:** the playbook you designed, the rigor level and why, the decision-trail path, what's verified against the predicate, and what's still open.
+**Reply:** the workflow you designed, the rigor level and why, the trail path, what is verified, and what is open.

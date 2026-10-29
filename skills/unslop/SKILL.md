@@ -1,61 +1,41 @@
 ---
 name: unslop
-description: Cut AI tells from any writing.
+description: Cut AI tells from any writing, including PR descriptions, commit messages, docs, and replies.
 ---
 
 # Unslop
 
-Edit text to remove AI patterns. Scan for the patterns below, then rewrite. Preserve meaning and match the intended tone.
+Scan for these patterns and rewrite. Keep the meaning and the intended tone.
 
-## Patterns to detect and fix
+**Words**
+- AI vocabulary: additionally, crucial, delve, enhance, foster, garner, intricate, landscape, pivotal, showcase, tapestry, testament, underscore, vibrant. Use plain words.
+- Fancy verbs: "serves as", "stands as", "boasts" become "is" or "has". "Utilize" and "leverage" become "use", "facilitate" becomes "help".
+- Metaphor nouns: substrate, wedge, vector, nexus, primitive, harness, surface, bedrock, scaffolding, paradigm, north star, flywheel, endgame. Use the concrete word.
+- Filler: "in order to" becomes "to", "due to the fact that" becomes "because". Cut "it is important to note that".
+- Adverbs propping up a weak verb. "Significantly improves" becomes the measured delta.
+- Vague attributions such as "experts believe". Name the source or cut it.
 
-Rule numbers are stable ids that other skills cite. A removed rule leaves a gap.
+**Structure**
+- "Not just X, but Y." Say the point directly.
+- Forced groups of three. Use the natural number.
+- Synonym cycling. Pick one name for a thing and repeat it.
+- Trailing -ing phrases: "...ensuring reliability". Cut them or make them a sentence.
+- Dense sentences the reader has to reread. Split them, one idea each.
+- Passive voice that hides the actor. "The file is parsed by the loader" becomes "the loader parses the file".
+- Over-compression: arrows, dropped articles, and verbless fragments. Write whole sentences.
+- Mannered prose: aphorisms, personified code, figurative verbs. Say it literally.
 
-### Content
+**Saying something**
+- Name the mechanism or the number, not the feeling. "Types that follow your schema" becomes "a column rename fails the build".
+- If a sentence could appear unchanged in another project's docs, it says nothing. Cut it.
+- No generic conclusions such as "the future looks bright".
 
-3. **Superficial -ing phrases.** "highlighting...", "ensuring...", "reflecting...", "showcasing...", "fostering...". Delete or expand with real sources.
-5. **Vague attributions.** "Experts believe", "Industry reports suggest", "Some critics argue". Name the source or delete.
+**Formatting**
+- No em dashes or en dashes. Use a period or a comma.
+- Colons only before a list or an example, never as a mid-sentence connector.
+- Sentence-case headings. Straight quotes. No decorative emoji.
+- Bold sparingly. A bold label that restates its line ("**Performance:** Performance improved") becomes prose.
 
-### Language
-
-7. **AI vocabulary.** Additionally, crucial, delve, enduring, enhance, fostering, garner, interplay, intricate, landscape (abstract), pivotal, showcase, tapestry (abstract), testament, underscore, vibrant. Replace with plain words.
-8. **Fancy ways to say "is".** "serves as", "stands as", "boasts", "features". Say "is" or "has".
-9. **"Not just X, but Y."** State the point directly instead.
-10. **Rule of three.** Don't force ideas into groups of three. Use the natural number.
-11. **Synonym cycling.** Protagonist, main character, central figure, hero all in one paragraph. Pick one, repeat it.
-12. **False ranges.** "from X to Y" where X and Y aren't on a meaningful scale. List topics directly.
-
-### Style
-
-13. **Em dash overuse.** Avoid em dashes entirely. Use periods or commas only (no parentheses, no en dashes, no hyphen-as-dash substitutes). If a thought needs separation, end the sentence or use a comma.
-14. **Colon overuse.** Colons are fine before a list or example, not as mid-sentence connectors. "If you're coming from traditional automation: instead of registering event handlers, you describe conditions" adds nothing with the colon. Rewrite to let the point stand on its own without comparison framing. "Describing when the scheduler should fire works best as plain English." Same meaning, no crutch punctuation.
-15. **Boldface overuse.** Don't bold every proper noun or acronym.
-16. **Inline-header lists.** The tell is a bold label and colon that restates the line: "**Performance:** Performance improved...". Convert those to prose. A bold lead-in that ends in a period, names the item, and is followed by genuinely new detail ("**Schema in TypeScript.** Tables live in one file.") is fine, not a tell.
-17. **Title case headings.** Use sentence case.
-18. **Decorative emojis.** Remove from headings and bullets.
-19. **Curly quotes.** Use straight quotes.
-
-### Communication artifacts
-
-20. **Chatbot phrases.** "I hope this helps!", "Let me know if...", "Of course!", "Certainly!", "Found the smoking gun!" Remove.
-22. **Sycophantic tone.** "Great question! You're absolutely right!" Respond directly.
-
-### Filler
-
-23. **Filler phrases.** "In order to" becomes "To". "Due to the fact that" becomes "Because". Delete "It is important to note that".
-24. **Excessive hedging.** "could potentially possibly be argued that it might" becomes "may".
-25. **Generic conclusions.** "The future looks bright." State specific plans or facts.
-
-### Jargon
-
-26. **Abstract metaphor nouns.** Substrate (base), wedge, wedge in (add), vector (way, method), locus, vantage, nexus, primitive as a noun, harness as a metaphor, surface as in "API surface", bedrock, scaffolding as a metaphor, modality, paradigm, gold-plating (more than the job needs), ratchet as a metaphor (the mechanism's real name, or a limit that only tightens), evacuate for moving code (move out), endgame (the last phase), north star, flywheel. These read as technical but usually have a plainer concrete word. Pick the concrete word.
-
-### Plain speech
-
-27. **Say what it does, not how it feels.** "the database stays close at hand", "SQL you can read", "types that follow your schema" name a feeling. The fix names the mechanism or a number: "`.toSQL()` returns the exact string sent to the database", "a column rename fails the build". Ask what the sentence tells the reader to do or know, then write that. If you can't restate it as a concrete instruction, fact, or number, cut it. One more check: if the sentence could appear unchanged in another project's docs, it says nothing about this one. Cut it.
-28. **Shorten or split dense sentences.** If the reader has to backtrack to parse a sentence, break it in two or drop clauses. One idea per sentence.
-29. **Active voice.** Prefer it. Catch "is/are/was/were + past participle" and name the actor: "queries are validated" becomes "the compiler validates queries", "the file is parsed by the loader" becomes "the loader parses the file". Passive is fine only when the actor is unknown or genuinely doesn't matter.
-30. **Cut adverbs, or use a stronger verb.** "runs quickly" becomes "is fast" or the number, and "significantly improves" becomes the measured delta. An adverb propping up a weak verb means the verb is wrong.
-31. **Prefer the plain word.** "utilize" and "leverage" become "use", "facilitate" becomes "help", "numerous" becomes "many", "in the event that" becomes "if". The fancier synonym is rarely clearer.
-32. **Mannered prose.** Metaphor or flourish where a literal phrase exists: aphorisms ("wire it or delete it"), rhetorical fragments for effect, personified code ("the plan holds it"), figurative verbs ("rides along", "stands on"), stock framing phrases. "A dial worth turning" becomes "a parameter worth varying". Say what you mean. Rule 26 covers the metaphor nouns.
-33. **Over-compression.** Dropped articles, verbless fragments, symbol-speak, and abbreviations that make the reader decode instead of read. "Parser rejects bad date → exit 2, no write" becomes "The parser rejects a bad date, exits with code 2, and writes nothing." Write whole sentences with their articles and verbs, and spell out arrows and abbreviations.
+**Chat tells**
+- "I hope this helps", "Certainly!", "Great question!", "You're absolutely right". Cut them and answer directly.
+- Stacked hedges: "could potentially possibly" becomes "may".

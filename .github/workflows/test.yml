@@ -11,23 +11,25 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: tests
-        run: python3 -m unittest discover -s tests -v
-      - name: clef-risk.sh parses
-        run: bash -n gate/clef-risk.sh
-      - name: skills have frontmatter
+      - name: scripts parse
+        run: |
+          for f in bin/*.sh; do bash -n "$f"; done
+      - name: skills and agent types have frontmatter
         run: |
           fail=0
-          for f in skills/*/SKILL.md; do
+          for f in skills/*/SKILL.md agents/*.md; do
             head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; fail=1; }
+          done
+          exit $fail
+      - name: agent types name no model
+        run: |
+          if grep -n '^models\?:' agents/*.md; then echo "set models in pi's config, not here"; exit 1; fi
+      - name: every zstack type a skill names exists
+        run: |
+          fail=0
+          for t in $(grep -rhoE 'zstack-(explorer|designer|reviewer|verifier|[a-z]+)' skills | sort -u); do
+            [ -f "agents/$t.md" ] || { echo "skills name $t but agents/$t.md is missing"; fail=1; }
           done
           exit $fail

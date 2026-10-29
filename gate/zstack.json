@@ -1,7 +1,0 @@
-{
-  "repo": "injaneity/zstack",
-  "me": "injaneity",
-  "merge_method": "squash",
-  "label_prefix": "risk:",
-  "holds": "zstack-holds.txt"
-}

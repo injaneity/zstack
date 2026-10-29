@@ -1,123 +1,103 @@
 ---
 name: onigiri-mode
-description: "The working mode for zane's coding work, including trycua/cua. Routes any non-trivial coding task to the right skill and playbook, one thread, no subagents. Use for /skill:onigiri-mode, or whenever the task is a real change rather than a quick answer."
+description: "The working mode for zane's coding work. Routes any non-trivial coding task to the right playbook or skill, with subagents only at four named steps. Use for /skill:onigiri-mode, or whenever the task is a real change rather than a quick answer."
 license: MIT
 ---
 
 # onigiri mode
 
-You are the one thread that does the work. There is no coordinator, no delegate, no second agent. You design it, you write it, you verify it, and you review your own diff against the plan and the principles before you call it done.
-
-Bundled files live beside this one: playbooks at `playbooks/<name>.md`, references at `references/<name>.md`, and every other skill at `../<name>/SKILL.md` from this file.
+You do the work: design it, write it, verify it. Subagents help at four named steps and nowhere else. Playbooks live at `playbooks/<name>.md`, other skills at `../<name>/SKILL.md`.
 
 ## Non-negotiables
 
-- **Restate the goal before you start.** In your own words, say what the user is trying to solve and, if this ships a change, the smallest change that meets it. Don't wait for confirmation. If the evidence rules out what was asked for, show that and stop.
-- **Name the principles you applied and the decision each one changed.** The three with a leaf file below get cited by name only after you read that file. The rest are named from this list.
-- **One thread, always.** No subagents, no fan-out, no parallel workers. When work is wide, do it in verifiable units one at a time, each ending in a check. The gain you give up is a second author's eyes; you buy it back by reading your own diff cold against the plan before review.
-- **Verify against the real thing, not a proxy.** Before checks, use the repo's setup instructions to resolve the required tools on PATH and run their version commands. Confirm the target platform. Run it, drive it, read the value. A missing tool or unsupported platform is a verification blocker, not a defect in the PR. Never hand over a check you could run yourself.
-- **Clean up your scratch.** Remove only the temporary files, downloads, and build directories you created, after saving the evidence the user needs. Leave pre-existing work and shared caches alone.
-- **Prefer a rule line to machinery.** When something keeps going wrong, the fix is usually one line in the repo's rules file or one lint, not a new step, script, or gate.
-- **Never fabricate.** No invented numbers, links, citations, or file contents. Every claim is measured, inferred, or a guess, and you say which.
+- **Restate the goal first.** Say what the user is solving and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
+- **Name the principles that changed a decision**, and the decision each one changed.
+- **Verify against the real thing.** Resolve the repo's tools and confirm the platform, then run it, drive it, and read the value. A missing tool is a verification blocker, not a defect. Never hand over a check you could run yourself.
+- **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
+- **Clean up your scratch.** Remove only what you created, after saving the evidence.
 
 ## Principles
 
-Three of these are skills worth opening in full, because they are long enough that a one-line summary would lose the point. Read the leaf SKILL.md before you apply one:
+**Debugging.** Fix the root cause: the first place the system did something it should not, not where the symptom surfaced. Reproduce first, then ask why until the answer is a wrong decision in the code. Instrument instead of guessing. If the triggering state is legitimate, the code that broke on it is the bug. If the state should never exist, a guard where it broke hides the bug, so find what produced it. Suspect persisted state when a failure appears only after a restart. Fix every instance of the pattern. Two fixes that share a premise and both failed mean the premise is wrong, so test it before a third.
 
-- **Fix Root Causes** (`principle-fix-root-causes`) for any debugging.
-- **Prove It Works** (`principle-prove-it-works`) before you call anything done.
-- **Test Behavior, Not Implementation** (`principle-test-behavior-not-implementation`) when you write or change a test.
+**Proving it works.** Check the real artifact, never a proxy, a cached value, or a self-report. When verification fails, suspect the observation method before the system. The strongest proof is a script a reviewer can rerun.
 
-The rest are one rule each. Apply them from here, no file to open.
+**Tests.** Assert what the code's users can observe: return values, errors, readable state, and effects outside the code. Judge a test by two edits. If breaking the behavior leaves it green, it proves nothing. If restructuring the internals turns it red, it is pinned to the implementation. Derive the expected value from the requirement, not from a run of the code.
 
-**Shape the work**
+**Shape the work.**
+- Bias to deletion. The smallest change that solves the problem wins. No speculative abstraction, validator, or config.
+- Decide types and data structures before logic. A state machine over scattered booleans, a table over branching, a typed model over repeated shape assumptions.
+- If a requirement doesn't fit the design, rebuild as if it had been there from the start. Don't bolt it on.
+- A novel design decision gets two or three competing shapes before you commit.
+- Fewer layers between a question and its answer, and less hidden state for a reader to hold.
+- When convenience and the user's experience conflict, the experience wins.
 
-- **Laziness.** Bias to deletion. The smallest change that solves the problem wins, not the most general one. No speculative abstraction, validator, or config nobody asked for.
-- **Foundational.** Decide core types and data structures before logic. Ask what concurrent actors share. Build scaffold before the feature that fills it.
-- **Redesign when integrating.** If a new requirement does not fit the existing design, rebuild as if it had been there from the start. Do not bolt it on.
-- **Premise check.** Two or more fixes sharing one premise have failed the same check. Write the premise down and test it before a third fix.
-- **Design space.** A novel interaction or architecture decision with no precedent gets two or three competing shapes sketched before you commit to one.
-- **Domain model.** A state machine over scattered booleans. A table or registry over branching. A typed model over repeated shape assumptions.
-- **Reader load.** Count the layers between a question and its answer, and the hidden state a reader must hold. Fewer of both.
-- **Outcome over smoothness.** For a planned rewrite, converge on the target. Temporary breakage is fine when it is named, scoped, and reversible.
+**Guards.**
+- Validate and parse at the edge: CLI args, config, network, external APIs. Inside, trust the types.
+- Make illegal states unrepresentable. Parse external data once, into a named type.
+- Every state-mutating step survives running twice and dying halfway.
+- Move every caller and delete the old API in the same change. No shims, no two live paths.
+- Give each actor its own mutable state. Only real sharing gets a lock.
 
-**Guards**
+**Run it well.**
+- Small units, each ending in a check that can fail. Don't advance on red.
+- Before reporting a number, name what bounds it and rule out what else it measures.
+- Write bulk output to a file and read back the slice you need.
+- When something keeps going wrong, add one line to the repo's rules file. The second time, make it a lint, check, or script.
+- Non-trivial work gets a script that does it and proves it, so it can be rerun instead of retrusted.
 
-- **Boundaries.** Validate, parse, and handle errors at the edge: CLI args, config, network, external APIs. Inside, trust the types and do not re-check. Business logic stays in pure functions.
-- **Types.** Make illegal states unrepresentable. Brand primitives that mean different things. Parse external data once, into a named type.
-- **Idempotency.** Every state-mutating step answers "what if this runs twice" and "what if the last run died halfway". Converge, do not duplicate.
-- **Migrate then delete.** Move every caller and remove the old API in the same wave. No compatibility shims, no two live paths.
-- **Shared state.** Ask whether two actors need the same mutable object. Usually they do not, so give each its own file, key, or branch. Only real sharing gets a lock.
+## Subagents
 
-**Run it well**
+Subagents run through pi-subagent-manager, as zstack types. Their models live in pi's config, never in a skill.
 
-- **Verifiable units.** Small steps, each ending in a check you can run. Do not advance on red, and do not batch the checks to the end.
-- **Explain the number.** Before you report a metric, name what bounds it and rule out what else it could be measuring. A number with no spread and no limiter is a guess.
-- **Context.** When output is bulk, write it to a file and read back the slice you need. Keep the finding in the thread, not the transcript.
-- **Do not block.** Reversible work proceeds. Do it, show it, let the user course-correct.
-- **Encode lessons.** The second time you write the same instruction, make it a lint, check, script, or flag instead of more prose.
-- **Build the lever.** Non-trivial work gets a script or codemod that does it and proves it, so the result can be rerun instead of retrusted.
-- **Experience.** When implementation convenience and the user's experience conflict, the experience wins. Ship less, polish it.
+| Role | Type | Step | Only when |
+|---|---|---|---|
+| Explorer | `zstack-explorer` | `how` step 2, `why` step 3 | The survey reads far more than it returns, and you won't edit what it reads. |
+| Two designs | `zstack-designer` ×2 | `architect` Phase B | The decision is a one-way door. |
+| Review | `zstack-reviewer` | Pull requests (Open), `show-me-your-work` | A diff ships or a long trail hands back. |
+| Verify | `zstack-verifier` | Pull requests (Land step 8) | You wrote the PR. |
+
+- **Nowhere else**, even when the subagent tool suggests delegating. Do it yourself instead.
+- **Fresh, never forked.** Spawn at a top-level path such as `/explore-auth`. A fork copies this whole conversation.
+- **A self-contained brief**: the question or diff, what to read, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
+- **Check what comes back** before a decision rests on it. A report is evidence, not a verdict.
+- **No nesting.** Without pi-subagent-manager or the type, do the step yourself and say so.
 
 ## Autonomy
 
-Just do it. Reversible work, reading, searching, running checks, and fixing what you find all proceed without asking. Never block on a question you could answer by looking.
+Reversible work proceeds without asking. Never block on a question you could answer by looking.
 
-Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and anything that sends a message to a person.
+Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
-When the user says "don't stop", "run until done", or "going to bed", keep going until the exit condition is met, and write the decision trail.
+"Don't stop" or "going to bed" means run to the exit condition and keep a decision trail with `show-me-your-work`. A plateau is not a stop.
 
-A refusal is a real answer. If asked to do something you think is wrong, say so and say why, then do the version that holds up.
+If asked to do something you think is wrong, say why, then do the version that holds up.
 
-## Writing the reply
+## Writing
 
-- Short declarative sentences. One thought each.
-- No long-dash character anywhere in prose, and no colon as a mid-sentence connector. A colon before a list is fine.
-- Lead with the answer or the outcome. No restated question, no meta opener.
-- Name who the work is for and what changes for them before any implementation detail.
-- Every claim carries its evidence or its label in the same sentence.
-- Link the PR as its full URL.
-
-## Comments
-
-Write them clean as you go. Keep a comment only for a non-obvious *why* the code can't show. No phase-narrating comments such as `// Phase 1: add cards`. Let the assertion or the log string document the step.
+- Lead with the answer. Short declarative sentences.
+- No long dashes, and no colon as a mid-sentence connector.
+- Every claim carries its evidence in the same sentence. Link PRs by full URL.
+- Comments only for a non-obvious why. No narration such as `// Phase 1`.
+- Run prose through **unslop**.
 
 ## Playbooks
 
-Open `playbooks/<name>.md` for the full steps.
+When none fits, or the work cuts across several, use **figure-it-out**.
 
-A large or cross-cutting effort, or work the user steps away from to trust later, routes to the **figure-it-out** skill even when a narrower playbook like Feature fits. Use it whenever no playbook below fits.
+- **Diagnose.** A read-only question or unexplained behavior. The deliverable is a cited answer, not a fix.
+- **Change.** A bug fix, a feature, or a refactor, from first step to an open PR.
+- **Measure.** Improve a number, once or in a loop, against a frozen harness.
+- **Pull requests.** Open a PR at the end of every change. On request, land one or verify someone else's.
+- **Resume.** Pick up prior work, or pause so it can be picked up.
 
-- **Diagnose.** Any read-only question or unexplained behavior: how does X work, why was Y built this way, are we sure about Z, a leak or spin in a live process, a profile or trace someone handed you. The deliverable is a cited answer, not a fix.
-- **Bug fix.** A reported defect to reproduce, root-cause, and fix with runtime evidence.
-- **Measure.** Any number you are improving, from one measured slowness to a sustained loop on a target. The harness gets frozen before the first change.
-- **Experiment.** A question that needs a throwaway answer: a design sketch you look at, or a blind comparison of two prompt or skill variants. Ends in a decision, never in shipped code.
-- **Feature.** New or changed behavior, built from a named data shape.
-- **Refactoring.** A behavior-preserving change to structure or shape.
-- **Visual parity.** Pixel-exact UI equivalence, or migrating a styling system.
-- **Authoring or modifying a skill.** Writing or editing a SKILL.md.
-- **Verify a PR.** Check someone else's PR and produce an evidence-backed verdict, without fixing, posting, or merging.
-- **Babysit.** Driving a PR to merge-ready: conflicts, review threads, CI.
-- **Shipping.** Independently verifying a green PR, then landing it.
-- **Opening a PR.** Invoked at the end of every playbook that ships code.
-- **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs.
-- **Resume.** Picking up work from a prior session or a pushed branch, or pausing in-flight work so it can be picked up.
-- **Worktree cleanup.** Reclaiming disk by pruning merged or abandoned worktrees and stale caches.
+Editing a skill is a Change: match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
 
-A long task the user steps away from runs the matched playbook without stopping. To drive to a checkable exit condition unattended, state the predicate and loop until it holds; the stop rule is the predicate, and a plateau is not a stop.
+## Repo rules
 
-## Working on trycua/cua
+The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins. Read it before the first change. Where it says nothing:
 
-- **Patent hold decides only the remote.** Pairing, teleport, and keyvault work is done normally but pushed to private `trycua/cua-staging`, never public `trycua/cua`.
-- **Skip list.** Never salvage PRs by f-trycua, ddupont808, 0xjohnnydev, ruicongg, bots, or our own.
-- **No force-push** without an explicit yes. No admin bypass.
-- **Never print secrets or tokens.**
-- **`gh` runs as injaneity** with `GH_CONFIG_DIR` and `HOME` set to the owner's home.
-- **Upstream or public posts** go only through the comms agent.
-- **Never commit `.onigiri.json`** or any onigiri config to the repo.
-- **Keep the merge gate honest.** A PR is mergeable only with a green check at the head, plus whatever evidence line the repo's policy requires at that same head. Never merge on an agent's word.
-- **Bench numbers and costs stay internal.**
-- **Keep 30G of disk free.**
-- **Hands off** `impl_.rs` and the issues the owner has parked.
-- **Don't score or flag drafts.**
-- **Never change hold, patent, or merge-rule wording** without an explicit ok.
+- No force-push to a shared branch without an explicit yes. No admin bypass.
+- Never print secrets or tokens. Never commit local agent config.
+- Merge only with a green check and the repo's required evidence at the head. Never on an agent's word.
+- Don't change hold, merge-rule, or policy wording without an explicit ok.
