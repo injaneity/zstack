@@ -1,0 +1,33 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: tests
+        run: python3 -m unittest discover -s tests -v
+      - name: clef-risk.sh parses
+        run: bash -n gate/clef-risk.sh
+      - name: skills have frontmatter
+        run: |
+          fail=0
+          for f in skills/*/SKILL.md; do
+            head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; fail=1; }
+          done
+          exit $fail
