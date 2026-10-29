@@ -4,14 +4,21 @@ One decision per open PR: `merge`, `ready`, `rerun`, `buffer`, `urgent`, `wait`,
 came out of the onigiri tick unchanged; what used to be module constants for `trycua/cua` is now a JSON file per repo.
 
 ```
-bin/gate.py --config gate/zstack.json            decisions, changes nothing
-bin/gate.py --config gate/zstack.json --apply    undraft, rerun a red head once, merge
+bin/gate.py --config gate/zstack.json                  decisions, changes nothing
+bin/gate.py --config gate/zstack.json --apply          undraft, rerun a red head once, merge
+bin/gate.py --config gate/zstack.json --clone ../zstack --runs ../zstack
 ```
+
+`--clone` lets a verify PASS survive a merge of main into the branch, the way the tick did: it fetches
+`refs/pull/N/head` and main into its own refs, then asks `engine.carry_pass` whether the head is a two-parent merge
+whose first parent passed and whose tree equals a clean `git merge-tree` of its parents. `--runs` adds a `PASS <sha>`
+line from a run's verdict.md.
 
 Two things the gate will not do without evidence in the PR itself:
 
-- **Move a PR with no `verify: PASS at <40-hex>` line** for the current head, or a `PASS <sha>` verdict from a run
-  passed with `--runs`. That is `skip: no verify PASS at head`, and it is why zstack #1 reads as a skip today.
+- **Move a PR with no evidence at the current head**: a `verify: PASS at <40-hex>` line, a `PASS <sha>` verdict from a
+  run passed with `--runs`, or a PASS carried by `--clone`. That is `skip: no verify PASS at head`, and it is why
+  zstack #1 reads as a skip today.
 - **Merge on checks that all skipped.** An empty rollup is `wait`, never `green`. A repo with no CI therefore never
   reaches `merge`.
 

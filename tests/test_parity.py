@@ -459,8 +459,20 @@ class CliApply(unittest.TestCase):
 
     def run_gate(self, prs, apply=False, extra=()):
         calls = []
+        tree = "c" * 40
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[0] == "git" and "rev-list" in args:
+                return 0, f"{h} {old} {'d'*40}", ""
+            if args[0] == "git" and "merge-tree" in args:
+                return 0, f"{tree}\n", ""
+            if args[0] == "git" and "rev-parse" in args:
+                return 0, f"{tree}\n", ""
+            return 0, "", ""
+
         real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
-        engine.sh = lambda args, **kw: (calls.append(list(args)), (0, "", ""))[1]
+        engine.sh = fake_sh
         engine.gh_json = lambda args, **kw: (calls.append(list(args)),
                                              {"mergeable": "MERGEABLE", "statusCheckRollup": prs[0]["statusCheckRollup"]})[1]
         self.gate.open_prs = lambda cfg, limit: prs
@@ -514,6 +526,41 @@ class CliApply(unittest.TestCase):
         self.assertEqual(len(reruns), 1, calls)
         self.assertIn("999", reruns[0])
         self.assertFalse([c for c in calls if c[:3] == ["gh", "pr", "merge"]])
+
+    def test_carried_pass_makes_an_old_head_legitimate(self):
+        """A PASS carried across a clean main merge is not in the body. With --clone the gate checks and records it,
+        so the PR is decided on its real merits instead of being skipped forever."""
+        h, old = "a" * 40, "b" * 40
+        pr = self.pr(headRefOid=h, body=f"verify: PASS at {old}", isDraft=True)
+        calls = []
+        tree = "c" * 40
+
+        def fake_sh(args, **kw):
+            calls.append(list(args))
+            if args[0] == "git" and "rev-list" in args:
+                return 0, f"{h} {old} {'d'*40}", ""
+            if args[0] == "git" and "merge-tree" in args:
+                return 0, f"{tree}\n", ""
+            if args[0] == "git" and "rev-parse" in args:
+                return 0, f"{tree}\n", ""
+            return 0, "", ""
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = fake_sh
+        engine.gh_json = lambda args, **kw: (calls.append(list(args)), {"mergeable": "MERGEABLE", "statusCheckRollup": []})[1]
+        self.gate.open_prs = lambda cfg, limit: [pr]
+        self.gate.local_pass = lambda roots: set()
+        try:
+            import io, contextlib, tempfile
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.gate.main(["--config", os.path.join(HERE, "..", "gate", "zstack.json"),
+                                "--state", os.path.join(tempfile.mkdtemp(), "s.json"), "--clone", "/tmp/fake-clone"])
+            out = buf.getvalue()
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        self.assertIn("refs/pull/1/head", " ".join(" ".join(c) for c in calls if c[:2] == ["git", "-C"]))
+        self.assertNotIn("no verify PASS", out, out)
 
     def test_held_pr_never_moves_even_with_apply(self):
         out, calls = self.run_gate([self.pr(isDraft=True)], apply=True, extra=["--held", "1"])

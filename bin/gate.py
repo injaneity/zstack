@@ -46,8 +46,25 @@ def local_pass(roots):
     return shas
 
 
+def git_in(root):
+    """A git callable for engine.carry_pass, in root's clone. (rc, stdout)."""
+    return lambda *args: engine.sh(["git", "-C", root, *args], timeout=300)[:2]
+
+
+def carry(root, repo, n, head, passed, main_ref):
+    """May head's verify PASS survive a main merge? Fetches the PR head and main into our own refs first, so it
+    never races a run's origin/main. Returns True when the PASS carries, and the new head joins `passed`."""
+    git = git_in(root)
+    rc, _ = git("fetch", "-q", "--no-write-fetch-head", "origin",
+                f"+refs/pull/{n}/head:refs/onigiri-tick/pr/{n}", f"+refs/heads/main:{main_ref}")
+    if rc:
+        return False
+    parent, _why = engine.carry_pass(git, head, passed, main_ref)
+    return bool(parent)
+
+
 def load_state(path):
-    """{"clef": {"<n>": {"head", "tier"}}, "rerun": {"<n>": "<sha>"}}."""
+    """{"clef": {"<n>": {"head", "tier"}}, "rerun": {"<n>": "<sha>"}, "carried": {"<n>": {"head", "ok"}}}."""
     try:
         with open(path) as f:
             return json.load(f)
@@ -71,6 +88,8 @@ def main(argv=None):
     ap.add_argument("--set-risk", action="append", default=[], metavar="N=TIER",
                     help="record a Clef score (low|standard|high) for PR N at its current head")
     ap.add_argument("--runs", action="append", default=[], help="a repo checkout holding .git/onigiri/v2 run verdicts")
+    ap.add_argument("--clone", action="append", default=[],
+                    help="a clone of this repo, for carrying a verify PASS across a main merge (needs the PR ref)")
     ap.add_argument("--limit", type=int, default=100)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -87,12 +106,23 @@ def main(argv=None):
         if int(n) in by_n:
             state.setdefault("clef", {})[n] = {"head": by_n[int(n)]["headRefOid"], "tier": engine.norm_tier(tier)}
     local = local_pass(a.runs)
+    for n, c in (state.get("carried") or {}).items():
+        if c.get("ok"):
+            local.add(c["head"])
     out = []
     for p in sorted(prs, key=lambda p: p["number"]):
         n, head = p["number"], p["headRefOid"]
         if not p["isDraft"] and engine.verify_pass(head, p.get("body"), local):
             p.update(engine.gh_json(["pr", "view", str(n), "-R", cfg.repo, "--json",
                                      "mergeable,statusCheckRollup"]) or {})
+        if a.clone and not engine.verify_pass(head, p.get("body"), local):
+            olds = engine.re.findall(r"^verify: PASS at ([0-9a-f]{40})", p.get("body") or "", engine.re.M)
+            done = (state.get("carried") or {}).get(str(n)) or {}
+            if olds and done.get("head") != head and carry(a.clone[0], cfg.repo, n, head, set(olds) | local,
+                                                           "refs/onigiri-tick/main"):
+                local.add(head)
+                p["carried"] = True
+                state.setdefault("carried", {})[str(n)] = {"head": head, "ok": True}
         c = (state.get("clef") or {}).get(str(n)) or {}
         action, why = engine.merge_decision(
             p, cfg=cfg, local_pass=local, clef=c.get("tier") if c.get("head") == head else None,
@@ -116,7 +146,7 @@ def main(argv=None):
                 rc, _, err = engine.sh(["gh", "pr", "merge", str(d["pr"]), "-R", cfg.repo,
                                         f"--{cfg.merge_method}", "--match-head-commit", d["head"]], timeout=180)
                 d["done"] = "merged" if rc == 0 else f"merge failed: {err.strip()[:150]}"
-    if a.apply or a.set_risk:
+    if a.apply or a.set_risk or a.clone:
         save_state(state, state_path)
 
     if a.json:
