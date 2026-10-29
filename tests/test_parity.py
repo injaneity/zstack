@@ -850,6 +850,29 @@ class ConfigIsChecked(unittest.TestCase):
             with self.subTest(config=name):
                 engine.load(os.path.join(HERE, "..", "gate", name))
 
+    def test_a_relative_path_means_relative_to_the_config(self):
+        """cron runs from HOME, so a config that only works from inside its own clone refuses to act, silently,
+        once it is scheduled. Every path key is resolved against the config's own directory."""
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, "gate"))
+        with open(os.path.join(d, "gate", "holds.txt"), "w") as f:
+            f.write("# nothing held\n")
+        cfg = {"repo": "x/y", "me": "u", "merge_method": "squash", "label_prefix": "risk:",
+               "holds": "holds.txt", "checkout": "/already/absolute"}
+        path = os.path.join(d, "gate", "cfg.json")
+        with open(path, "w") as f:
+            json.dump(cfg, f)
+        before = os.getcwd()
+        try:
+            os.chdir(tempfile.gettempdir())
+            loaded = engine.load(path)
+        finally:
+            os.chdir(before)
+        self.assertEqual(loaded.holds, os.path.join(d, "gate", "holds.txt"))  # beside the config, not the cwd
+        self.assertEqual(loaded.checkout, "/already/absolute")
+        self.assertTrue(os.path.exists(loaded.holds))
+
 
 class KnobsBite(unittest.TestCase):
     """Each knob changes a decision, so a silently ignored key fails a test instead of quietly mis-gating."""

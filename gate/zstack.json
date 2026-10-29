@@ -3,5 +3,5 @@
   "me": "injaneity",
   "merge_method": "squash",
   "label_prefix": "risk:",
-  "holds": "gate/zstack-holds.txt"
+  "holds": "zstack-holds.txt"
 }
