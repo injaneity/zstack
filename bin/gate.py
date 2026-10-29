@@ -40,7 +40,7 @@ def open_prs(cfg):
 def local_pass(root):
     """Heads with a verify PASS in a run's verdict.md, first line "PASS <sha>"."""
     shas = set()
-    base = os.path.join(root, ".git", "onigiri", "v2")
+    base = os.path.join(root, ".git", "onigiri", "v2") if root else ""
     for rid in os.listdir(base) if base and os.path.isdir(base) else []:
         try:
             with open(os.path.join(base, rid, "verdict.md")) as f:
@@ -165,8 +165,10 @@ def main(argv=None):
     try:
         run(cfg, prs, state, holds, paused, a.apply)
     finally:
-        # a gh error halfway through still saves: the Clef scores and reruns already spent are not paid for twice
-        save_state(state, state_path)
+        # a gh error halfway through still saves: the Clef scores and reruns already spent are not paid for twice.
+        # Print mode writes nothing at all, so it cannot leave a cache behind that a later --apply then trusts.
+        if a.apply:
+            save_state(state, state_path)
     return 0
 
 

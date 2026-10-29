@@ -17,6 +17,9 @@ merging on an unreadable hold list is the one failure this gate may never have. 
 stops every action and stops scoring too, read once at the start like the tick did, so a pause written during a long
 scoring pass takes effect on the next run rather than mid-pass.
 
+Print mode moves no PR and writes no state. It does fetch each PR head and main into the checkout, because whether a
+PASS would carry across a merge is part of the decision it is reporting, and the answer only exists in git.
+
 Two overlapping runs are prevented by whatever schedules this: `cron-wrap.sh` runs each job under `flock -n`, so the
 gate takes no lock of its own.
 

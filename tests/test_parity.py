@@ -747,7 +747,8 @@ class Cli(unittest.TestCase):
         try:
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-                self.gate.main(["--config", self.config(holds=self.holds(), checkout="/tmp/fake-clone")])
+                self.gate.main(["--config", self.config(holds=self.holds(), checkout="/tmp/fake-clone"),
+                                "--apply"])
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
         state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
@@ -830,6 +831,19 @@ class Cli(unittest.TestCase):
         state = json.load(open(os.path.join(self.dir, "zstack.state.json")))
         self.assertNotIn("7", state.get("clef") or {})
         self.assertEqual((state.get("carried") or {}).get("7"), {"head": h, "ok": True})
+
+    def test_print_mode_writes_no_state(self):
+        """Print mode is the read-only look. Leaving a state file behind means a later --apply trusts a cache that
+        this run only observed, and it breaks the one promise print mode makes."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.run_gate([self.pr()], [self.config()])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "zstack.state.json")))
+
+    def test_a_config_with_no_checkout_still_runs(self):
+        """checkout is optional: a repo with no run verdicts and no PASS carry still has decisions to report."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.run_gate([self.pr()], [self.config()])
+        self.assertTrue(os.path.exists(self.dir))
 
     def test_a_corrupt_state_file_stops_the_run(self):
         """The tick raised on a corrupt state.json and ran nothing. Reading it as empty reruns every red PR again
