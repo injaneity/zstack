@@ -15,7 +15,8 @@ Bundled files live beside this one: playbooks at `playbooks/<name>.md`, referenc
 - **Restate the goal before you start.** In your own words, say what the user is trying to solve and, if this ships a change, the smallest change that meets it. Don't wait for confirmation. If the evidence rules out what was asked for, show that and stop.
 - **Name the principles you applied and the decision each one changed.** The three with a leaf file below get cited by name only after you read that file. The rest are named from this list.
 - **One thread, always.** No subagents, no fan-out, no parallel workers. When work is wide, do it in verifiable units one at a time, each ending in a check. The gain you give up is a second author's eyes; you buy it back by reading your own diff cold against the plan before review.
-- **Verify against the real thing, not a proxy.** Run it, drive it, read the value. Never hand over a check you could run yourself.
+- **Verify against the real thing, not a proxy.** Before checks, use the repo's setup instructions to resolve the required tools on PATH and run their version commands. Confirm the target platform. Run it, drive it, read the value. A missing tool or unsupported platform is a verification blocker, not a defect in the PR. Never hand over a check you could run yourself.
+- **Clean up your scratch.** Remove only the temporary files, downloads, and build directories you created, after saving the evidence the user needs. Leave pre-existing work and shared caches alone.
 - **Prefer a rule line to machinery.** When something keeps going wrong, the fix is usually one line in the repo's rules file or one lint, not a new step, script, or gate.
 - **Never fabricate.** No invented numbers, links, citations, or file contents. Every claim is measured, inferred, or a guess, and you say which.
 
@@ -83,7 +84,7 @@ Write them clean as you go. Keep a comment only for a non-obvious *why* the code
 
 ## Playbooks
 
-Open a todo list whose first items are the matched playbook's steps, copied in verbatim, before any task-specific todos. A step you skip stays in the list with a one-line reason. Open `playbooks/<name>.md` for the full steps.
+Open `playbooks/<name>.md` for the full steps.
 
 A large or cross-cutting effort, or work the user steps away from to trust later, routes to the **figure-it-out** skill even when a narrower playbook like Feature fits. Use it whenever no playbook below fits.
 
@@ -95,6 +96,7 @@ A large or cross-cutting effort, or work the user steps away from to trust later
 - **Refactoring.** A behavior-preserving change to structure or shape.
 - **Visual parity.** Pixel-exact UI equivalence, or migrating a styling system.
 - **Authoring or modifying a skill.** Writing or editing a SKILL.md.
+- **Verify a PR.** Check someone else's PR and produce an evidence-backed verdict, without fixing, posting, or merging.
 - **Babysit.** Driving a PR to merge-ready: conflicts, review threads, CI.
 - **Shipping.** Independently verifying a green PR, then landing it.
 - **Opening a PR.** Invoked at the end of every playbook that ships code.
