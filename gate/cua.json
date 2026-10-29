@@ -1,0 +1,16 @@
+{
+  "repo": "trycua/cua",
+  "me": "injaneity",
+  "merge_method": "squash",
+  "label_prefix": "risk:",
+  "non_required_checks": [
+    "cla"
+  ],
+  "preapproved": [
+    5775,
+    5072
+  ],
+  "clef_script": "/home/box/agent-data/onigiri/v01/clef-risk.sh",
+  "sensitive": "(?<![a-z])auth(?!or)|credential|secret|password|passkey|keyring|keychain|1password|onepassword|oauth|teleport|keyvault|pairing\\.rs",
+  "outside_sensitive": "(^|/)\\.github/workflows/"
+}
