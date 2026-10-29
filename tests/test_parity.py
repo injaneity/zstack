@@ -12,6 +12,7 @@ import io
 import itertools
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -58,7 +59,14 @@ def expected():
     against a tick that has not been modified, and treat any diff as a real behaviour change to explain.
     """
     with gzip.open(os.path.join(HERE, "fixtures", "expected.json.gz")) as f:
-        return json.load(f)
+        return json.load(f)["cases"]
+
+
+def expected_provenance():
+    """Which tick the frozen decisions came from. Recorded so the file can never be mistaken for a capture
+    from a modified tick, or from this engine."""
+    with gzip.open(os.path.join(HERE, "fixtures", "expected.json.gz")) as f:
+        return json.load(f)["tick"]
 
 
 def both(pr, *, cfg, clef, held, rerun_head, local_pass=frozenset()):
@@ -127,15 +135,79 @@ class RealPRParity(unittest.TestCase):
                 seen.add("clean mergeable")
             if pr["repo"] == "injaneity/zstack":
                 seen.add("zstack")
-            # the three the guard used to miss: the states that take paths a plain green PR never reaches
+            # Decision paths, not field values: the guard used to check a field and call it coverage.
             rolls = pr.get("statusCheckRollup") or []
-            if state[0] == "red" and any(c.get("detailsUrl") for c in rolls):
-                seen.add("red with run ids")  # what a rerun needs, so `rerun` is reachable on real data
+            fails = [c for c in rolls if c.get("conclusion") not in (engine.OK_CONCLUSIONS | {None, "PENDING"})]
+            if state[0] == "red" and any(re.search(r"/actions/runs/\d+", c.get("detailsUrl") or "")
+                                        for c in fails):
+                seen.add("red with run ids")  # a *failing* check with a run id: the only shape `rerun` can act on
             if pr["mergeable"] == "UNKNOWN":
-                seen.add("mergeable unknown")  # GitHub still computing: must wait, not merge
+                # and it has to actually reach the UNKNOWN branch, not just wear the field
+                action, why = engine.merge_decision(pr, cfg=cfg, local_pass={pr["headRefOid"]},
+                                                    clef="light", held=None, rerun_head=None)
+                if action == "wait" and "UNKNOWN" in why:
+                    seen.add("mergeable unknown")
         for want in ("draft", "pending", "red with a PASS", "conflicting", "clean mergeable", "zstack",
                      "red with run ids", "mergeable unknown"):
             self.assertIn(want, seen, f"fixtures no longer cover {want!r}; recapture before trusting the sweep")
+
+    def test_every_outcome_is_reachable_in_the_frozen_cases(self):
+        """The sweep is only worth something if the frozen grid actually reaches all seven outcomes."""
+        seen = {v[0] for case in expected().values() for v in case["decisions"].values()}
+        self.assertEqual(seen, {"merge", "ready", "rerun", "buffer", "urgent", "wait", "skip"})
+
+    def test_the_frozen_decisions_name_the_tick_they_came_from(self):
+        """Provenance: without it a capture from a modified tick, or from this engine, would look identical."""
+        prov = expected_provenance()
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}", prov["sha256"]), prov)
+        self.assertNotEqual(prov["tick_py"], "engine.py", prov)
+        self.assertGreater(prov["lines"], 500, prov)
+
+
+class HoldsParity(unittest.TestCase):
+    """The holds file format is the tick's contract: a real /srv/onigiri/hold-prs.txt has to parse the same."""
+
+    LINES = [
+        "# a comment\nhold | 5900 | yes | patent\n",
+        "no-move | #123 | no | staging\nhands-off-path | impl_.rs | yes | ours\n",
+        "skip-author | f-trycua | yes | outside\n",
+        "exception | docs/x.md | yes | backlog item 3 | pr | issue-42\n",
+        "hands-off-user | someone | no | hands off\n",
+        "hold | 1 | yes | a | b | c\n",  # a note containing pipes
+        "",
+        "\n\n# only comments\n\n",
+    ]
+    BAD = [
+        "hold | 5900 | yes\n",  # too few fields
+        "nonsense | 1 | yes | x\n",  # unknown kind
+        "hold | 5900 | maybe | x\n",  # rules is not yes/no
+        "hold |  | yes | x\n",  # no target
+        "hold | abc | yes | x\n",  # not a number
+        "exception | p | yes | only | two\n",  # too few exception fields
+        "hold | 5900 | yes | x\nbroken\n",  # one bad row after a good one
+    ]
+
+    def test_good_files_parse_identically(self):
+        tick = tick_module()
+        for text in self.LINES:
+            with self.subTest(text=text[:40]):
+                self.assertEqual(tick.parse_holds(text), engine.parse_holds(text))
+
+    def test_bad_files_are_rejected_by_both(self):
+        tick = tick_module()
+        for text in self.BAD:
+            with self.subTest(text=text[:40]):
+                with self.assertRaises(ValueError):
+                    tick.parse_holds(text)
+                with self.assertRaises(engine.HoldsUnreadable):
+                    engine.parse_holds(text)
+
+    def test_path_hit_agrees(self):
+        tick = tick_module()
+        holds = tick.parse_holds("hands-off-path | impl_.rs | yes | x\nhands-off-path | secret/ | yes | y\n")
+        for path in ("src/impl_.rs", "impl_.rs", "src/notimpl_.rs", "myimpl_.rs", "docs/x.md"):
+            with self.subTest(path=path):
+                self.assertEqual(tick.path_hit(path, holds), engine.path_hit(path, holds))
 
 
 class NamedCases(unittest.TestCase):
@@ -333,42 +405,6 @@ class FuzzParity(unittest.TestCase):
 
 
 class MiscParity(unittest.TestCase):
-    def test_fingerprints(self):
-        tick = tick_module()
-        ps = list(fixtures().values())
-        for p in ps:
-            self.assertEqual(tick.pr_fp(p), engine.pr_fp(p))
-        for a, b in itertools.product(ps[:8], ps[:8]):
-            self.assertEqual(tick.fp_match(tick.pr_fp(a), tick.pr_fp(b)),
-                             engine.fp_match(engine.pr_fp(a), engine.pr_fp(b)))
-        seeded = {"head": "abcdef123", "seeded": True}
-        self.assertTrue(engine.fp_match(seeded, {"head": "abcdef123456"}))
-        self.assertFalse(engine.fp_match(seeded, {"head": "0123"}))
-
-    def test_strip_negated(self):
-        tick = tick_module()
-        for t in ("never touch impl_.rs, fix the parser", "do not touch auth; change the label",
-                  "leave the CI alone", "nothing special here", ""):
-            self.assertEqual(tick.strip_negated(t), engine.strip_negated(t))
-
-    def test_rules_block_replacement(self):
-        tick = tick_module()
-        text = f"a\n{tick.RULES_BEGIN}\nold\n{tick.RULES_END}\nz\n"
-        block = [tick.RULES_BEGIN, "new", tick.RULES_END]
-        self.assertEqual(tick.replace_rules_block(text, block),
-                         engine.replace_rules_block(text, block, tick.RULES_BEGIN, tick.RULES_END))
-        for bad in ("no markers", f"{tick.RULES_BEGIN}\nonly begin\n", f"{tick.RULES_END}\n{tick.RULES_BEGIN}\n"):
-            self.assertIsNone(engine.replace_rules_block(bad, block, tick.RULES_BEGIN, tick.RULES_END))
-
-    def test_reverify_line(self):
-        tick = tick_module()
-        h, o = "a" * 40, "b" * 40
-        # the tick prefixes pi-onigiri lines with a run-from; the engine takes that prefix as a parameter
-        self.assertEqual(tick.reverify_line("trycua/cua", 1, h, o, "why", None),
-                         engine.reverify_line(1, h, o, "why", None))
-        self.assertEqual(tick.reverify_line("injaneity/pi-onigiri", 1, h, o, "why", "high"),
-                         engine.reverify_line(1, h, o, "why", "high", where=f"run from {tick.PIO} "))
-
     def test_verify_pass(self):
         tick = tick_module()
         h, o = "a" * 40, "b" * 40
@@ -378,31 +414,6 @@ class MiscParity(unittest.TestCase):
             for local in (set(), {h}, {o}):
                 with self.subTest(body=body, local=local):
                     self.assertEqual(tick.verify_pass(h, body, local), engine.verify_pass(h, body, local))
-
-    def test_gate_started(self):
-        tick = tick_module()
-        cases = [None, [], [chk("ci-gate", started="2026-10-26T00:00:00Z")],
-                 [chk("ci-gate", started="2026-10-26T00:00:00Z"), chk("ci-gate", started="2026-10-27T00:00:00Z")],
-                 [chk("other", started="2026-10-26T00:00:00Z")],
-                 [{"context": "ci-gate", "startedAt": "2026-10-26T00:00:00Z"}]]
-        for rollup in cases:
-            with self.subTest(rollup=rollup):
-                self.assertEqual(tick.gate_started(rollup), engine.gate_started(rollup))
-
-    def test_now_shape(self):
-        tick = tick_module()
-        import re as _re
-        self.assertEqual(tick.now(), engine.now())
-        self.assertRegex(engine.now(), _re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$"))
-
-    def test_pending_roundtrip(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            p = os.path.join(d, "pending.json")
-            self.assertEqual(engine.load_pending(p), {})
-            engine.save_pending({"7": {"sha": "s", "fork": False, "since": "t"}}, p)
-            self.assertEqual(engine.load_pending(p), {"7": {"sha": "s", "fork": False, "since": "t"}})
-
 
 class CarryPass(unittest.TestCase):
     """carry_pass takes a git callable, so both versions run against the same real repo and the same fakes."""
@@ -446,12 +457,14 @@ class CliApply(unittest.TestCase):
 
     def run_gate(self, prs, apply=False, extra=(), state=None):
         """`state` is a path to share between calls: the rerun budget lives there, so a second call is the only
-        way to observe "rerun once, then stop"."""
+        way to observe "rerun once, then stop". --apply always gets a holds file, which the gate now demands."""
         calls = []
         tree = "c" * 40
 
         def fake_sh(args, **kw):
             calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
             if args[0] == "git" and "rev-list" in args:
                 return 0, f"{prs[0]['headRefOid']} {'b' * 40} {'d' * 40}", ""  # first parent, second, tree
             if args[0] == "git" and "merge-tree" in args:
@@ -473,10 +486,20 @@ class CliApply(unittest.TestCase):
             with contextlib.redirect_stdout(buf):
                 argv = ["--config", os.path.join(HERE, "..", "gate", "zstack.json"), "--state",
                         state or os.path.join(self._tmp(), "s.json")] + (["--apply"] if apply else []) + list(extra)
+                if apply and not any(x == "--holds" for x in argv):
+                    argv += ["--holds", self._empty_holds()]
                 self.gate.main(argv)
             return buf.getvalue(), calls
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+
+    def _empty_holds(self):
+        """A holds file that holds nothing: --apply requires one, and "empty" is different from "absent"."""
+        d = self._tmp()
+        p = os.path.join(d, "holds.txt")
+        with open(p, "w") as f:
+            f.write("# nothing held\n")
+        return p
 
     def _tmp(self):
         import tempfile
@@ -537,6 +560,8 @@ class CliApply(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
             if args[0] == "git" and "rev-list" in args:
                 return 0, f"{h} {old} {'d'*40}", ""
             if args[0] == "git" and "merge-tree" in args:
@@ -599,6 +624,8 @@ class HoldsAndPause(unittest.TestCase):
 
         def fake_sh(args, **kw):
             calls.append(list(args))
+            if args[:3] == ["gh", "api", "user"]:
+                return 0, "injaneity\n", ""
             if args[0] == "git":
                 return 0, "c" * 40 + "\n", ""
             return 0, "", ""
@@ -617,8 +644,11 @@ class HoldsAndPause(unittest.TestCase):
             buf = io.StringIO()
             argv = ["--config", os.path.join(HERE, "..", "gate", "zstack.json"),
                     "--state", os.path.join(tempfile.mkdtemp(), "s.json")] + (["--apply"] if apply else [])
+            argv += list(extra)
+            if apply and "--holds" not in argv:
+                argv += ["--holds", self.write("empty-holds.txt", "# nothing held\n")]
             with contextlib.redirect_stdout(buf):
-                self.gate.main(argv + list(extra))
+                self.gate.main(argv)
             return buf.getvalue(), calls
         finally:
             engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
@@ -642,19 +672,25 @@ class HoldsAndPause(unittest.TestCase):
         out, calls = self.run_gate([self.pr()], extra=["--holds", holds])
         self.assertFalse(self.acted(calls), out)
 
+    def test_apply_without_a_holds_file_refuses_to_run(self):
+        """The default path must be closed too: no --holds and no config key is "I know nothing about holds",
+        which is not the same as "nothing is held"."""
+        with self.assertRaises(SystemExit) as e:
+            self.run_gate([self.pr()], apply=True, extra=["--holds", ""])
+        self.assertIn("needs a holds file", str(e.exception.code))
+
+    def test_apply_with_a_holds_path_that_does_not_exist_refuses_to_run(self):
+        """A typo'd or unmounted path is fatal, as it was in the tick: not "no holds"."""
+        with self.assertRaises(SystemExit) as e:
+            self.run_gate([self.pr()], apply=True, extra=["--holds", "/nonexistent/hold-prs.txt"])
+        self.assertIn("refusing to act", str(e.exception.code))
+
     def test_a_hold_is_never_silently_dropped_because_the_file_is_bad(self):
         """Fail closed: an unparseable holds file must stop the run, not merge everything it failed to read."""
         holds = self.write("holds.txt", "hold | 7 | yes | patent\nthis row is nonsense\n")
         with self.assertRaises(SystemExit) as e:
             self.run_gate([self.pr()], extra=["--holds", holds])
         self.assertIn("refusing to act", str(e.exception.code))
-
-    def test_pr_held_answers_both_kinds_and_nothing_else(self):
-        holds = engine.parse_holds("hold | 7 | yes | patent\nno-move | 8 | yes | staging\n")
-        self.assertTrue(engine.pr_held(7, holds))
-        self.assertTrue(engine.pr_held(8, holds))
-        self.assertFalse(engine.pr_held(9, holds))
-        self.assertFalse(engine.pr_held(7, None))
 
     def test_a_hold_on_a_row_it_cannot_read_is_not_treated_as_no_hold(self):
         holds = self.write("holds.txt", "hold | not-a-number | yes | patent\n")
@@ -735,6 +771,105 @@ class ConfigIsTheOldConstants(unittest.TestCase):
                         engine.merge_decision(p, cfg=cfg, local_pass=set(), clef=clef, held=None, rerun_head=None))
 
 
+class SetRiskAndScoreThroughTheCli(unittest.TestCase):
+    """--set-risk and --score, driven through bin/gate.py. The previous pair of tests called engine helpers
+    directly and never ran the code that reads the flag, which is where the bugs were."""
+
+    def setUp(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "bin"))
+        import gate
+        self.gate = gate
+
+    def call(self, argv, prs, files=(), view=None):
+        """main(argv) with fake gh/sh. `view` overrides the per-PR gh view result."""
+        calls = []
+        state_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(state_dir, ignore_errors=True))
+        state_path = os.path.join(state_dir, "s.json")
+
+        def fake_gh(args, **kw):
+            calls.append(list(args))
+            if "files" in args:
+                return {"files": [{"path": f} for f in files]}
+            # a realistic view: head/title/body/files together, which is what the head pin compares
+            return view if view is not None else {"headRefOid": prs[0]["headRefOid"], "title": prs[0]["title"],
+                                                  "body": prs[0]["body"],
+                                                  "files": [{"path": f} for f in files]}
+
+        real = (engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass)
+        engine.sh = lambda args, **kw: (calls.append(list(args)),
+                                        (0, "injaneity\n" if args[:3] == ["gh", "api", "user"] else "", ""))[1]
+        engine.gh_json = fake_gh
+        self.gate.open_prs = lambda cfg, limit: list(prs)
+        self.gate.local_pass = lambda roots: set()
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                self.gate.main(["--config", os.path.join(HERE, "..", "gate", "cua.json"),
+                                "--state", state_path] + list(argv))
+        finally:
+            engine.sh, engine.gh_json, self.gate.open_prs, self.gate.local_pass = real
+        return buf.getvalue(), calls, state_path
+
+    def pr(self, **kw):
+        h = "a" * 40
+        base = {"number": 7, "headRefOid": h, "isDraft": True, "mergeable": "UNKNOWN", "labels": [],
+                "body": "", "title": "t", "author": {"login": "injaneity"}, "statusCheckRollup": []}
+        base.update(kw)
+        return base
+
+    def test_set_risk_goes_through_clef_tier_and_records_under_the_canonical_key(self):
+        out, _, state_path = self.call(["--set-risk", "07=high"], [self.pr()], files=["src/auth.rs"])
+        with open(state_path) as f:
+            st = json.load(f)
+        self.assertEqual(list(st["clef"]), ["7"], "07 must be stored as 7, or the decision never reads it")
+        self.assertEqual(st["clef"]["7"]["tier"], "human")  # high on an auth path is the owner's call
+        self.assertEqual(st["clef"]["7"]["by"], "hand")
+
+    def test_set_risk_only_ever_escalates(self):
+        with tempfile.TemporaryDirectory() as d:
+            state_path = os.path.join(d, "s.json")
+            with open(state_path, "w") as f:
+                json.dump({"clef": {"7": {"head": "a" * 40, "tier": "human", "by": "clef"}}}, f)
+            out, _, _ = self.call(["--set-risk", "7=light", "--state", state_path], [self.pr()],
+                                  files=["docs/x.md"])
+            with open(state_path) as f:
+                self.assertEqual(json.load(f)["clef"]["7"]["tier"], "human", out)
+
+    def test_a_typo_in_set_risk_is_loud_not_silent(self):
+        for bad in ("7=hgih", "seven=high", "99=high"):
+            with self.subTest(spec=bad):
+                with self.assertRaises(SystemExit):
+                    self.call(["--set-risk", bad], [self.pr()])
+
+    def test_a_hand_set_tier_does_not_satisfy_the_wait_for_a_score_rule(self):
+        """Clef may be more cautious than the person typing, so a hand-set tier must not stop Clef running."""
+        with tempfile.TemporaryDirectory() as d:
+            state_path = os.path.join(d, "s.json")
+            with open(state_path, "w") as f:
+                json.dump({"clef": {"7": {"head": "a" * 40, "tier": "light", "by": "hand"}}}, f)
+            out, calls, _ = self.call(["--score", "--state", state_path], [self.pr(isDraft=False)],
+                                      files=["src/x.rs"])
+            self.assertTrue([c for c in calls if any("clef-risk" in str(x) for x in c)],
+                            f"Clef never ran: {calls}")
+
+    def test_scoring_does_not_run_while_paused(self):
+        with tempfile.TemporaryDirectory() as d:
+            pause = os.path.join(d, "PAUSED")
+            with open(pause, "w") as f:
+                f.write("disk health\n")
+            out, calls, _ = self.call(["--score", "--pause-file", pause], [self.pr(isDraft=False)],
+                                      files=["src/x.rs"])
+            self.assertFalse([c for c in calls if any("clef-risk" in str(x) for x in c)], calls)
+
+    def test_a_score_for_a_head_that_moved_is_not_recorded(self):
+        out, _, state_path = self.call(["--score"], [self.pr(isDraft=False)],
+                                       view={"headRefOid": "b" * 40, "title": "t", "body": "", "files": []})
+        with open(state_path) as f:
+            st = json.load(f) if os.path.exists(state_path) else {}
+        self.assertNotIn("7", st.get("clef") or {}, out)
+
+
 class ConfigIsChecked(unittest.TestCase):
     def test_an_unknown_key_is_refused_not_ignored(self):
         """A typo'd key would silently leave the knob it meant to set at its default."""
@@ -803,42 +938,6 @@ class KnobsBite(unittest.TestCase):
     def test_empty_sensitive_names_nothing(self):
         cfg = engine.Config({"repo": "x/y", "me": "u", "merge_method": "squash", "label_prefix": "risk:"})
         self.assertEqual(engine.clef_tier("high", ["auth/token.rs"], "oauth", False, cfg), "deep")
-
-    def test_merge_ref_has_verdicts(self):
-        cfg = self.cfg()
-        cases = [("0" * 40, {"status": "ahead"}, True),
-                 ("0" * 40, {"status": "behind"}, False),
-                 ("0" * 40, {"status": "identical"}, True),
-                 ("0" * 40, None, None)]
-        for ref, cmp_json, want in cases:
-            real_sh, real_gh = engine.sh, engine.gh_json
-            engine.sh = lambda args, **kw: (0, f"{ref}\trefs/pull/1/merge\n", "")
-            engine.gh_json = lambda args, **kw: cmp_json
-            try:
-                with self.subTest(cmp=cmp_json):
-                    self.assertEqual(engine.merge_ref_has(1, "a" * 40, cfg), want)
-            finally:
-                engine.sh, engine.gh_json = real_sh, real_gh
-        real_sh = engine.sh
-        engine.sh = lambda args, **kw: (0, "", "")
-        try:
-            self.assertIsNone(engine.merge_ref_has(1, "a" * 40, cfg))
-        finally:
-            engine.sh = real_sh
-
-    def test_merge_ref_has_uses_the_config_repo(self):
-        seen = []
-        real_sh, real_gh = engine.sh, engine.gh_json
-        engine.sh = lambda args, **kw: (seen.append(args), (0, f"{'a'*40}\trefs/pull/1/merge\n", ""))[1]
-        engine.gh_json = lambda args, **kw: (seen.append(args), {"status": "ahead"})[1]
-        try:
-            self.assertTrue(engine.merge_ref_has(1, "a" * 40, self.cfg()))
-            self.assertTrue(engine.merge_ref_has(1, "b" * 40, self.cfg()))
-            self.assertTrue(any("github.com/x/y" in " ".join(a) for a in seen if isinstance(a, list)))
-            self.assertTrue(any("repos/x/y/compare" in " ".join(a) for a in seen if isinstance(a, list)))
-        finally:
-            engine.sh, engine.gh_json = real_sh, real_gh
-
 
 class Webhook(unittest.TestCase):
     def test_no_webhook_url_in_the_tree(self):

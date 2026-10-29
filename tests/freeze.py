@@ -33,9 +33,24 @@ def locals_(head):
     return (frozenset(), frozenset({head}), frozenset({"0" * 40}))
 
 
+def provenance():
+    """Identify the tick these expectations came from, so a capture can never be mistaken for the engine
+    grading itself, and a later diff can be traced to a specific tick."""
+    import hashlib
+    path = os.path.abspath(tick.__file__)
+    with open(path, "rb") as f:
+        body = f.read()
+    if os.path.dirname(path) == os.path.join(os.path.dirname(HERE), "gate"):
+        raise SystemExit(f"refusing to freeze from {path}: that is this engine, not a tick")
+    return {"tick_py": os.path.basename(path),
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "lines": body.count(b"\n") + 1}
+
+
 def main():
     with gzip.open(os.path.join(HERE, "fixtures", "prs.json.gz")) as f:
         prs = json.load(f)
+    prov = provenance()
     out, n = {}, 0
     for key, pr in sorted(prs.items()):
         cfg = ZSTACK_CFG if pr["repo"] == "injaneity/zstack" else CUA_CFG
@@ -52,8 +67,9 @@ def main():
         out[key] = {"repo": pr["repo"], "decisions": cases}
     path = os.path.join(HERE, "fixtures", "expected.json.gz")
     with gzip.open(path, "wt") as f:
-        json.dump(out, f, indent=0, sort_keys=True)
+        json.dump({"tick": prov, "cases": out}, f, indent=0, sort_keys=True)
     print(f"froze {n} decisions for {len(out)} fixtures -> {path}")
+    print(f"  from {prov['tick_py']} sha256 {prov['sha256'][:16]}... ({prov['lines']} lines)")
 
 
 if __name__ == "__main__":

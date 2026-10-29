@@ -6,10 +6,8 @@ The decisions are the tick's, unchanged; what moved into Config is what differed
   decide    merge | ready | rerun | buffer | urgent | wait | skip, with the reason
   checks    what a status rollup says (empty | pending | red | green), ignoring non-required checks
   risk      declared (label or body line) and Clef's tier, which only ever escalates
-  retrigger the plan for a fresh pull_request event when main changed a required workflow
   carry     may a verify PASS survive a merge of main into the branch
 """
-import hashlib
 import json
 import os
 import re
@@ -18,7 +16,6 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-SGT = ZoneInfo("Asia/Singapore")
 
 TIERS = ["light", "standard", "deep", "human"]
 OK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
@@ -30,7 +27,7 @@ class Config:
 
     KNOWN = frozenset({
         "repo", "me", "merge_method", "label_prefix", "non_required_checks", "preapproved", "clef_script",
-        "clef_cwd", "clef_required", "sensitive", "outside_sensitive",
+        "clef_cwd", "clef_required", "sensitive", "outside_sensitive", "holds", "pause_file",
     })
 
     def __init__(self, d):
@@ -49,6 +46,10 @@ class Config:
         self.clef_cwd = d.get("clef_cwd") or None  # where Clef may read while scoring; None means the caller's cwd
         self.sensitive = re.compile(d["sensitive"], re.I) if d.get("sensitive") else NEVER
         self.outside_sensitive = re.compile(d["outside_sensitive"]) if d.get("outside_sensitive") else NEVER
+        # Where this repo's holds and pause live. Named here so a deploy cannot forget them: --apply refuses to
+        # run without a holds file, because "no holds given" and "nothing is held" must not look the same.
+        self.holds = d.get("holds") or None
+        self.pause_file = d.get("pause_file") or None
 
     @property
     def requires_clef(self):
@@ -89,7 +90,7 @@ def parse_holds(text):
     -> {"hold": {n}, "no_move": {n}, "users": {login}, "paths": [path], "exceptions": [...]}
     Raises HoldsUnreadable on a malformed row, exactly as the tick did.
     """
-    h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": []}
+    h = {"hold": set(), "no_move": set(), "users": set(), "paths": [], "exceptions": [], "entries": []}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -111,15 +112,18 @@ def parse_holds(text):
             h["users"].add(target)
         else:
             h["paths"].append(target)
+        h["entries"].append({"kind": kind, "target": target, "rules": f[2] == "yes", "note": " | ".join(f[3:])})
     return h
 
 
 def load_holds(path):
-    """None when there is no holds file. Raises HoldsUnreadable when it exists and will not parse: the caller
-    must then act on nothing, which is what the tick did (a hold must never be silently dropped)."""
+    """The holds file, parsed. None only when no path was given at all.
+
+    A path that does not exist is an error, not "no holds": the tick opened the file directly, so a typo'd or
+    unmounted /srv/onigiri/hold-prs.txt raised, skipped the merge pass and sent an urgent alert. Treating a
+    missing file as empty would merge every patent-hold PR, which is the one thing this may never do.
+    """
     if not path:
-        return None
-    if not os.path.exists(path):
         return None
     try:
         with open(path) as f:
@@ -131,11 +135,6 @@ def load_holds(path):
 def path_hit(path, holds):
     """The hands-off path a changed file matches (by file name), or None."""
     return next((p for p in holds["paths"] if re.search(r"(^|/)" + re.escape(p) + "$", path)), None)
-
-
-def pr_held(n, holds):
-    """True if the merge pass must never undraft or merge this PR."""
-    return bool(holds) and (n in holds["hold"] or n in holds["no_move"])
 
 
 # ---------------- pure rules ----------------
@@ -192,19 +191,6 @@ def carry_pass(git, head, passed, main_ref="refs/remotes/origin/main"):
     if rc2 != 0 or out.split()[0] != tree.strip():
         return None, "merge tree differs from a clean merge (conflict resolution or extra edits)"
     return p1, f"clean main merge of {p1[:9]} (PASS) and main {p2[:9]}"
-
-
-def reverify_line(n, head, old, why, risk, where=""):
-    """The backlog line that queues a re-verify at a moved head. `where` is the prefix that says where to run it."""
-    return (f"- [ ] PRIORITY (tick, papercut 6 of 8: queued by itself): {where}fix pr #{n}: re-verify only. head moved to "
-            f"{head[:9]} since verify PASS at {old[:9]} ({why}). run verify at the new head and update the PR body's "
-            f"verify line; change code only if verify fails. risk: {risk or 'standard'}")
-
-
-def gate_started(rollup):
-    """startedAt of the latest ci-gate check run, or None."""
-    times = [c.get("startedAt") or "" for c in rollup or [] if (c.get("name") or c.get("context")) == "ci-gate"]
-    return max(times) if times else None
 # ---------------- checks ----------------
 
 def latest_checks(rollup):
@@ -304,11 +290,14 @@ def merge_decision(pr, *, cfg, local_pass, clef, held, rerun_head):
 # lazy-fetched for 35 minutes and filled the tick's disk (27 Oct). Every child gets this, and a pinned HOME and
 # GH_CONFIG_DIR so `gh` acts as the configured account rather than whoever last logged in.
 def child_env(env=None):
+    """The environment every child gets. These are forced, not defaulted: a caller that already has
+    GIT_NO_LAZY_FETCH=0 in its environment is exactly the case the 27 Oct disk incident came from, and a
+    setdefault would have preserved it."""
     e = dict(os.environ if env is None else env)
-    e.setdefault("GIT_NO_LAZY_FETCH", "1")
+    e["GIT_NO_LAZY_FETCH"] = "1"
     home = e.get("HOME")
     if home:
-        e.setdefault("GH_CONFIG_DIR", os.path.join(home, ".config", "gh"))
+        e["GH_CONFIG_DIR"] = e.get("GH_CONFIG_DIR") or os.path.join(home, ".config", "gh")
     return e
 
 
@@ -327,86 +316,3 @@ def gh_json(args, cwd=None):
     if rc:
         raise RuntimeError(f"gh {' '.join(args[:3])}: {err.strip()[:200]}")
     return json.loads(out) if out.strip() else None
-
-
-def merge_ref_has(n, sha, cfg):
-    """Does refs/pull/n/merge already contain main commit sha? True / False, or None when unknown (no merge ref,
-    e.g. conflicts, or a lookup error). A toggle on a stale merge ref reruns the old workflow."""
-    rc, out, _ = sh(["git", "ls-remote", f"https://github.com/{cfg.repo}", f"refs/pull/{n}/merge"])
-    m = re.match(r"([0-9a-f]{40})\s", out or "") if rc == 0 else None
-    if not m:
-        return None
-    if m.group(1) == sha:
-        return True
-    c = gh_json(["api", f"repos/{cfg.repo}/compare/{sha}...{m.group(1)}", "--jq", "{status: .status}"])
-    st = (c or {}).get("status") if isinstance(c, dict) else None
-    return None if st is None else st in ("ahead", "identical")
-
-
-# ---------------- fingerprints and state files ----------------
-
-def pr_fp(p):
-    """Fingerprint of a PR (gh pr list/view JSON with headRefOid, state, isDraft, reviewDecision, labels, updatedAt):
-    any push, state, draft, review, label change or other activity changes it."""
-    labels = sorted(l["name"] if isinstance(l, dict) else l for l in p.get("labels") or [])
-    return {"head": p.get("headRefOid"), "state": p.get("state"), "draft": p.get("isDraft"),
-            "review": p.get("reviewDecision") or None, "labels": hashlib.sha1("\n".join(labels).encode()).hexdigest()[:12],
-            "updated": p.get("updatedAt")}
-
-
-def fp_match(old, new):
-    """Is new the same PR state as old? A seeded fingerprint only has a (maybe 9-char) head and compares on that."""
-    oh, nh = (old or {}).get("head") or "", (new or {}).get("head") or ""
-    if len(oh) < 7 or not nh.startswith(oh):
-        return False
-    return bool(old.get("seeded")) or all(old.get(k) == new.get(k) for k in ("state", "draft", "review", "labels", "updated"))
-def load_pending(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def save_pending(pend, path):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(pend, f, indent=1, sort_keys=True)
-    os.replace(tmp, path)
-
-
-def now(tz=None):
-    """ISO timestamp with seconds in tz (default Asia/Singapore, the operator's zone)."""
-    return datetime.now(tz or SGT).isoformat(timespec="seconds")
-
-
-# ---------------- merge watch ----------------
-# ---------------- backlog lines (a gate that runs on queued items) ----------------
-
-def strip_negated(text):
-    """Drop clauses that say what NOT to touch, so 'don't touch impl_.rs' doesn't read as touching it."""
-    neg = re.compile(r"\b(never|don't|do not|not touch|untouched|hands-off|leave|outside|blocked|excluded|avoid|"
-                     r"without|off limits|no code)\b", re.I)
-    return " ".join(c for c in re.split(r"[;:()]|\.(?=\s|$)", text) if not neg.search(c))
-def replace_rules_block(text, block, begin, end):
-    """text with only the lines strictly between `begin` and `end` replaced by block's inner lines.
-
-    Every line outside the markers, and the marker lines themselves, stay byte for byte where they are, so a
-    regeneration can never swallow, move or rewrite a hand-written line. None (nothing written) unless each
-    marker appears exactly once, begin before end, and block itself is begin ... end."""
-    lines = text.split("\n")
-    if lines.count(begin) != 1 or lines.count(end) != 1:
-        return None
-    a, b = lines.index(begin), lines.index(end)
-    if b < a or len(block) < 2 or block[0] != begin or block[-1] != end:
-        return None
-    inner = block[1:-1]
-    if begin in inner or end in inner:
-        return None
-    return "\n".join(lines[:a + 1] + inner + lines[b:])
-
-
-# ---------------- disk guard ----------------
-
-DEFAULT_GUARD_FREE_GB = 10
-# ---------------- urgent webhook ----------------
