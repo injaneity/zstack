@@ -5,6 +5,7 @@
   "license": "MIT",
   "keywords": ["pi-package", "skills", "workflow", "principles"],
   "pi": {
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
   }
 }

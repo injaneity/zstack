@@ -19,7 +19,7 @@ bin/install-agents.sh
 
 `bin/install-agents.sh` copies the four agent types into `~/.pi/agent/subagent-manager/agents/` and never overwrites one you already have. Each type runs on your main model until you set one with `/agents types`. In `/agents` settings, set Max Levels to 2 so subagents can't spawn their own, and Model Picking to Pick First (available). Without pi-subagent-manager, the main session does every step itself.
 
-Then type `/skill:onigiri-mode` before a task, or describe the work and let the model route to it.
+Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe the work and let the model route to it. The `/onigiri-mode` prompt template expands inside pi, so it works on any provider, including claude-code.
 
 ## what you get
 
