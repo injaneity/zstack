@@ -14,6 +14,6 @@
 4. Verify on the real surface. A bug's original repro now passes. A refactor's outputs match the old ones. Inconclusive or wrong-surface is not a pass.
 5. If the design is contested, argue hardest against your choice: name where it fails and check whether a rejected shape answers it. Revert a refactor that doesn't lower reader load somewhere.
 6. Commit in small ordered commits. A bug with a cheap local test lands its failing test first. A refactor lands the deletions first. Follow-ups get their own PRs.
-7. Run **Pull requests** to open it.
+7. Run **Pull requests** to open and merge it.
 
 **Reply:** for a bug, what broke, the root cause, and the failing-then-passing repro verbatim. For a feature, what you built and chose, and open decisions. For a refactor, the structure that changed, the pin, and the equivalence proof.
