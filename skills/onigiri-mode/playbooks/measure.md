@@ -9,6 +9,6 @@
 5. Measure before and after under the same conditions. Keep a change only when the number moves past noise and the regression gate stays green. Otherwise revert it fully.
 6. One commit per kept change, staging only its files.
 7. In a loop, log every attempt with **show-me-your-work** and reread the log before the next. After several rejects, change category or try something more radical. Correctness and simplicity outrank the number.
-8. Stop at the predicate, or when what's left is marginal. Never relax the predicate. Run **Pull requests** to open it, with the measurement in the description.
+8. Stop at the predicate, or when what's left is marginal. Never relax the predicate. Run **Pull requests** to open and merge it, with the measurement in the description.
 
 **Reply:** baseline, result, delta, and the artifact path. For a loop, attempts kept against reverted, the log path, and the next idea.

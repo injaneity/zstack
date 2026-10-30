@@ -1,6 +1,6 @@
 ### Pull requests
 
-Three jobs: **Open** ends every change. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR, and is Land's verify step for them.
+Three jobs: **Open** ends every change, merged once green. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR, and is Land's verify step for them.
 
 ## Open
 
@@ -22,7 +22,7 @@ Three jobs: **Open** ends every change. **Land** runs only when asked. **Verify*
 - `## Blast Radius`: who it touches and why that's safe or risky.
 - `## Verification`: one to three real runs and their outcomes. Perf gets one number, before and after.
 
-Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, never as a draft, and read `gh pr view` before describing its status. Post the URL and keep building.
+Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, never as a draft, and read `gh pr view` before describing its status. Post the URL. Then merge it under onigiri-mode's Repo rules: once `gh pr checks` is green and `gh pr view <pr> --json mergeable` says `MERGEABLE`, run `gh pr merge <pr> --squash` and confirm `state` is `MERGED`.
 
 ## Land
 

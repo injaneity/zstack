@@ -12,7 +12,7 @@ You do the work: design it, write it, verify it. Subagents help at four named st
 
 - **Restate the goal first.** Say what the user is solving and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
 - **Name the principles that changed a decision**, and the decision each one changed.
-- **Verify against the real thing.** Resolve the repo's tools and confirm the platform, then run it, drive it, and read the value. A missing tool is a verification blocker, not a defect. Never hand over a check you could run yourself.
+- **Verify against the real thing.** Resolve the repo's tools and confirm the platform, then run it, drive it, and read the value. Install any missing tool or dependency yourself, without asking. Never hand over a check you could run yourself.
 - **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
 - **Clean up your scratch.** Remove only what you created, after saving the evidence.
 
@@ -67,6 +67,8 @@ Subagents run through pi-subagent-manager, as zstack types. Their models live in
 
 Reversible work proceeds without asking. Never block on a question you could answer by looking.
 
+A pi run is one-shot. Stop when the task ends, and never launch one under a supervisor that restarts it: launchd `KeepAlive`, systemd `Restart=`, or a loop. A new provider gets a fresh session id, never a resume of another provider's session.
+
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
 "Don't stop" or "going to bed" means run to the exit condition and keep a decision trail with `show-me-your-work`. A plateau is not a stop.
@@ -86,9 +88,9 @@ If asked to do something you think is wrong, say why, then do the version that h
 When none fits, or the work cuts across several, use **figure-it-out**.
 
 - **Diagnose.** A read-only question or unexplained behavior. The deliverable is a cited answer, not a fix.
-- **Change.** A bug fix, a feature, or a refactor, from first step to an open PR.
+- **Change.** A bug fix, a feature, or a refactor, from first step to a merged PR.
 - **Measure.** Improve a number, once or in a loop, against a frozen harness.
-- **Pull requests.** Open a PR at the end of every change. On request, land one or verify someone else's.
+- **Pull requests.** Open a PR at the end of every change and merge it once green. On request, land one or verify someone else's.
 - **Resume.** Pick up prior work, or pause so it can be picked up.
 
 Editing a skill is a Change: match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
@@ -99,5 +101,6 @@ The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins. Read it b
 
 - No force-push to a shared branch without an explicit yes. No admin bypass.
 - Never print secrets or tokens. Never commit local agent config.
+- Our PRs merge by default once green, unless Zane asks to hold one. In trycua/cua, Clef may hold a PR and the merge script does the merging, so never merge there yourself. Anywhere else, merge your own PR with `gh pr merge <pr> --squash` once checks pass and it is mergeable.
 - Merge only with a green check and the repo's required evidence at the head. Never on an agent's word.
 - Don't change hold, merge-rule, or policy wording without an explicit ok.
