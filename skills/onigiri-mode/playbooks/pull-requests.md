@@ -10,7 +10,7 @@ Three jobs: **Open** ends every change, merged once green. **Land** runs only wh
 
 **Clean the diff.** Remove narrating comments, guards for impossible states, dead compatibility paths, and edits outside the stated scope.
 
-**Review it cold.** Spawn a `zstack-reviewer` (onigiri-mode's Subagents rules) with the diff range and the stated scope. Check each finding against the code. Fix the real ones, and note dismissals with the reason in the description.
+**Review it cold.** Spawn an `onigiri-reviewer` (onigiri-mode's Subagents rules) with the diff range and the stated scope. Check each finding against the code. Fix the real ones, and note dismissals with the reason in the description.
 
 **Title.** `type(scope): subject`, short and imperative, naming a real symbol when one carries the change.
 
@@ -33,7 +33,7 @@ Run it through **unslop**. Screenshots go after the sections. Prefer several nar
 5. **Classify CI before retrying.** Flake earns one fresh run. An identical second failure is real, so read the logs. A failure outside the diff usually means a stale base, so rebase. Only a failure in the diff's own code gets a commit.
 6. **Triage every review comment skeptically.** Check each claim against the code. Fix real ones with a failing test first, and dismiss noise with the disproof on the thread. Escalate security, auth, billing, data, or migrations. Never churn code to quiet a bot. Push before replying. Reply with `gh api --method POST "repos/<owner>/<repo>/pulls/<pr>/comments/<id>/replies" --input <payload.json>`, never by interpolating comment text into a shell command.
 7. **Stop at the human's line.** A maintainer's review is a wait. `drive` ends at mergeable with a clean rollup at the head.
-8. **Verify (`land` only).** For your own PR, spawn a `zstack-verifier` (onigiri-mode's Subagents rules). For anyone else's, run Verify below. Merging needs `PASS` or `PASS+NOTES` at the current head, posted on the PR. If the head moves, verify again.
+8. **Verify (`land` only).** Run Verify below, for your own PR or anyone else's. Merging needs `PASS` or `PASS+NOTES` at the current head, posted on the PR. If the head moves, verify again.
 9. **Merge (`land` only).** The body must carry the literal line `verify: PASS at <full 40-character head sha>` on a line of its own, for the current head. A heading, prose like "Verify at <short sha>", or a short sha does not count, and the merge gate skips the PR. Then `gh pr merge <pr> --squash`, or the repo's method, unless the policy says someone else merges. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge. Arm `--auto` only when the verdict covers the head.
 
 ## Verify

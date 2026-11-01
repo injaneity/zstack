@@ -9,14 +9,15 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 - **Repo-agnostic.** Project rules live in each repo's own `AGENTS.md`. onigiri-mode's repo rules are defaults that defer to it.
 - **No models in skills.** pstack named a model per role in a rule file. zstack names none. Agent types inherit the main model until pi's config sets one.
 
-## Subagents at four steps
+## Subagents
 
-| Role | Type | Step | Why a subagent |
+The `subagent` tool in `extensions/subagent/` is not written here. It is vendored from pi 1.4.0's example extension (`examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner), with four changes listed in `docs/SUBAGENT.md`. It replaced pi-subagent-manager.
+
+| Role | Agent | Step | Why a subagent |
 | --- | --- | --- | --- |
-| Explorer | `zstack-explorer` | `how` 2, `why` 3 | Reads far more than it returns, so the reading stays out of the main context. |
-| Two designs | `zstack-designer` | `architect` B, one-way doors | Sketches that can't see each other don't anchor on the first. |
-| Review | `zstack-reviewer` | `pull-requests` Open, `show-me-your-work` | An author can't read its own diff cold. |
-| Verify | `zstack-verifier` | `pull-requests` Land 8, own PRs | A verdict from the code's author isn't independent. |
+| Review | `onigiri-reviewer` | `pull-requests` Open, `show-me-your-work` | An author can't read its own diff cold. |
+
+`zstack-explorer`, `zstack-designer` and `zstack-verifier` were dropped in 0.2.0 because no session ever spawned them. The steps that named them run in the main session. The designer's and verifier's one useful idea, saying what makes a change safe and not only what is wrong, is in the reviewer's prompt.
 
 Spawns are fresh, never forked, and can't nest. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
 

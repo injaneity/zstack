@@ -39,7 +39,7 @@ Map each tool you have to one category. Source control is always available.
 | Error tracking | The exceptions behind defensive code |
 | Analytics warehouse | Flag-gated code and "where did this number come from" |
 
-Give each category with a real search to a `zstack-explorer` (onigiri-mode's Subagents rules), all at once. Brief it with the question, the anchor, its category, and the note shape below. Do a one-query category yourself. When the code looks defensive (guards, retries, timeouts, flags), also search for incidents: ticket labels like `incident` or `sev-*`, incident channels around the commit dates, and "revert" then "re-apply" commits.
+Search each category yourself and keep notes in the shape below. When the code looks defensive (guards, retries, timeouts, flags), also search for incidents: ticket labels like `incident` or `sev-*`, incident channels around the commit dates, and "revert" then "re-apply" commits.
 
 **Note shape per category:** what was searched (queries verbatim), direct evidence (verbatim quote, location, author, date), indirect evidence (with the inference and any other reading), contradictions, gaps, and leads into other categories. Quote, don't summarize. An empty search is a finding.
 

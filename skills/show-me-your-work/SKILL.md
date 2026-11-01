@@ -26,6 +26,6 @@ Keep it at `decisions.tsv` in the work dir, out of git. Commit it only when a re
 
 Read this run's own pi session under `~/.pi/agent/sessions/--<mangled-cwd>--/`, and no other project's. Check every row maps to a real decision, every pointer resolves and shows what the row claims, and every pivot that shaped the work is logged. Fix gaps with new rows, never by editing.
 
-Then get the trail read cold. Spawn a `zstack-reviewer` (onigiri-mode's Subagents rules) with the log path and the run's goal. For a short run, read the log yourself instead of your memory of it. Look for decisions with thin evidence, verification claimed without proof, choices that papered over a symptom, and gaps a skim would miss.
+Then get the trail read cold. Spawn an `onigiri-reviewer` (onigiri-mode's Subagents rules) with the log path and the run's goal. For a short run, read the log yourself instead of your memory of it. Look for decisions with thin evidence, verification claimed without proof, choices that papered over a symptom, and gaps a skim would miss.
 
 End the reply with an **Attention** section listing each flag with its row, or "No flags".

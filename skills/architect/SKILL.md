@@ -15,7 +15,7 @@ Run **how** over every system the new code touches. Naming a file isn't groundin
 
 Sketch at least two structurally distinct candidates, even when the first looks fine: whole shapes, not tweaks inside one. Take each far enough to compare its types, its public surface, and where its state lives.
 
-For a one-way-door decision, get two candidates from `zstack-designer` subagents (onigiri-mode's Subagents rules). Write the grounding to a file, then spawn both at once, each with that file and a different angle, such as "state lives in one owner" against "state lives with each caller". For a reversible decision, sketch them yourself.
+Give each candidate a different angle, such as "state lives in one owner" against "state lives with each caller".
 
 Assume the next contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Reject or revise a shape with these red flags:
 

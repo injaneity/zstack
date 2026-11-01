@@ -1,10 +1,11 @@
 {
   "name": "zstack",
-  "version": "0.1.0",
-  "description": "pstack trimmed for pi: rigorous agent workflows, with subagents at four named steps.",
+  "version": "0.2.0",
+  "description": "pstack trimmed for pi: rigorous agent workflows, with a cold reviewer subagent at named steps.",
   "license": "MIT",
   "keywords": ["pi-package", "skills", "workflow", "principles"],
   "pi": {
+    "extensions": ["./extensions/subagent/index.ts"],
     "skills": ["./skills"],
     "prompts": ["./prompts"]
   }

@@ -26,10 +26,10 @@ jobs:
       - name: agent types name no model
         run: |
           if grep -n '^models\?:' agents/*.md; then echo "set models in pi's config, not here"; exit 1; fi
-      - name: every zstack type a skill names exists
+      - name: every agent a skill spawns exists
         run: |
           fail=0
-          for t in $(grep -rhoE 'zstack-(explorer|designer|reviewer|verifier|[a-z]+)' skills | sort -u); do
+          for t in $(grep -rhoE 'Spawn an? `[a-z-]+`' skills | grep -oE '`[a-z-]+`' | tr -d '`' | sort -u); do
             [ -f "agents/$t.md" ] || { echo "skills name $t but agents/$t.md is missing"; fail=1; }
           done
           exit $fail

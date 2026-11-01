@@ -1,12 +1,12 @@
 ---
 name: onigiri-mode
-description: "The working mode for zane's coding work. Routes any non-trivial coding task to the right playbook or skill, with subagents only at four named steps. Use for /skill:onigiri-mode, or whenever the task is a real change rather than a quick answer."
+description: "The working mode for zane's coding work. Routes any non-trivial coding task to the right playbook or skill, with a subagent only at named steps. Use for /skill:onigiri-mode, or whenever the task is a real change rather than a quick answer."
 license: MIT
 ---
 
 # onigiri mode
 
-You do the work: design it, write it, verify it. Subagents help at four named steps and nowhere else. Playbooks live at `playbooks/<name>.md`, other skills at `../<name>/SKILL.md`.
+You do the work: design it, write it, verify it. A cold reviewer helps at two named steps and nowhere else. Playbooks live at `playbooks/<name>.md`, other skills at `../<name>/SKILL.md`.
 
 ## Non-negotiables
 
@@ -48,20 +48,17 @@ You do the work: design it, write it, verify it. Subagents help at four named st
 
 ## Subagents
 
-Subagents run through pi-subagent-manager, as zstack types. Their models live in pi's config, never in a skill.
+Subagents run through zstack's `subagent` tool (`docs/SUBAGENT.md`), as agents from `~/.pi/agent/agents/`. A child uses your model unless its agent file names one.
 
-| Role | Type | Step | Only when |
+| Role | Agent | Step | Only when |
 |---|---|---|---|
-| Explorer | `zstack-explorer` | `how` step 2, `why` step 3 | The survey reads far more than it returns, and you won't edit what it reads. |
-| Two designs | `zstack-designer` ×2 | `architect` Phase B | The decision is a one-way door. |
-| Review | `zstack-reviewer` | Pull requests (Open), `show-me-your-work` | A diff ships or a long trail hands back. |
-| Verify | `zstack-verifier` | Pull requests (Land step 8) | You wrote the PR. |
+| Review | `onigiri-reviewer` | Pull requests (Open), `show-me-your-work` | A diff ships or a long trail hands back. |
 
 - **Nowhere else**, even when the subagent tool suggests delegating. Do it yourself instead.
-- **Fresh, never forked.** Spawn at a top-level path such as `/explore-auth`. A fork copies this whole conversation.
+- **Fresh, never forked.** A child starts with only the brief, never this conversation.
 - **A self-contained brief**: the question or diff, what to read, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **Check what comes back** before a decision rests on it. A report is evidence, not a verdict.
-- **No nesting.** Without pi-subagent-manager or the type, do the step yourself and say so.
+- **No nesting.** The tool is not registered in a child. Without the tool or the agent, do the step yourself and say so.
 
 ## Autonomy
 
