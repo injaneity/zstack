@@ -103,4 +103,5 @@ The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins. Read it b
 - Never print secrets or tokens. Never commit local agent config.
 - Our PRs merge by default once green, unless Zane asks to hold one. In trycua/cua, Clef may hold a PR and the merge script does the merging, so never merge there yourself. Anywhere else, merge your own PR with `gh pr merge <pr> --squash` once checks pass and it is mergeable.
 - Merge only with a green check and the repo's required evidence at the head. Never on an agent's word.
+- A PR body that claims verification carries the literal line `verify: PASS at <full 40-character head sha>` on a line of its own, such as `verify: PASS at 605294ff37700c9fa72900fb986906ead487c152`. A heading, prose like "Verify at 605294f", or a short sha does not count, and the merge gate skips the PR.
 - Don't change hold, merge-rule, or policy wording without an explicit ok.
