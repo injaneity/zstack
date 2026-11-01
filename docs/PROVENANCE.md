@@ -17,7 +17,7 @@ The `subagent` tool in `extensions/subagent/` is not written here. It is vendore
 | --- | --- | --- | --- |
 | Review | `onigiri-reviewer` | `pull-requests` Open, `show-me-your-work` | An author can't read its own diff cold. |
 
-`zstack-explorer`, `zstack-designer` and `zstack-verifier` were dropped in 0.2.0 because no session ever spawned them. The steps that named them run in the main session. The designer's and verifier's one useful idea, saying what makes a change safe and not only what is wrong, is in the reviewer's prompt.
+The explorer, designer and verifier agents (zstack-explorer, zstack-designer, zstack-verifier) were dropped in 0.2.0 because no session ever spawned them. The steps that named them run in the main session. The designer's and verifier's one useful idea, saying what makes a change safe and not only what is wrong, is in the reviewer's prompt.
 
 Spawns are fresh, never forked, and can't nest. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
 

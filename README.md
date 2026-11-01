@@ -23,8 +23,8 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`figure-it-out`**: designs a workflow when no playbook fits.
 - **`show-me-your-work`**: an append-only decision log for long or unattended runs.
 - **`unslop`**: strips AI tells from prose.
-- **`subagent` tool**: pi's example extension with four changes. Children get the onigiri policy, can't spawn their own, and are told not to sleep-poll.
-- **`agents/`**: `onigiri-reviewer`, read-only, names no model.
+- **`subagent` tool**: pi's example extension with a few changes. Children get the onigiri policy framed for a subagent, cannot call the `subagent` tool (their `bash` could still start another `pi`), are told not to sleep-poll, and run without forge or git credentials.
+- **`agents/`**: `onigiri-reviewer`, names no model. pi enforces its tool list (no `edit` or `write`), but it keeps `bash` for `git diff` and `git log`, and `bash` is not sandboxed. So "read-only" is a prompt instruction, not a boundary. See `docs/SUBAGENT.md`.
 
 `docs/PROVENANCE.md` records what changed from pstack and why. `docs/SUBAGENT.md` covers the tool.
 

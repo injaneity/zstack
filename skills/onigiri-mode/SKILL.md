@@ -58,7 +58,7 @@ Subagents run through zstack's `subagent` tool (`docs/SUBAGENT.md`), as agents f
 - **Fresh, never forked.** A child starts with only the brief, never this conversation.
 - **A self-contained brief**: the question or diff, what to read, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **Check what comes back** before a decision rests on it. A report is evidence, not a verdict.
-- **No nesting.** The tool is not registered in a child. Without the tool or the agent, do the step yourself and say so.
+- **No nesting.** The `subagent` tool is not registered in a child, so a child cannot call it. Its `bash` could still start another `pi`, so a brief never asks it to. Without the tool or the agent, do the step yourself and say so.
 
 ## Autonomy
 

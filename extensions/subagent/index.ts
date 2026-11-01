@@ -1,9 +1,10 @@
 // Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/index.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// zstack changes, and only these: (a) /srv/onigiri/policy.md is appended to the child's
-// system prompt; (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get
-// depth + 1; (c) children are told not to sleep or poll; (d) none, print mode was already
-// unblocked (ctx.hasUI only gates the project-agent confirm dialog). See docs/SUBAGENT.md.
+// zstack changes, and only these: (a) the onigiri policy ($ONIGIRI_POLICY, default
+// /srv/onigiri/policy.md) is appended to the child's system prompt after a subagent framing line;
+// (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
+// are told not to sleep or poll; (d) with no UI in an untrusted project, project agents are
+// refused; (e) children get an environment without forge or git credentials. See docs/SUBAGENT.md.
 
 /**
  * Subagent Tool - Delegate tasks to specialized agents
@@ -32,6 +33,8 @@ import {
 	formatReadLineRange,
 	getAgentDir,
 	getMarkdownTheme,
+	hasTrustRequiringProjectResources,
+	ProjectTrustStore,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -42,18 +45,53 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
-const POLICY_PATH = "/srv/onigiri/policy.md";
+const POLICY_PATH = process.env.ONIGIRI_POLICY || "/srv/onigiri/policy.md";
 const NO_POLLING_LINE =
 	"Do not use `sleep` or repeated polling to wait for anything. Long waits are the tick's job: report what you are waiting on and stop.";
-const parsedDepth = Number.parseInt(process.env.PI_SUBAGENT_DEPTH ?? "0", 10);
-const SUBAGENT_DEPTH = Number.isFinite(parsedDepth) ? parsedDepth : 0;
+const POLICY_FRAMING =
+	"You are a subagent, not a top-level session. Of the onigiri policy below, only its hold, patent-hold, scope and commit/PR-text rules apply to you. Its Merging, Checks and Work sections describe the top-level session and do not apply to you. Where your agent prompt limits your tools, that limit wins over the policy.";
+// Unset means a top-level session. A value that is set but not a non-negative integer fails closed.
+const rawDepth = process.env.PI_SUBAGENT_DEPTH ?? "";
+const SUBAGENT_DEPTH = rawDepth === "" ? 0 : /^\d+$/.test(rawDepth) ? Number(rawDepth) : 1;
+// Forge and git credentials are removed from the child's environment. Model-provider credentials stay,
+// because the child needs them to call its model.
+const CREDENTIAL_ENV = /TOKEN|SECRET|PASSW|CREDENTIAL|API_KEY|ACCESS_KEY|PRIVATE_KEY|AUTH|ASKPASS/i;
+const MODEL_PROVIDER_ENV =
+	/^(ANTHROPIC|CLAUDE_CODE|OPENAI|AZURE_OPENAI|AI_GATEWAY|GEMINI|GOOGLE|GCLOUD|AWS|MISTRAL|GROQ|CEREBRAS|XAI|OPENROUTER|DEEPSEEK|MOONSHOT|KIMI|MINIMAX|ZAI|HF|FIREWORKS|TOGETHER|BASETEN|OPENCODE|META|CLOUDFLARE|XIAOMI|QWEN|ANT_LING|NVIDIA|RADIUS|TYPESAFE)_/;
+
+function childEnv(ghConfigDir: string): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (CREDENTIAL_ENV.test(key) && !MODEL_PROVIDER_ENV.test(key)) continue;
+		env[key] = value;
+	}
+	// gh keeps its token in its config dir, and git's credential helper asks gh, so an empty dir logs both out.
+	return { ...env, GH_CONFIG_DIR: ghConfigDir, GIT_TERMINAL_PROMPT: "0", PI_SUBAGENT_DEPTH: String(SUBAGENT_DEPTH + 1) };
+}
+
+// pi reports a folder with no protected resources as trusted, and `.pi/agents/` is not a protected
+// resource. So project agents count as trusted only after a real decision: pi resolved trust over
+// protected resources, or the user saved one for this folder.
+function projectAgentsTrusted(cwd: string, piTrusted: boolean): boolean {
+	if (hasTrustRequiringProjectResources(cwd)) return piTrusted;
+	return new ProjectTrustStore(getAgentDir()).get(cwd) === true;
+}
 
 function buildChildPrompt(agentPrompt: string): string {
 	const parts = [agentPrompt.trim(), NO_POLLING_LINE].filter(Boolean);
+	let policy = "";
+	let problem = "";
 	try {
-		parts.push(`# onigiri policy (from ${POLICY_PATH})\n\n${fs.readFileSync(POLICY_PATH, "utf-8").trim()}`);
-	} catch {
-		/* policy file missing or unreadable: children run without it */
+		policy = fs.readFileSync(POLICY_PATH, "utf-8").trim();
+		if (!policy) problem = "is empty";
+	} catch (error) {
+		problem = `could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)})`;
+	}
+	if (problem) {
+		console.error(`subagent: onigiri policy ${POLICY_PATH} ${problem}; child runs without it`);
+		parts.push(`The onigiri policy file ${POLICY_PATH} ${problem}, so no policy text is included here.`);
+	} else {
+		parts.push(POLICY_FRAMING, policy);
 	}
 	return `${parts.join("\n\n")}\n`;
 }
@@ -363,7 +401,7 @@ async function runSingleAgent(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
-				env: { ...process.env, PI_SUBAGENT_DEPTH: String(SUBAGENT_DEPTH + 1) },
+				env: childEnv(path.join(tmpPromptDir as string, "gh")),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
@@ -443,15 +481,9 @@ async function runSingleAgent(
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
-		if (tmpPromptPath)
-			try {
-				fs.unlinkSync(tmpPromptPath);
-			} catch {
-				/* ignore */
-			}
 		if (tmpPromptDir)
 			try {
-				fs.rmdirSync(tmpPromptDir);
+				fs.rmSync(tmpPromptDir, { recursive: true, force: true });
 			} catch {
 				/* ignore */
 			}
@@ -537,11 +569,25 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			const projectTrusted = projectAgentsTrusted(ctx.cwd, ctx.isProjectTrusted());
+			if ((agentScope === "project" || agentScope === "both") && !ctx.hasUI && !projectTrusted) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Refused: project agents need a trusted project or an interactive session. With no UI there is nobody to confirm them. Use agentScope \"user\".",
+						},
+					],
+					details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+					isError: true,
+				};
+			}
+
 			if (
 				(agentScope === "project" || agentScope === "both") &&
 				confirmProjectAgents &&
 				ctx.hasUI &&
-				!ctx.isProjectTrusted()
+				!projectTrusted
 			) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);

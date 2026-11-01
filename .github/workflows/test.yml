@@ -26,10 +26,11 @@ jobs:
       - name: agent types name no model
         run: |
           if grep -n '^models\?:' agents/*.md; then echo "set models in pi's config, not here"; exit 1; fi
-      - name: every agent a skill spawns exists
+      - name: every agent the docs name exists
         run: |
+          names=$(sed -n 's/^name: *//p' agents/*.md; ls skills prompts | sed 's/\.md$//')
           fail=0
-          for t in $(grep -rhoE 'Spawn an? `[a-z-]+`' skills | grep -oE '`[a-z-]+`' | tr -d '`' | sort -u); do
-            [ -f "agents/$t.md" ] || { echo "skills name $t but agents/$t.md is missing"; fail=1; }
-          done
+          while IFS=: read -r file name; do
+            echo "$names" | grep -qx -- "$name" || { echo "$file names \`$name\` but no agent, skill or prompt has that name"; fail=1; }
+          done < <(grep -roE '`(zstack|onigiri)-[a-z0-9-]+`' --include='*.md' skills prompts docs README.md AGENTS.md | tr -d '`' | sort -u)
           exit $fail
