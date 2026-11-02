@@ -119,7 +119,7 @@ async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
 	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
 	if (policy.source !== "package default") say(`zstack: onigiri policy ${policy.path} (${policy.source})`, "info");
-	if (!fs.existsSync(policy.path)) gaps.push({ message: `onigiri policy ${policy.path} (${policy.source}) does not exist`, remedy: `point ${policy.source === "agent dir" ? "that link" : "$ONIGIRI_POLICY"} at a policy file, or remove it` });
+	if (!fs.existsSync(policy.path)) gaps.push({ message: `onigiri policy ${policy.path} (${policy.source}) does not exist`, remedy: policy.source === "agent dir" ? "point that link at a policy file, or remove it" : "point $ONIGIRI_POLICY at a policy file, or unset it" });
 	else if (policy.source === "package default") gaps.push({ message: `no editable policy in ${getAgentDir()}/onigiri, using the package default`, remedy: `bash ${setup}`, fix: true });
 	const absent = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md") && !fs.existsSync(path.join(agentsDir, f)));
 	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
