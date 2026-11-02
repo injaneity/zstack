@@ -11,7 +11,8 @@ command -v pi >/dev/null || { echo "pi is not on PATH. Install pi first, then re
 echo "pi $(pi --version)"
 
 dest="$agent_dir/onigiri/policy.md"
-if [ -e "$dest" ] || [ -L "$dest" ]; then kept+=("policy  $dest (already there, not touched)")
+if [ -L "$dest" ] && [ ! -e "$dest" ]; then kept+=("policy  $dest is a broken link, not touched; fix or remove it")
+elif [ -e "$dest" ]; then kept+=("policy  $dest (already there, not touched)")
 else mkdir -p "$(dirname "$dest")"; cp "$pkg/policy.md" "$dest"; changed+=("policy  $dest (copied from the package default; edit it to add holds)"); fi
 
 while read -r state file; do
