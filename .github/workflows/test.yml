@@ -34,3 +34,18 @@ jobs:
             echo "$names" | grep -qx -- "$name" || { echo "$file names \`$name\` but no agent, skill or prompt has that name"; fail=1; }
           done < <(grep -roE '`(zstack|onigiri)-[a-z0-9-]+`' --include='*.md' skills prompts docs README.md AGENTS.md | tr -d '`' | sort -u)
           exit $fail
+      - name: every skill and playbook the docs name exists
+        run: |
+          skills=$(ls skills)
+          agents=$(sed -n 's/^name: *//p' agents/*.md)
+          fail=0
+          while IFS=: read -r file ref; do
+            name=$(echo "$ref" | sed -E 's#^\*\*`?##; s#`?\*\*$##; s#^/skill:##; s#^\.\./##; s#^skills/##; s#/SKILL\.md$##; s#/$##')
+            echo "$agents" | grep -qx -- "$name" && [[ $ref == \*\** ]] && continue
+            echo "$skills" | grep -qx -- "$name" || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
+          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
+          while IFS=: read -r file ref; do
+            name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
+            [ -f "skills/onigiri-mode/playbooks/$name.md" ] || { echo "$file names playbook \`$name\` but skills/onigiri-mode/playbooks/$name.md does not exist"; fail=1; }
+          done < <(grep -HoE 'playbooks/[a-z-]+\.md|\(`[a-z-]+`\)' skills/onigiri-mode/SKILL.md | sort -u)
+          exit $fail

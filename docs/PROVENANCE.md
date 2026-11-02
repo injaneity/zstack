@@ -11,11 +11,11 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 
 ## Subagents
 
-The `subagent` tool in `extensions/subagent/` is not written here. It is vendored from pi 1.4.0's example extension (`examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner), with four changes listed in `docs/SUBAGENT.md`. It replaced pi-subagent-manager.
+The `subagent` tool in `extensions/subagent/` is not written here. It is vendored from pi 1.4.0's example extension (`examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner), with five changes listed in `docs/SUBAGENT.md`. It replaced pi-subagent-manager.
 
 | Role | Agent | Step | Why a subagent |
 | --- | --- | --- | --- |
-| Review | `onigiri-reviewer` | `pull-requests` Open, `show-me-your-work` | An author can't read its own diff cold. |
+| Review | `onigiri-reviewer` | `pull-requests` Open | An author can't read its own diff cold. |
 
 The explorer, designer and verifier agents (zstack-explorer, zstack-designer, zstack-verifier) were dropped in 0.2.0 because no session ever spawned them. The steps that named them run in the main session. The designer's and verifier's one useful idea, saying what makes a change safe and not only what is wrong, is in the reviewer's prompt.
 
@@ -23,7 +23,9 @@ Spawns are fresh, never forked, and can't nest. pstack's other subagents (implem
 
 ## Kept
 
-`onigiri-mode` (new, replacing `poteto-mode`), `how`, `why`, `architect`, `figure-it-out`, `show-me-your-work`, `unslop`.
+`onigiri-mode` (new, replacing `poteto-mode`), `how`, `why`, `architect`, `unslop`.
+
+In 0.3.0 `onigiri-mode` became the one copy for both readers: a pi session and the chat orchestrator. It took the chat copy's hard rule (coding runs in pi, one session per task) and its launch and VM notes, so the two no longer disagree about who does the work.
 
 **Playbooks.** `diagnose` merges investigation and two forensics playbooks. `measure` merges perf-issue and hillclimb. `resume` merges session-pickup and pause-safely. `change` merges bug-fix, feature, and refactoring, which shared everything after their first step. `pull-requests` merges opening-a-pr, verify-a-pr, babysit, and shipping, for single PRs without stacks. authoring-a-skill is one line in onigiri-mode.
 
@@ -39,6 +41,7 @@ Spawns are fresh, never forked, and can't nest. pstack's other subagents (implem
 | `create-` and `maintain-verification-skill` | Generators for project-local verify skills. onigiri-mode's "verify against the real thing" covers the rule. |
 | `blast-radius` | The reviewer covers it. Its one key idea, finding the fact a change is safe because of, is in the reviewer's prompt. |
 | `tdd`, `technical-writing`, `typescript-best-practices` | `tdd` duplicated a personal skill. `technical-writing` overlapped `unslop` and opening-a-pr's description rules. The TypeScript rules are onigiri-mode guards. |
-| `experiment`, `visual-parity`, `multi-phase-plan`, `worktree-cleanup` playbooks | Niche, or built for a team process. Large work goes to `figure-it-out`. |
+| `experiment`, `visual-parity`, `multi-phase-plan`, `worktree-cleanup` playbooks | Niche, or built for a team process. Large work starts from onigiri-mode's no-playbook line. |
 | `why`'s vendor source guides, `bugbot-triage` | Each assumed a tool or bot we don't use. |
 | `watch-pr`, `check-plan.mjs`, the merge gate | Tooling tied to one deployment or to the coordinator plan shape. |
+| `figure-it-out`, `show-me-your-work` (0.3.0) | No pi session ever read either SKILL.md, and no run wrote a `decisions.tsv`. Their two lines that earned a place, a failing done-predicate with riskiest-first units and a per-decision log with evidence pointers, are in onigiri-mode's Run it well. |

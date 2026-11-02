@@ -1,6 +1,6 @@
 ### Change
 
-**You own the change: a bug fix, a feature, or a refactor.** Every shipped line traces to evidence. A change that "might help" is a hypothesis, not a fix, and it does not ship. Large or cross-cutting work goes to **figure-it-out**.
+**You own the change: a bug fix, a feature, or a refactor.** Every shipped line traces to evidence. A change that "might help" is a hypothesis, not a fix, and it does not ship. Large or cross-cutting work starts with the no-playbook line in onigiri-mode's Run it well.
 
 **Start by kind.**
 - **Bug.** Reproduce it yourself on the real surface, synthesizing the trigger or instrumenting until it fires. Ask the user only with a specific reason you can't reach it. Then binary-search the cause, seeding hypotheses with **how** and **why**. Each pass, take the split that cuts the most and get runtime evidence. Keep a list of dead hypotheses and reread it before each pass. Confirm the mechanism at runtime before planning the fix. Revert anything a refuted hypothesis motivated.
@@ -14,6 +14,6 @@
 4. Verify on the real surface. A bug's original repro now passes. A refactor's outputs match the old ones. Inconclusive or wrong-surface is not a pass.
 5. If the design is contested, argue hardest against your choice: name where it fails and check whether a rejected shape answers it. Revert a refactor that doesn't lower reader load somewhere.
 6. Commit in small ordered commits. A bug with a cheap local test lands its failing test first. A refactor lands the deletions first. Follow-ups get their own PRs.
-7. Run **Pull requests** to open and merge it. Once step 4 passes at the PR's head, put the literal line `verify: PASS at <full 40-character head sha>` on a line of its own in the body. A `## Verify at <short sha>` heading or prose does not count, and the merge gate skips the PR. Update the line whenever the head moves.
+7. Run **Pull requests** to open it. Once step 4 passes at the PR's head, add the `verify:` and `risk:` lines the policy's Merging section defines, and update them whenever the head moves.
 
 **Reply:** for a bug, what broke, the root cause, and the failing-then-passing repro verbatim. For a feature, what you built and chose, and open decisions. For a refactor, the structure that changed, the pin, and the equivalence proof.
