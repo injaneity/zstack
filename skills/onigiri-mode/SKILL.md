@@ -19,36 +19,19 @@ license: MIT
 
 - **Restate the goal first.** Name the problem and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
 - **Name the principle that changed a decision**, and the decision it changed.
-- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Install a missing tool yourself. Never hand over a check you could run.
+- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. Never hand over a check you could run.
 - **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
 - **Clean up your scratch.** Remove only what you created, after saving the evidence.
 
 ## Principles
 
-**Debugging.** Fix the root cause: the first place the system did something it should not. Reproduce first, instrument instead of guessing, and ask why until the answer is a wrong decision in the code. If the triggering state is legitimate, the code that broke on it is the bug. If it should never exist, find what produced it, because a guard where it broke hides the bug. Suspect persisted state when a failure appears only after a restart. Fix every instance. Two failed fixes on one premise mean the premise is wrong.
-
-**Proving it works.** Check the real artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun.
-
-**Tests.** Assert what users of the code can observe. A test that stays green when the behavior breaks proves nothing. One that turns red when internals are restructured is pinned to the implementation. Derive expected values from the requirement, not from a run.
-
-**Shape the work.**
-- Bias to deletion. No speculative abstraction, validator, or config.
-- Types and data structures before logic: a state machine over booleans, a table over branching.
-- If a requirement doesn't fit, rebuild as if it had been there from the start.
-- A novel design gets two or three competing shapes before you commit (**architect**).
-- Fewer layers and less hidden state for the reader. The user's experience beats convenience.
-
-**Guards.**
-- Parse at the edge (CLI, config, network, external APIs) into named types. Inside, trust the types.
-- Every state-mutating step survives running twice and dying halfway.
-- Move every caller and delete the old API in the same change. No shims.
-- Each actor owns its mutable state. Only real sharing gets a lock.
+- **Root cause.** Fix the first place the system did something it should not. Ask why until the answer is a wrong decision in the code. If the triggering state is legitimate, the code that broke on it is the bug. If it should never exist, find what produced it, because a guard where it broke hides the bug. Suspect persisted state when a failure appears only after a restart. Fix every instance. Two failed fixes on one premise mean the premise is wrong. Reproducing and narrowing a bug are in `change`.
+- **Tests** assert what users of the code can observe, with expected values derived from the requirement, not from a run. A test that stays green when the behavior breaks proves nothing. One that turns red when internals move is pinned to the implementation.
+- **Shape.** Bias to deletion. No speculative abstraction, validator, or config. Types before logic: a state machine over booleans, a table over branching. If a requirement doesn't fit, rebuild as if it had been there from the start. Fewer layers and less hidden state. The user's experience beats convenience. A novel design gets competing shapes from **architect**.
+- **Guards.** Parse at the edge (CLI, config, network, external APIs) into named types and trust them inside. Every state-mutating step survives running twice and dying halfway. Move every caller and delete the old API in the same change, with no shims. Each actor owns its mutable state, and only real sharing gets a lock.
 
 **Run it well.**
-- Small units, each ending in a check that can fail. Don't advance on red.
-- Before reporting a number, name what bounds it and what else it might measure.
-- Bulk output goes to a file. Read back the slice you need.
-- When a mistake recurs, add a line to the repo's rules file. The second time, make it a check.
+- Small units, each ending in a check that can fail. Don't advance on red. Bulk output goes to a file, and you read back the slice you need. Before reporting a number, name what bounds it and what else it might measure. A recurring mistake gets a line in the repo's rules file, and the second time a check.
 - **When no playbook fits**, write done as a predicate that can fail, then split the work into units that land alone, riskiest unknown first.
 - **On a long or unattended run**, keep an append-only log with one row per decision: what, why, and a pointer to the evidence (a sha, `file:line`, or artifact path). Reread it before each attempt and before handing back.
 
@@ -67,15 +50,13 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `~/.pi/ag
 
 ## Autonomy
 
-Reversible work proceeds without asking. Never block on a question you could answer by looking.
+Reversible work proceeds without asking. Never block on a question you could answer by looking. If asked to do something you think is wrong, say why, then do the version that holds up.
 
 A pi run is one-shot. It stops when the task ends and never runs under a supervisor (launchd `KeepAlive`, systemd `Restart=`, a loop). A new provider gets a fresh session id, never another provider's session.
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
 "Don't stop" or "going to bed" means run to the exit condition and keep the decision log. A plateau is not a stop.
-
-If asked to do something you think is wrong, say why, then do the version that holds up.
 
 ## Writing
 

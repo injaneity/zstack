@@ -21,10 +21,9 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`how`** and **`why`**: how code works, and what forces shaped it, with confidence-tiered citations.
 - **`architect`**: competing design sketches before code.
 - **`unslop`**: strips AI tells from prose.
-- **`subagent` tool**: pi's example extension with a few changes. Children get the onigiri policy framed for a subagent, cannot call the `subagent` tool (their `bash` could still start another `pi`), are told not to sleep-poll, and run without forge or git credentials.
-- **`agents/`**: `onigiri-reviewer`, names no model. pi enforces its tool list (no `edit` or `write`), but it keeps `bash` for `git diff` and `git log`, and `bash` is not sandboxed. So "read-only" is a prompt instruction, not a boundary. See `docs/SUBAGENT.md`.
+- **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
-`docs/PROVENANCE.md` records what changed from pstack and why. `docs/SUBAGENT.md` covers the tool.
+`docs/PROVENANCE.md` records what changed from pstack and why.
 
 ## license
 
