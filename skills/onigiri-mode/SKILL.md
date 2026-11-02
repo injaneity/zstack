@@ -1,19 +1,19 @@
 ---
 name: onigiri-mode
-description: "Zane's coding mode, read by a pi session doing the work or by the chat orchestrator that files it. Coding runs in pi on the VM, one session per task, routed to a playbook. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
+description: "Zane's coding mode, read by a pi session doing the work or by the chat orchestrator that files it. Coding runs in pi, one session per task, routed to a playbook. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
 license: MIT
 ---
 
 # onigiri mode
 
-**Hard rule (Zane, 1 Nov 2026).** Coding work runs in pi on the onigiri-linux VM. Whoever reads this does not hand-write code anywhere else: not in a chat, not on the box, not through some other agent. Inside a pi session the same rule means one session, one task, no supervisor, no nested pi. Nothing restarts the session, and it never starts another `pi` or hands part of the task to one. The only child process is the reviewer the `subagent` tool starts (Subagents below). It reviews, never writes, and cannot start a child of its own.
+**Hard rule (Zane, 1 Nov 2026).** Coding work runs in pi on the machine set aside for it. Whoever reads this does not hand-write code anywhere else: not in a chat, not on the box, not through some other agent. Inside a pi session the same rule means one session, one task, no supervisor, no nested pi. Nothing restarts the session, and it never starts another `pi` or hands part of the task to one. The only child process is the reviewer the `subagent` tool starts (Subagents below). It reviews, never writes, and cannot start a child of its own.
 
 ## Who is reading
 
 - **A pi session** does the work. Every section below applies except "Chat orchestrator".
 - **The chat orchestrator** never edits repo files, runs builds, tests or `cargo`, or pushes, whether on the box or through a subagent. It files the task to pi, relays what comes back, and watches the PR. Read "Chat orchestrator". The other sections say what a pi session will do, so a brief doesn't need to repeat them.
 
-**Policy.** `/srv/onigiri/policy.md` is the only copy of the holds, the patent hold, commit and PR text, size, checks, scope and the merge rule. `~/bin/pi-run` appends it to every pi session's system prompt, and the orchestrator reads it directly. This skill never restates those rules. Where this skill and that file differ, the file wins.
+**Policy.** One file holds the holds, the push-remote rule, commit and PR text, size, checks, scope and the merge rule. First hit wins: `$ONIGIRI_POLICY`, then `<pi agent dir>/onigiri/policy.md` (written by `bin/setup.sh`), then the package's `policy.md`. `bin/pi-run` appends it to every session's system prompt, and the `subagent` tool to every child's. This skill never restates those rules. Where they differ, the file wins.
 
 ## Non-negotiables
 
@@ -37,7 +37,7 @@ license: MIT
 
 ## Subagents
 
-zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `~/.pi/agent/agents/` by `bin/install-agents.sh`. A child uses your model unless its agent file names one.
+zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agent dir>/agents/` by `bin/install-agents.sh`. A child uses your model unless its agent file names one.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|
@@ -90,11 +90,9 @@ The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this 
 
 For the chat only. A pi session skips this section.
 
-- **zstack is a pi package.** `pi list` on the VM shows `git:github.com/injaneity/zstack`, checked out at `~/.pi/agent/git/github.com/injaneity/zstack`. `~/.pi/agent/skills/` is empty by design.
-- **Reach the VM** with `HOME=/home/box /srv/onigiri/tools/cua-main-88e6d9f do --no-record shell '~/onigiri-vm/vm "..."'`. The key and `~/onigiri-vm/vm` are on the relay Mac, not the box. For anything longer than a line, base64 a script over and run it as `bash /tmp/x.sh`. If the VM looks unreachable, stop and ask Zane. Never fall back to doing the work in the chat.
-- **Check disk first.** `df -h /` must show well over 30G free. The tick pauses itself below 30G. A run that hits ENOSPC dies while its task record still says `running`. The tick already deletes `node_modules` and cargo `target/` dirs in finished runs. Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
-- **Launch.** Write the brief to a file, then run `nohup setsid ~/bin/pi-run <session-id> <provider> <model> <brief-file> > <log> 2>&1 &`. `pi-run` sources `~/.profile`, which holds the Claude token, and appends the policy. A non-login shell without it looks logged out. The provider and model are picked at launch, never in a skill. The tick's pickup sets its own in `/srv/onigiri/tick/pi-task.sh`. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
-- **The brief** carries the task and its constraints and points at the policy. It doesn't restate it. pi picks its own playbook. Report back what pi did, with the PR URL.
-- **After the PR opens**, the tick (`/srv/onigiri/tick/tick.py`, cron every 15 min, log `/srv/onigiri/events.log`, pause with `/srv/onigiri/tick/PAUSED`) applies the policy's merge rule. Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.
-- `gh` runs as injaneity with `GH_CONFIG_DIR=/home/box/.config/gh HOME=/home/box`. Upstream or public posts go only through dumpling.
+- **Setup.** `pi install git:github.com/injaneity/zstack`, then `bin/setup.sh` from the checkout. A session warns at start about anything still missing.
+- **Launch.** Write the brief to a file, then run `nohup setsid <zstack>/bin/pi-run <session-id> [<provider> <model>] <brief-file> > <log> 2>&1 &`. Without a provider and model it uses pi's default. Pick the model at launch, never in a skill, and export the provider's credentials first. Run it on the machine that does the work, never in the chat.
+- **The brief** carries the task, its constraints and the repo path, and points at the policy instead of restating it. pi picks its own playbook. Report back what pi did, with the PR URL.
+- **After the PR opens**, whatever owns merging under the policy takes over. Watch the PR, don't redo the work.
+- `docs/HOST.md` is one reference deployment (a VM, a relay, a cron tick). It is an example, not a requirement.
 - **Don't build process.** No flow engine, gates, or lanes. zstack plus pi is the whole thing.

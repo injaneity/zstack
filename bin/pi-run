@@ -1,0 +1,39 @@
+#!/bin/bash
+# pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
+# Starts one print-mode pi session with the onigiri policy appended to its system prompt.
+set -eu
+usage() {
+  cat <<'USAGE'
+usage: pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
+
+Model: <provider> <model> when given, otherwise pi's own default (defaultProvider and
+defaultModel in <agent dir>/settings.json, or what `pi` picks with none set).
+
+Policy appended to the system prompt, first hit wins:
+  1. $ONIGIRI_POLICY when set
+  2. <agent dir>/onigiri/policy.md when it exists (bin/setup.sh writes it)
+  3. the package's policy.md
+<agent dir> is ${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}.
+
+pi-run sources no profile. Export your provider's credentials before calling it.
+USAGE
+}
+case "${1:-}" in -h|--help|'') usage; exit 0;; esac
+[ $# -ge 2 ] || { usage >&2; exit 2; }
+pkg="$(cd "$(dirname "$0")/.." && pwd)"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+session=$1; shift
+args=(--session-id "$session")
+# Two words before an existing file mean provider and model; one word that is a file means neither.
+if [ ! -f "$1" ]; then
+  [ $# -ge 3 ] || { usage >&2; exit 2; }
+  args+=(--provider "$1" --model "$2"); shift 2
+fi
+prompt=$1; shift
+[ -r "$prompt" ] || { echo "pi-run: cannot read prompt file $prompt" >&2; exit 2; }
+if [ -n "${ONIGIRI_POLICY:-}" ]; then policy=$ONIGIRI_POLICY
+elif [ -e "$agent_dir/onigiri/policy.md" ]; then policy="$agent_dir/onigiri/policy.md"
+else policy="$pkg/policy.md"; fi
+if [ -r "$policy" ]; then args+=(--append-system-prompt "$policy")
+else echo "pi-run: onigiri policy $policy is not readable; session runs without it" >&2; fi
+exec pi "${args[@]}" "$@" -p "$(cat "$prompt")"

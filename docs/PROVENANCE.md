@@ -7,11 +7,11 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 - **Model-invocable.** `disable-model-invocation: true` is stripped. In pi it hides a skill from the model instead of reserving it for a slash command.
 - **pi, not Cursor.** No `/loop`, cloud agents, `control-ui`, todo tool, Bugbot rubric, or `.cursor/` paths. Sessions are read from `~/.pi/agent/sessions/`, and PRs through `gh`.
 - **Repo-agnostic.** Project rules live in each repo's own `AGENTS.md`, and onigiri-mode's repo rules defer to it.
-- **No models in skills.** pstack named a model per role. zstack names none, so agents inherit the main model.
+- **No models in skills.** pstack named a model per role. zstack names none, so agents inherit the main model, and `bin/pi-run` uses pi's configured default unless given one.
 
 ## Subagents
 
-The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `docs/SUBAGENT.md` has its source, what was cut, and its five changes. Its one agent is `onigiri-reviewer`, at `pull-requests` Open, because an author can't read its own diff cold.
+The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `docs/SUBAGENT.md` has its source, what was cut, and its six changes. Its one agent is `onigiri-reviewer`, at `pull-requests` Open, because an author can't read its own diff cold.
 
 The explorer, designer and verifier agents (zstack-explorer, zstack-designer, zstack-verifier) were dropped in 0.2.0 because no session ever spawned them. Their steps run in the main session, and their one useful idea, saying what makes a change safe, is in the reviewer's prompt. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
 
