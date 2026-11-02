@@ -1,12 +1,16 @@
 # subagent tool
 
-`extensions/subagent/` gives pi a `subagent` tool. Each call starts a separate `pi` process with its own context window, runs one agent from `~/.pi/agent/agents/` (or a project's `.pi/agents/` with `agentScope: "both"`), and returns the agent's final text. It has single, parallel and chain modes.
+`extensions/subagent/` gives pi a `subagent` tool. Each call starts a separate `pi` process with its own context window, runs one agent from `~/.pi/agent/agents/` (or a project's `.pi/agents/` with `agentScope: "both"`), and returns the agent's final text. A call takes one `agent` and one `task`.
 
-It is pi 1.4.0's example extension, `examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner. `index.ts` and `agents.ts` are kept close to upstream so a diff against a newer example stays readable.
+It is pi 1.4.0's example extension, `examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner.
+
+## What is removed
+
+zstack only ever calls one agent with one task, so upstream's parallel (`tasks`) and chain (`chain`) modes are gone, with their concurrency limits and output truncation. So is its custom call and result rendering: pi's default renderer shows the call's arguments and the child's final text, collapsed to a few lines until expanded. The per-child token and cost tally went with it, since only that renderer showed it. `agents.ts` loses only the `formatAgentList` export, which nothing imported.
 
 ## The changes
 
-All are in `index.ts`. `agents.ts` is unchanged apart from its header.
+All are in `index.ts`.
 
 1. **Policy reaches children.** pi-run appends the onigiri policy to the parent only. The child's prompt temp file, passed as `--append-system-prompt`, holds the agent prompt, the no-polling line, a framing paragraph, then the policy file's text as is (it brings its own `# onigiri policy` heading). The framing tells the child it is a subagent: only the policy's hold, patent-hold, scope and commit/PR-text rules apply to it, its Merging, Checks and Work sections are for the top-level session, and its agent prompt's tool limits win. The path is `$ONIGIRI_POLICY`, default `/srv/onigiri/policy.md`. If the file is missing, unreadable or empty, the child's prompt says so in one line and the parent logs it to stderr. The temp file is written for every child, even an agent with an empty body.
 2. **Depth limit on the tool.** A child loads this same package, so it would get the tool again. The extension reads `PI_SUBAGENT_DEPTH` and registers nothing when it is 1 or more. Unset counts as 0. Any other value that is not a non-negative integer counts as 1, so garbage or `-1` keeps the tool off. Each child is spawned with the parent's value plus one. So a child cannot call the `subagent` tool. The bound is on the tool, not the process: a child's `bash` could still run `pi` (or `env -u PI_SUBAGENT_DEPTH pi`) and start another session.
