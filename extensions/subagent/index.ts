@@ -79,7 +79,8 @@ function projectAgentsTrusted(cwd: string, piTrusted: boolean): boolean {
 function resolvePolicy(): { path: string; source: string } {
 	if (process.env.ONIGIRI_POLICY) return { path: process.env.ONIGIRI_POLICY, source: "$ONIGIRI_POLICY" };
 	const userCopy = path.join(getAgentDir(), "onigiri", "policy.md");
-	if (fs.existsSync(userCopy)) return { path: userCopy, source: "agent dir" };
+	// lstat, not exists: a dangling symlink still counts, so a broken copy fails loudly instead of falling through.
+	if (fs.lstatSync(userCopy, { throwIfNoEntry: false })) return { path: userCopy, source: "agent dir" };
 	return { path: PACKAGE_POLICY, source: "package default" };
 }
 
@@ -108,8 +109,11 @@ function buildChildPrompt(agentPrompt: string): string {
 // Session-start check. A gap with fix=true is closed by bin/setup.sh, which never overwrites a file and
 // never prompts without a terminal. gh is only a warning, and runs in this process, never a child's env.
 async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	// Only the TUI prompts. In RPC mode hasUI is true, but pi has not started reading replies during
+	// session_start, so a confirm there would never settle.
+	const tui = ctx.hasUI && ctx.mode === "tui";
 	const say = (line: string, level: "info" | "warning" = "warning") =>
-		ctx.hasUI ? ctx.ui.notify(line, level) : console.error(line);
+		tui ? ctx.ui.notify(line, level) : console.error(line);
 	const policy = resolvePolicy();
 	const agentsDir = path.join(getAgentDir(), "agents");
 	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
@@ -125,7 +129,7 @@ async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 		if (gh?.code !== 0) gaps.push({ message: "gh is not installed or not logged in; PR steps will fail", remedy: "gh auth login" });
 	}
 	// No UI means nobody can answer: never prompt, never block, print the remedy and go on.
-	if (!ctx.hasUI || !gaps.some((g) => g.fix)) return gaps.forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
+	if (!tui || !gaps.some((g) => g.fix)) return gaps.forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
 	gaps.filter((g) => !g.fix).forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
 	const fixable = gaps.filter((g) => g.fix).map((g) => g.message);
 	if (!(await ctx.ui.confirm("Run zstack's bin/setup.sh?", `${fixable.join(".\n")}.\nIt copies what is absent and overwrites nothing.`))) return;
@@ -372,7 +376,7 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	if (SUBAGENT_DEPTH >= 1) return;
-	pi.on("session_start", (_event, ctx) => checkDependencies(pi, ctx));
+	pi.on("session_start", (event, ctx) => (event.reason === "startup" ? checkDependencies(pi, ctx) : undefined));
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",

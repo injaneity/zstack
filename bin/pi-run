@@ -6,6 +6,7 @@ usage() {
   cat <<'USAGE'
 usage: pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
 
+A first word that is a file with a / or . in its name is the prompt file.
 Model: <provider> <model> when given, otherwise pi's own default (defaultProvider and
 defaultModel in <agent dir>/settings.json, or what `pi` picks with none set).
 
@@ -18,22 +19,24 @@ Policy appended to the system prompt, first hit wins:
 pi-run sources no profile. Export your provider's credentials before calling it.
 USAGE
 }
-case "${1:-}" in -h|--help|'') usage; exit 0;; esac
+case "${1:-}" in -h|--help) usage; exit 0;; '') usage >&2; exit 2;; esac
 [ $# -ge 2 ] || { usage >&2; exit 2; }
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 session=$1; shift
 args=(--session-id "$session")
-# Two words before an existing file mean provider and model; one word that is a file means neither.
-if [ ! -f "$1" ]; then
-  [ $# -ge 3 ] || { usage >&2; exit 2; }
+# The first word is the brief when it is a file and either looks like a path (has a / or .), which no
+# provider name does, or no file follows it as a third word. Otherwise it and the next are provider and model.
+case "$1" in */*|*.*) pathlike=1;; *) pathlike=0;; esac
+if ! { [ -f "$1" ] && { [ $pathlike = 1 ] || [ $# -lt 3 ] || [ ! -f "$3" ]; }; }; then
+  [ $# -ge 3 ] && [ "${1#-}" = "$1" ] && [ "${2#-}" = "$2" ] || { usage >&2; exit 2; }
   args+=(--provider "$1" --model "$2"); shift 2
 fi
 prompt=$1; shift
 [ -r "$prompt" ] || { echo "pi-run: cannot read prompt file $prompt" >&2; exit 2; }
 if [ -n "${ONIGIRI_POLICY:-}" ]; then policy=$ONIGIRI_POLICY
-elif [ -e "$agent_dir/onigiri/policy.md" ]; then policy="$agent_dir/onigiri/policy.md"
+elif [ -e "$agent_dir/onigiri/policy.md" ] || [ -L "$agent_dir/onigiri/policy.md" ]; then policy="$agent_dir/onigiri/policy.md"
 else policy="$pkg/policy.md"; fi
 if [ -r "$policy" ]; then args+=(--append-system-prompt "$policy")
 else echo "pi-run: onigiri policy $policy is not readable; session runs without it" >&2; fi
-exec pi "${args[@]}" "$@" -p "$(cat "$prompt")"
+exec pi "${args[@]}" "$@" -p -- "$(cat "$prompt")"

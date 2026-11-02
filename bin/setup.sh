@@ -11,7 +11,7 @@ command -v pi >/dev/null || { echo "pi is not on PATH. Install pi first, then re
 echo "pi $(pi --version)"
 
 dest="$agent_dir/onigiri/policy.md"
-if [ -e "$dest" ]; then kept+=("policy  $dest (already there, not touched)")
+if [ -e "$dest" ] || [ -L "$dest" ]; then kept+=("policy  $dest (already there, not touched)")
 else mkdir -p "$(dirname "$dest")"; cp "$pkg/policy.md" "$dest"; changed+=("policy  $dest (copied from the package default; edit it to add holds)"); fi
 
 while read -r state file; do
@@ -25,7 +25,7 @@ if git -C "$repo" remote -v 2>/dev/null | grep -q github.com; then
   elif gh auth status >/dev/null 2>&1; then kept+=("gh      logged in")
   elif [ -t 0 ]; then
     printf 'gh is not logged in, and %s is a GitHub repo. Run `gh auth login` now? [y/N] ' "$repo"
-    read -r answer
+    read -r answer || answer=
     if [ "$answer" = y ] || [ "$answer" = Y ]; then gh auth login && changed+=("gh      logged in"); else kept+=("gh      not logged in (you said no)"); fi
   else kept+=("gh      not logged in; run: gh auth login"); fi
 else kept+=("gh      not checked ($repo is not a GitHub repo)"); fi
