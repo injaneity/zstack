@@ -153,8 +153,9 @@ async function findMissing(pi: ExtensionAPI, cwd: string): Promise<Missing[]> {
 
 async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	const policy = resolvePolicy();
-	const say = (line: string) => (ctx.hasUI ? ctx.ui.notify(line, "warning") : console.error(line));
-	if (policy.source !== "package default") say(`zstack: onigiri policy ${policy.path} (${policy.source})`);
+	const say = (line: string, level: "info" | "warning" = "warning") =>
+		ctx.hasUI ? ctx.ui.notify(line, level) : console.error(line);
+	if (policy.source !== "package default") say(`zstack: onigiri policy ${policy.path} (${policy.source})`, "info");
 	for (const m of await findMissing(pi, ctx.cwd)) {
 		// No UI means nobody can answer, so never prompt and never block: print the remedy and go on.
 		if (!ctx.hasUI || !m.fix) {
