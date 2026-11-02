@@ -8,8 +8,10 @@ pstack splits work across agents: one model designs, a subagent implements, more
 
 ```bash
 pi install git:github.com/injaneity/zstack
-~/.pi/agent/git/github.com/injaneity/zstack/bin/install-agents.sh
+~/.pi/agent/git/github.com/injaneity/zstack/bin/setup.sh
 ```
+
+`setup.sh` is safe to re-run. It copies the default `policy.md` to `~/.pi/agent/onigiri/policy.md` if absent (edit that copy to add your holds), runs `bin/install-agents.sh`, and checks `gh` only for a GitHub repo. It changes nothing you already have. You still pick a provider and log in to it yourself: zstack names no model, so pi uses its own default (`/model`, or `defaultProvider` and `defaultModel` in `settings.json`). Start a print-mode session with the policy appended with `bin/pi-run <session-id> [<provider> <model>] <brief-file>`. `docs/HOST.md` is one example deployment.
 
 The package brings the `subagent` tool (`extensions/subagent/`, vendored from pi's example, see `docs/SUBAGENT.md`). The tool only finds agents in `~/.pi/agent/agents/` and a project's `.pi/agents/`, and a package can't add its own `agents/` to that list, so `bin/install-agents.sh` copies them into `~/.pi/agent/agents/`. It never overwrites a file you already have. An agent runs on your main model unless you add `model:` to its installed copy.
 
@@ -21,7 +23,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`how`** and **`why`**: how code works, and what forces shaped it, with confidence-tiered citations.
 - **`architect`**: competing design sketches before code.
 - **`unslop`**: strips AI tells from prose.
-- **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
+- **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 

@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: scripts parse
         run: |
-          for f in bin/*.sh; do bash -n "$f"; done
+          for f in bin/*; do bash -n "$f"; done
       - name: skills and agent types have frontmatter
         run: |
           fail=0

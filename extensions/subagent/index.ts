@@ -1,10 +1,11 @@
 // Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/index.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// zstack changes, and only these: (a) the onigiri policy ($ONIGIRI_POLICY, default
-// /srv/onigiri/policy.md) is appended to the child's system prompt after a subagent framing line;
+// zstack changes, and only these: (a) the onigiri policy (resolved by resolvePolicy below) is
+// appended to the child's system prompt after a subagent framing line;
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
 // are told not to sleep or poll; (d) with no UI in an untrusted project, project agents are
-// refused; (e) children get an environment without forge or git credentials. Upstream's parallel and
+// refused; (e) children get an environment without forge or git credentials; (f) a session_start
+// check reports a missing policy, agent file or gh login, and offers the fix only with a UI. Upstream's parallel and
 // chain modes and its custom renderers are removed; pi's default tool renderer shows the result.
 // See docs/SUBAGENT.md.
 
@@ -23,12 +24,14 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
+	type ExtensionContext,
 	getAgentDir,
 	hasTrustRequiringProjectResources,
 	ProjectTrustStore,
@@ -37,7 +40,8 @@ import {
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
-const POLICY_PATH = process.env.ONIGIRI_POLICY || "/srv/onigiri/policy.md";
+const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const PACKAGE_POLICY = path.join(PACKAGE_DIR, "policy.md");
 const NO_POLLING_LINE =
 	"Do not use `sleep` or repeated polling to wait for anything. Long waits are the tick's job: report what you are waiting on and stop.";
 const POLICY_FRAMING =
@@ -69,23 +73,68 @@ function projectAgentsTrusted(cwd: string, piTrusted: boolean): boolean {
 	return new ProjectTrustStore(getAgentDir()).get(cwd) === true;
 }
 
+// The one place the lookup order lives. First hit wins: $ONIGIRI_POLICY when set, even if that file is
+// missing, because falling back past a policy the user named could swap their holds for the defaults;
+// then the user's copy in the agent dir, which bin/setup.sh writes; then the package's own policy.md.
+function resolvePolicy(): { path: string; source: string } {
+	if (process.env.ONIGIRI_POLICY) return { path: process.env.ONIGIRI_POLICY, source: "$ONIGIRI_POLICY" };
+	const userCopy = path.join(getAgentDir(), "onigiri", "policy.md");
+	// lstat, not exists: a dangling symlink still counts, so a broken copy fails loudly instead of falling through.
+	if (fs.lstatSync(userCopy, { throwIfNoEntry: false })) return { path: userCopy, source: "agent dir" };
+	return { path: PACKAGE_POLICY, source: "package default" };
+}
+
+// A missing policy fails open, so the reviewer still runs before setup, but loudly: one stderr line
+// naming the path, and one line in the child's prompt.
 function buildChildPrompt(agentPrompt: string): string {
 	const parts = [agentPrompt.trim(), NO_POLLING_LINE].filter(Boolean);
+	const policyPath = resolvePolicy().path;
 	let policy = "";
 	let problem = "";
 	try {
-		policy = fs.readFileSync(POLICY_PATH, "utf-8").trim();
+		policy = fs.readFileSync(policyPath, "utf-8").trim();
 		if (!policy) problem = "is empty";
 	} catch (error) {
 		problem = `could not be read (${(error as NodeJS.ErrnoException).code ?? String(error)})`;
 	}
 	if (problem) {
-		console.error(`subagent: onigiri policy ${POLICY_PATH} ${problem}; child runs without it`);
-		parts.push(`The onigiri policy file ${POLICY_PATH} ${problem}, so no policy text is included here.`);
+		console.error(`subagent: onigiri policy ${policyPath} ${problem}; child runs without it`);
+		parts.push(`The onigiri policy file ${policyPath} ${problem}, so no policy text is included here.`);
 	} else {
 		parts.push(POLICY_FRAMING, policy);
 	}
 	return `${parts.join("\n\n")}\n`;
+}
+
+// Session-start check. A gap with fix=true is closed by bin/setup.sh, which never overwrites a file and
+// never prompts without a terminal. gh is only a warning, and runs in this process, never a child's env.
+async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	// Only the TUI prompts. In RPC mode hasUI is true, but pi has not started reading replies during
+	// session_start, so a confirm there would never settle.
+	const tui = ctx.hasUI && ctx.mode === "tui";
+	const say = (line: string, level: "info" | "warning" = "warning") =>
+		tui ? ctx.ui.notify(line, level) : console.error(line);
+	const policy = resolvePolicy();
+	const agentsDir = path.join(getAgentDir(), "agents");
+	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
+	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
+	if (policy.source !== "package default") say(`zstack: onigiri policy ${policy.path} (${policy.source})`, "info");
+	if (!fs.existsSync(policy.path)) gaps.push({ message: `onigiri policy ${policy.path} (${policy.source}) does not exist`, remedy: policy.source === "agent dir" ? "point that link at a policy file, or remove it" : "point $ONIGIRI_POLICY at a policy file, or unset it" });
+	else if (policy.source === "package default") gaps.push({ message: `no editable policy in ${getAgentDir()}/onigiri, using the package default`, remedy: `bash ${setup}`, fix: true });
+	const absent = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md") && !fs.existsSync(path.join(agentsDir, f)));
+	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
+	const remotes = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
+	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
+		const gh = await pi.exec("gh", ["auth", "status"], { timeout: 10000 }).catch(() => undefined);
+		if (gh?.code !== 0) gaps.push({ message: "gh is not installed or not logged in; PR steps will fail", remedy: "gh auth login" });
+	}
+	// No UI means nobody can answer: never prompt, never block, print the remedy and go on.
+	if (!tui || !gaps.some((g) => g.fix)) return gaps.forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
+	gaps.filter((g) => !g.fix).forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
+	const fixable = gaps.filter((g) => g.fix).map((g) => g.message);
+	if (!(await ctx.ui.confirm("Run zstack's bin/setup.sh?", `${fixable.join(".\n")}.\nIt copies what is absent and overwrites nothing.`))) return;
+	const r = await pi.exec("bash", [setup], { timeout: 30000, cwd: ctx.cwd });
+	ctx.ui.notify(r.code === 0 ? `zstack: setup.sh ran.\n${r.stdout.trim()}` : `zstack: setup.sh failed: ${r.stderr.trim()}`, r.code === 0 ? "info" : "error");
 }
 
 interface SingleResult {
@@ -327,6 +376,7 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	if (SUBAGENT_DEPTH >= 1) return;
+	pi.on("session_start", (event, ctx) => (event.reason === "startup" ? checkDependencies(pi, ctx) : undefined));
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
