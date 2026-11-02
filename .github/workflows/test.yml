@@ -26,10 +26,27 @@ jobs:
       - name: agent types name no model
         run: |
           if grep -n '^models\?:' agents/*.md; then echo "set models in pi's config, not here"; exit 1; fi
-      - name: every zstack type a skill names exists
+      - name: every agent the docs name exists
         run: |
+          names=$(sed -n 's/^name: *//p' agents/*.md; ls skills prompts | sed 's/\.md$//')
           fail=0
-          for t in $(grep -rhoE 'zstack-(explorer|designer|reviewer|verifier|[a-z]+)' skills | sort -u); do
-            [ -f "agents/$t.md" ] || { echo "skills name $t but agents/$t.md is missing"; fail=1; }
-          done
+          while IFS=: read -r file name; do
+            echo "$names" | grep -qx -- "$name" || { echo "$file names \`$name\` but no agent, skill or prompt has that name"; fail=1; }
+          done < <(grep -roE '`(zstack|onigiri)-[a-z0-9-]+`' --include='*.md' skills prompts docs README.md AGENTS.md | tr -d '`' | sort -u)
+          exit $fail
+      - name: every skill and playbook the docs name exists
+        run: |
+          # A skill reference is /skill:x, ../x/SKILL.md, skills/x/, or a lowercase **x** / **`x`**.
+          # Lowercase bold in these docs is reserved for skill and agent names, so a stray one fails here.
+          agents=$(sed -n 's/^name: *//p' agents/*.md)
+          fail=0
+          while IFS=: read -r file ref; do
+            name=$(echo "$ref" | sed -E 's#^\*\*`?##; s#`?\*\*$##; s#^/skill:##; s#^\.\./##; s#^skills/##; s#/SKILL\.md$##; s#/$##')
+            [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
+            [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
+          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
+          while IFS=: read -r file ref; do
+            name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
+            [ -f "skills/onigiri-mode/playbooks/$name.md" ] || { echo "$file names playbook \`$name\` but skills/onigiri-mode/playbooks/$name.md does not exist"; fail=1; }
+          done < <({ grep -roE 'playbooks/[a-z-]+\.md' --include='*.md' skills prompts docs agents README.md AGENTS.md || true; grep -HoE '\(`[a-z-]+`\)' skills/onigiri-mode/SKILL.md || true; } | sort -u)
           exit $fail

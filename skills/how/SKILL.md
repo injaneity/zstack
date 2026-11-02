@@ -18,7 +18,7 @@ When in doubt, take the simple path. If the scope is ambiguous, state your readi
 
 Split the question into 2 to 4 angles, each a distinct slice. Keep notes per angle with the file that taught you each fact.
 
-When a slice is large and you won't edit its files next, give it to a `zstack-explorer` (onigiri-mode's Subagents rules). Spawn one per slice, all at once, each asking for file pointers, the call path, and gotchas. Read small slices, and any you are about to change, yourself.
+Read each slice yourself, noting file pointers, the call path, and gotchas.
 
 Reconcile the notes. Where two angles disagree, go back to the code and settle it.
 
