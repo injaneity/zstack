@@ -105,71 +105,32 @@ function buildChildPrompt(agentPrompt: string): string {
 	return `${parts.join("\n\n")}\n`;
 }
 
-interface Missing {
-	message: string;
-	remedy: string;
-	fix?: { title: string; run: () => Promise<void> };
-}
-
-// What a fresh install can lack. Only the policy copy and the agent files have a fix to offer; gh is a warning.
-async function findMissing(pi: ExtensionAPI, cwd: string): Promise<Missing[]> {
-	const missing: Missing[] = [];
-	const policy = resolvePolicy();
-	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
-	if (!fs.existsSync(policy.path)) {
-		missing.push({ message: `onigiri policy ${policy.path} (${policy.source}) does not exist`, remedy: "point $ONIGIRI_POLICY at a policy file, or unset it" });
-	} else if (policy.source === "package default") {
-		const dest = path.join(getAgentDir(), "onigiri", "policy.md");
-		missing.push({
-			message: `no editable policy at ${dest}, using the package default`,
-			remedy: `bash ${setup}`,
-			fix: { title: `Copy the default policy to ${dest}?`, run: async () => {
-				fs.mkdirSync(path.dirname(dest), { recursive: true });
-				fs.copyFileSync(PACKAGE_POLICY, dest, fs.constants.COPYFILE_EXCL);
-			} },
-		});
-	}
-	const agentsDir = path.join(getAgentDir(), "agents");
-	const absent = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md") && !fs.existsSync(path.join(agentsDir, f)));
-	if (absent.length > 0) {
-		const script = path.join(PACKAGE_DIR, "bin", "install-agents.sh");
-		missing.push({
-			message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`,
-			remedy: `bash ${script}`,
-			fix: { title: `Run bin/install-agents.sh to copy ${absent.join(", ")}?`, run: async () => {
-				const r = await pi.exec("bash", [script], { timeout: 10000 });
-				if (r.code !== 0) throw new Error(r.stderr || `exit ${r.code}`);
-			} },
-		});
-	}
-	// gh matters only for a repo hosted on GitHub. pi.exec runs gh in this process's environment; nothing reaches a child.
-	const remotes = await pi.exec("git", ["-C", cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
-	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
-		const gh = await pi.exec("gh", ["auth", "status"], { timeout: 10000 }).catch(() => undefined);
-		if (!gh || gh.code !== 0) missing.push({ message: "gh is not installed or not logged in; PR steps will fail", remedy: "gh auth login" });
-	}
-	return missing;
-}
-
+// Session-start check. A gap with fix=true is closed by bin/setup.sh, which never overwrites a file and
+// never prompts without a terminal. gh is only a warning, and runs in this process, never a child's env.
 async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	const policy = resolvePolicy();
 	const say = (line: string, level: "info" | "warning" = "warning") =>
 		ctx.hasUI ? ctx.ui.notify(line, level) : console.error(line);
+	const policy = resolvePolicy();
+	const agentsDir = path.join(getAgentDir(), "agents");
+	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
+	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
 	if (policy.source !== "package default") say(`zstack: onigiri policy ${policy.path} (${policy.source})`, "info");
-	for (const m of await findMissing(pi, ctx.cwd)) {
-		// No UI means nobody can answer, so never prompt and never block: print the remedy and go on.
-		if (!ctx.hasUI || !m.fix) {
-			say(`zstack: ${m.message}. Fix: ${m.remedy}`);
-			continue;
-		}
-		if (!(await ctx.ui.confirm(m.fix.title, `${m.message}.\nSame as running: ${m.remedy}`))) continue;
-		try {
-			await m.fix.run();
-			ctx.ui.notify(`zstack: fixed: ${m.message}`, "info");
-		} catch (error) {
-			ctx.ui.notify(`zstack: fix failed (${String(error)}). Run: ${m.remedy}`, "error");
-		}
+	if (!fs.existsSync(policy.path)) gaps.push({ message: `onigiri policy ${policy.path} does not exist`, remedy: "point $ONIGIRI_POLICY at a file, or unset it" });
+	else if (policy.source === "package default") gaps.push({ message: `no editable policy in ${getAgentDir()}/onigiri, using the package default`, remedy: `bash ${setup}`, fix: true });
+	const absent = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md") && !fs.existsSync(path.join(agentsDir, f)));
+	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
+	const remotes = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
+	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
+		const gh = await pi.exec("gh", ["auth", "status"], { timeout: 10000 }).catch(() => undefined);
+		if (gh?.code !== 0) gaps.push({ message: "gh is not installed or not logged in; PR steps will fail", remedy: "gh auth login" });
 	}
+	// No UI means nobody can answer: never prompt, never block, print the remedy and go on.
+	if (!ctx.hasUI || !gaps.some((g) => g.fix)) return gaps.forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
+	gaps.filter((g) => !g.fix).forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
+	const fixable = gaps.filter((g) => g.fix).map((g) => g.message);
+	if (!(await ctx.ui.confirm("Run zstack's bin/setup.sh?", `${fixable.join(".\n")}.\nIt copies what is absent and overwrites nothing.`))) return;
+	const r = await pi.exec("bash", [setup], { timeout: 30000, cwd: ctx.cwd });
+	ctx.ui.notify(r.code === 0 ? `zstack: setup.sh ran.\n${r.stdout.trim()}` : `zstack: setup.sh failed: ${r.stderr.trim()}`, r.code === 0 ? "info" : "error");
 }
 
 interface SingleResult {
