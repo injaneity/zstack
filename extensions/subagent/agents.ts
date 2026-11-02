@@ -1,6 +1,6 @@
-// Vendored unchanged from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/agents.ts.
+// Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/agents.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// The four zstack changes are all in index.ts. See docs/SUBAGENT.md.
+// Unchanged except that the unused formatAgentList export is removed. The zstack changes are in index.ts.
 
 /**
  * Agent discovery and configuration
@@ -148,14 +148,4 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
-}
-
-export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {
-	if (agents.length === 0) return { text: "none", remaining: 0 };
-	const listed = agents.slice(0, maxItems);
-	const remaining = agents.length - listed.length;
-	return {
-		text: listed.map((a) => `${a.name} (${a.source}): ${a.description}`).join("; "),
-		remaining,
-	};
 }
