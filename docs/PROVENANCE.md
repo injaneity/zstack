@@ -1,6 +1,6 @@
 # zstack provenance
 
-Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`. Every kept skill is rewritten shorter, and none of the upstream text is verbatim any more, except in the two verification skills below.
+Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`. Every kept skill is rewritten shorter, and none of the upstream text is verbatim any more, except in the two verification skills and the three vendored skills below.
 
 ## Changed everywhere
 
@@ -27,11 +27,17 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 **Folded in.** The three principle leaves (fix root causes, prove it works, test behavior) are lines in onigiri-mode's Principles and Non-negotiables. `why`'s epistemics, writeup, and notes templates are one file. `architect`'s red flags and rationale template are inside its skill. `how`'s explainer template is its output section.
 
+## Vendored verbatim
+
+`statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied byte for byte, with `statechart/scripts/` and its tests and corpus. Same MIT license and copyright as the rest of pstack.
+
+None of the zstack changes above apply to them. They keep `disable-model-invocation: true`, so pi leaves them out of the model's skill list and they run only as `/skill:statechart`, `/skill:create-formal-verification-skill` and `/skill:maintain-formal-verification-skill`. Their text still says `/statechart` and other bare slash commands, and create still calls statechart "the pstack skill". The test workflow skips the bold-name check in these three directories, because the copied text uses lowercase bold as emphasis, such as maintain's outcome labels. Links such as `../statechart/SKILL.md` are still checked. To update them, copy the three directories again from a newer cursor/plugins commit and change the sha here.
+
 ## Dropped
 
 | Dropped | Why |
 | --- | --- |
-| `poteto-help`, `arena`, `swarm`, `interrogate`, `reflect`, `orchestrate`, `autopilot-*`, `teach`, `statechart`, `no-comments`, `ketchup*`, `recall`, `in-your-own-words`, `bro`, `setup-pstack`, `make-bot-ui`, formal-verification skills | They spawn or supervise agents, or serve a chat assistant rather than a coding session. |
+| `poteto-help`, `arena`, `swarm`, `interrogate`, `reflect`, `orchestrate`, `autopilot-*`, `teach`, `no-comments`, `ketchup*`, `recall`, `in-your-own-words`, `bro`, `setup-pstack`, `make-bot-ui` | They spawn or supervise agents, or serve a chat assistant rather than a coding session. |
 | `sharpen`, `correct`, `benchmark-checklist`, 21 principle leaves | No reader. Their rules are lines in onigiri-mode. |
 | `automate-me` | Nothing called it. onigiri-mode is written by hand. |
 | `blast-radius` | The reviewer covers it. Its one key idea, finding the fact a change is safe because of, is in the reviewer's prompt. |

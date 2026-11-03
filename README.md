@@ -24,10 +24,11 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`architect`**: competing design sketches before code.
 - **`unslop`**: strips AI tells from prose.
 - **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `.pi/skills/verify-<app>/` skill that launches the real app, drives it like a user, and captures evidence, then keep its feature map honest as the app changes.
+- **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart (the first run installs Java and TLC through mise, so it needs mise and the network, unless `TLA2TOOLS` points at a local `tla2tools.jar`, with `JAVA` optionally naming the Java binary). The other two generate a repo's formal verification skill and keep it in step with the code. All three are slash-command only: `/skill:<name>`.
 - **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 
 ## license
 
-MIT, retained from pstack. Copyright (c) 2026 Lauren Tan for everything derived from it. Fork changes are under the same license. `extensions/subagent/` is from pi, MIT, Copyright (c) 2025 Mario Zechner.
+MIT, retained from pstack. Copyright (c) 2026 Lauren Tan for everything derived from it, including the three skills copied verbatim from pstack. Fork changes are under the same license. `extensions/subagent/` is from pi, MIT, Copyright (c) 2025 Mario Zechner.
