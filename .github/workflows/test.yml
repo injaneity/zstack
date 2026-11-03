@@ -38,10 +38,13 @@ jobs:
         run: |
           # A skill reference is /skill:x, ../x/SKILL.md, skills/x/, or a lowercase **x** / **`x`**.
           # Lowercase bold in these docs is reserved for skill and agent names, so a stray one fails here.
+          # The skills vendored verbatim from pstack (docs/PROVENANCE.md) use bold as emphasis, so only their links are checked.
+          verbatim='^skills/(statechart|create-formal-verification-skill|maintain-formal-verification-skill)/'
           agents=$(sed -n 's/^name: *//p' agents/*.md)
           fail=0
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^\*\*`?##; s#`?\*\*$##; s#^/skill:##; s#^\.\./##; s#^skills/##; s#/SKILL\.md$##; s#/$##')
+            [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
             [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
           done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
