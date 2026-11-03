@@ -23,6 +23,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`how`** and **`why`**: how code works, and what forces shaped it, with confidence-tiered citations.
 - **`architect`**: competing design sketches before code.
 - **`unslop`**: strips AI tells from prose.
+- **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `.pi/skills/verify-<app>/` skill that launches the real app, drives it like a user, and captures evidence, then keep its feature map honest as the app changes.
 - **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
