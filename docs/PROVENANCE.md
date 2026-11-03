@@ -1,6 +1,6 @@
 # zstack provenance
 
-Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`. Every kept skill is rewritten shorter, and none of the upstream text is verbatim any more.
+Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`. Every kept skill is rewritten shorter, and none of the upstream text is verbatim any more, except in the two verification skills below.
 
 ## Changed everywhere
 
@@ -19,7 +19,7 @@ The explorer, designer and verifier agents (zstack-explorer, zstack-designer, zs
 
 `onigiri-mode` (new, replacing `poteto-mode`), `how`, `why`, `architect`, `unslop`, `create-verification-skill`, `maintain-verification-skill`.
 
-**Verification skills.** `create-verification-skill` and `maintain-verification-skill` were dropped in the trim to a seven-skill pack and restored after 0.3.0 on request. onigiri-mode's "verify against the real thing" states the rule, and these two are how a repo gets a scripted way to follow it, so they don't overlap it. They are zstack's own pre-trim copies (forked from pstack 0.15.36, which they still match apart from the edits below), adapted: generated skills go to `.pi/skills/`, commands are `/skill:<name>`, `disable-model-invocation` is stripped, maintain's per-feature subagent wave is one source pass in the main session, an ambiguous target is listed rather than asked about, PRs go through onigiri-mode's Pull requests playbook, and long dashes are gone. The feature-map example under `references/` is pstack's, unchanged. Its `control-notes` is a made-up harness for a made-up app, not Cursor's `control-ui`.
+**Verification skills.** `create-verification-skill` and `maintain-verification-skill` were dropped in the trim to a seven-skill pack and restored after 0.3.0 on request. onigiri-mode's "verify against the real thing" states the rule, and these two are how a repo gets a scripted way to follow it, so they don't overlap it. They are zstack's own pre-trim copies of pstack 0.15.36's text, with these changes. Generated skills go to `.pi/skills/`, commands are `/skill:<name>`, and `disable-model-invocation` is stripped. Maintain's per-feature subagent wave is one source pass in the main session that may use **how**, and an ambiguous target is listed rather than asked about. Create now opens a PR for the generated skill, and both open theirs through onigiri-mode's Pull requests playbook. Create opens by citing onigiri-mode's "verify against the real thing". "Agent" became "session", and long dashes, arrows and semicolons became sentences. The feature-map example under `references/` is pstack's, unchanged. Its `control-notes` is a made-up harness for a made-up app, not Cursor's `control-ui`.
 
 In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orchestrator, taking the chat copy's hard rule and its launch and VM notes.
 
