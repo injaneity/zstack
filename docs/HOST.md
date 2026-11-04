@@ -25,4 +25,4 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## The tick
 
-`/srv/onigiri/tick/tick.py` runs from cron every 15 minutes, logs to `/srv/onigiri/events.log`, and pauses while `/srv/onigiri/tick/PAUSED` exists. In `trycua/cua` it is the only thing that merges, by the policy's merge rule. Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.
+`/srv/onigiri/tick/tick.py` runs from cron every 15 minutes, logs to `/srv/onigiri/events.log`, and pauses while `/srv/onigiri/tick/PAUSED` exists. In `trycua/cua` it is the only thing that merges, by the policy's merge rule, through one gate (`tick/gate.py`, `tick.py --explain N` prints its reasons). It never arms GitHub auto-merge, and a merge it did not make raises an unexpected-merge wake. zstack ships no merge gate. Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.
