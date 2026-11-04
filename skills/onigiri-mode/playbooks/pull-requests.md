@@ -34,7 +34,7 @@ Run it through **unslop**. Screenshots go after the sections. Prefer several nar
 6. **Triage every review comment skeptically.** Check each claim against the code. Fix real ones with a failing test first, and dismiss noise with the disproof on the thread. Escalate security, auth, billing, data, or migrations. Never churn code to quiet a bot. Push before replying. Reply with `gh api --method POST "repos/<owner>/<repo>/pulls/<pr>/comments/<id>/replies" --input <payload.json>`, never by interpolating comment text into a shell command.
 7. **Stop at the human's line.** A maintainer's review is a wait. `drive` ends at mergeable with a clean rollup at the head.
 8. **Verify (`land` only).** Run Verify below, for your own PR or anyone else's. Merging needs `PASS` or `PASS+NOTES` at the current head, posted on the PR. If the head moves, verify again.
-9. **Merge (`land` only).** The body must carry the policy's `verify:` and `risk:` lines for the current head. Then `gh pr merge <pr> --squash`, or the repo's method, unless the policy says someone else merges. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge. Arm `--auto` only when the verdict covers the head.
+9. **Merge (`land` only).** The body must carry the policy's `verify:` lines and `risk:` line for the current head. Then `gh pr merge <pr> --squash`, or the repo's method, unless the policy says someone else merges. Where it does, do not merge and do not arm `--auto` either. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge. Elsewhere, arm `--auto` only when the verdict covers the head.
 
 ## Verify
 
@@ -44,6 +44,6 @@ You own the verdict, not the patch. Don't fix, post, or merge unless asked.
 2. Run the relevant checks and exercise the behavior on its real surface at that head. Run a failing check at the base before blaming the PR. Green CI and reading the source are not verification.
 3. Write the verdict with its evidence and limits, then cut claims the evidence doesn't support.
 
-`PASS`, `PASS+NOTES` (non-blocking caveats), `FAIL` (a demonstrated defect), or `BLOCKED` (the environment prevents a check). A required check that never ran is not a pass. Pin it to the full 40-character head sha: `PASS <sha>` alone as the first line of `verdict.md`, or the policy's `verify:` line in the PR body when asked to post. The tick reads only those exact forms, so a `PASS+NOTES` verdict still writes `PASS <sha>` first and puts the notes below it.
+`PASS`, `PASS+NOTES` (non-blocking caveats), `FAIL` (a demonstrated defect), or `BLOCKED` (the environment prevents a check). A required check that never ran is not a pass. Pin it to the full 40-character head sha in the PR body, as the policy's `verify:` line plus a `verify-ran:` line naming what ran and what was skipped. A merge gate reads only the body, never a local `verdict.md`, so a `PASS+NOTES` verdict still writes the plain `verify: PASS at <sha>` line and puts the notes below it.
 
 **Reply:** the job, the PR URL, the head SHA, what changed or the verdict with its evidence, and whether it merged.
