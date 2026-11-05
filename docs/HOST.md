@@ -4,28 +4,39 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## Machines
 
-- **The box** runs the chat orchestrator and the tick. **The VM** (onigiri-linux) runs every pi session. The relay Mac holds the VM's key and `~/onigiri-vm/vm`.
+- **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key and `~/onigiri-vm/vm`.
 - Reach the VM from the box with `HOME=/home/box /srv/onigiri/tools/cua-main-88e6d9f do --no-record shell '~/onigiri-vm/vm "..."'`. For anything longer than a line, base64 a script over and run it as `bash /tmp/x.sh`. If the VM is unreachable, stop and ask Zane. Never do the work in the chat instead.
 - `pi list` on the VM shows `git:github.com/injaneity/zstack`, checked out at `/home/box/.pi/agent/git/github.com/injaneity/zstack`. `/home/box/.pi/agent/skills/` is empty by design.
 
 ## Policy
 
 - The live policy is `/srv/onigiri/policy.md`. `/home/box/.pi/agent/onigiri/policy.md` is a symlink to it, so lookup step 2 finds it with no `$ONIGIRI_POLICY` set.
-- Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. The tick reads it on every check. Only Zane edits it.
+- Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. The merge job reads it on every run. Only Zane edits it.
 
 ## Launching
 
 - Models come only from `config/models.json`, one provider and model per role. Each launcher takes a role, resolves it with `bin/model-for`, and records it as the session name `role:<role>`. `bin/check-models` reads that name and the provider and model each reply came from in the pi session files, and prints every mismatch with the config. Run it on either host with no arguments.
 - VM: `/home/box/bin/pi-run` is a shim that execs `hosts/vm/pi-run <session-id> <role> <brief-file>`. It sources `/home/box/.profile`, which holds the Claude token, and appends `/srv/onigiri/policy.md` by literal path. A non-login shell without the profile looks logged out. The old `<provider> <model>` form still parses but runs as role `coding` with a warning.
 - Mini: `~/onigiri/bin/pi-run-mini` is a shim that execs `hosts/mini/pi-run-mini <slug> <brief-file> [<role>]` (default `coding`). It prepends `hosts/mini/host-mini.md` to the brief and starts the package's `bin/pi-run` detached in `~/onigiri/review/<slug>`.
-- The tick's pickup calls the VM launcher from `/srv/onigiri/tick/pi-task.sh`. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
+- The hourly routine does every pickup and launch. Nothing on the VM starts pi on a schedule. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
 - Each host keeps its own provider logins in `<agent dir>/auth.json`. Never copy one host's tokens to the other: an OpenAI refresh token is single use, so two hosts sharing one invalidate each other with `refresh_token_reused`.
 - `gh` runs as injaneity with `GH_CONFIG_DIR=/home/box/.config/gh HOME=/home/box`. Upstream or public posts go only through dumpling.
 
 ## Disk
 
-`df -h /` must show well over 30G free. The tick pauses itself below 30G, and a run that hits ENOSPC dies while its task record still says `running`. The tick deletes `node_modules` and cargo `target/` dirs in finished runs. Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
+`df -h /` must show well over 30G free. A run that hits ENOSPC dies mid-task. Nothing guards the disk on a schedule. The hourly routine records free space with every pickup decision. Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
 
-## The tick
+## The merge job
 
-`/srv/onigiri/tick/tick.py` runs from cron every 15 minutes, logs to `/srv/onigiri/events.log`, and pauses while `/srv/onigiri/tick/PAUSED` exists. In `trycua/cua` it is the only thing that merges, by the policy's merge rule, through one gate (`tick/gate.py`, `tick.py --explain N` prints its reasons). It never arms GitHub auto-merge, and a merge it did not make raises an unexpected-merge wake. zstack ships no merge gate. Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.
+`hosts/vm/merge_job.py` is the only thing that merges in `trycua/cua`, by the policy's merge rule. Cron runs it every minute through `hosts/vm/cron-wrap.sh tick 900 2400`, which starts it once 15 minutes have passed since the last start (the VM is paused between sessions and cron skips the slots it missed), kills it after 40 minutes, and writes start and end lines to `/srv/onigiri/tick/cron.log`:
+
+```
+* * * * * HOME=/home/box GH_CONFIG_DIR=/home/box/.config/gh /home/box/.pi/agent/git/github.com/injaneity/zstack/hosts/vm/cron-wrap.sh tick 900 2400 /usr/bin/flock -n /srv/onigiri/tick/tick.lock /usr/bin/nice -n 5 /usr/bin/python3 /home/box/.pi/agent/git/github.com/injaneity/zstack/hosts/vm/merge_job.py > /dev/null 2>> /srv/onigiri/tick/tick.log
+```
+
+- The gate is three checks at the PR head: `ci-gate` SUCCESS, no hold row (`hold`, `no-move`, or a `hands-off-path` the diff hits by its `mode=`), and a `preapprove` row at that head for a declared deep or human tier. Skipped or missing platform jobs don't block when ci-gate is green. Beside the gate, GitHub must be able to merge (not a draft, no conflict, mergeable) and `/srv/onigiri/tick/PAUSED` must not exist.
+- Per open PR by injaneity: merge (`gh pr merge --squash --match-head-commit`), ready a draft whose only blocker is CI, rerun a red ci-gate's failed runs once per head, buffer for onigiri, or skip. It never arms auto-merge. A merge as injaneity it did not make raises an urgent `unexpected-merge` wake.
+- Outputs keep the tick's paths: `/srv/onigiri/events.log`, `/srv/onigiri/buffer.jsonl`, and `state.json`, `last-run`, `cron.log` and `tick.log` in `/srv/onigiri/tick/`, which holds data only.
+- `merge_job.py --dry-run` prints one `dry-run cua#N <head> <action>: <reasons>` line per PR and changes nothing. `--explain N` prints every reason for one PR.
+- The patent hold is cua's pre-push hook: `ln -sf <zstack>/hosts/vm/pre-push /srv/onigiri/cua/.git/hooks/pre-push`. It runs `hosts/vm/patent_push.py`.
+- Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.

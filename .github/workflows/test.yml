@@ -21,6 +21,12 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
+      - name: merge job and patent hook tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: lint the VM host scripts
+        run: |
+          pipx run ruff==0.17.3 check hosts/vm tests
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
       - name: skills and agent types have frontmatter

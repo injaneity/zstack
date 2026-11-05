@@ -1,0 +1,4 @@
+#!/bin/sh
+# cua's pre-push hook: the patent hold at publish time (patent_push.py, next to this file). docs/HOST.md installs it
+# as a symlink at /srv/onigiri/cua/.git/hooks/pre-push, so it follows this checkout. Do not bypass with --no-verify.
+exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/patent_push.py" "$@"
