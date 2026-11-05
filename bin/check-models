@@ -54,7 +54,7 @@ def main(argv):
         for d in sorted(p for p in glob.glob(os.path.join(os.path.realpath(root), "*")) if os.path.isdir(p)):
             slug = os.path.basename(d)
             mine = [s for s in sessions if s["id"] in (slug, "pi-" + slug)
-                    or (s["cwd"] and os.path.realpath(s["cwd"]).startswith(d + os.sep)) or s["cwd"] == d]
+                    or (s["cwd"] and os.path.realpath(s["cwd"]).startswith(d + os.sep)) or os.path.realpath(s["cwd"]) == d]
             if not mine:
                 print("%-34s %-9s %-30s %-40s %s" % (slug, "-", "-", "-", "no session file"))
                 continue
