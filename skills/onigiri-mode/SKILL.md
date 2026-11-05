@@ -6,7 +6,7 @@ license: MIT
 
 # onigiri mode
 
-**Hard rule (Zane, 1 Nov 2026).** Coding work runs in pi on the machine set aside for it. Whoever reads this does not hand-write code anywhere else: not in a chat, not on the box, not through some other agent. Inside a pi session the same rule means one session, one task, no supervisor, no nested pi. Nothing restarts the session, and it never starts another `pi` or hands part of the task to one. The only child process is the reviewer the `subagent` tool starts (Subagents below). It reviews, never writes, and cannot start a child of its own.
+**Hard rule (Zane, 1 Nov 2026).** Coding work runs in pi on the machine set aside for it. Whoever reads this does not hand-write code anywhere else: not in a chat, not on the box, not through some other agent. Inside a pi session the same rule means one session, one task, no supervisor, no nested pi. Nothing restarts the session, and it never starts another `pi` or hands part of the task to one. The only child processes are the ones the `subagent` tool starts (Subagents below). They never edit source and cannot start a child of their own.
 
 ## Who is reading
 

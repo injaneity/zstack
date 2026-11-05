@@ -7,8 +7,8 @@
 // refused; (e) children get an environment without forge or git credentials; (f) a session_start
 // check reports a missing policy, agent file or gh login, and offers the fix only with a UI; (g) a child's
 // provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
-// parent model with a warning; (h) children save a session named role:<agent> so bin/check-models can read
-// what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
+// parent model with a warning; (h) children save a session named role:<agent>, under sessions/subagents/, so
+// bin/check-models can read what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
 // tool renderer shows the result.
 // See docs/SUBAGENT.md.
 
@@ -46,6 +46,8 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PACKAGE_POLICY = path.join(PACKAGE_DIR, "policy.md");
 const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
+// Children are saved apart from top-level sessions, so resuming or `pi --continue` never picks one up.
+const CHILD_SESSIONS = path.join(getAgentDir(), "sessions", "subagents");
 const NO_POLLING_LINE =
 	"Do not use `sleep` or repeated polling to wait for anything. Long waits are the tick's job: report what you are waiting on and stop.";
 const POLICY_FRAMING =
@@ -88,7 +90,7 @@ function resolvePolicy(): { path: string; source: string } {
 	return { path: PACKAGE_POLICY, source: "package default" };
 }
 
-// A missing policy fails open, so the reviewer still runs before setup, but loudly: one stderr line
+// A missing policy fails open, so a child still runs before setup, but loudly: one stderr line
 // naming the path, and one line in the child's prompt.
 function buildChildPrompt(agentPrompt: string): string {
 	const parts = [agentPrompt.trim(), NO_POLLING_LINE].filter(Boolean);
@@ -140,13 +142,17 @@ function seatFor(agent: string, variant: number | undefined): { seat?: Seat; lab
 }
 
 // Resolves the seat's credentials in this process, refreshing an expired OAuth token, so a dead login is
-// caught before the child starts. Returns why the seat can't be used, or undefined when it can.
+// caught before the child starts. Returns why the seat can't be used, or undefined when it can. A model
+// missing from pi's catalog is not a failure: pi runs it as a custom id, so only the provider's auth is checked.
 async function seatProblem(ctx: ExtensionContext, seat: Seat): Promise<string | undefined> {
-	const model = ctx.modelRegistry.find(seat.provider, seat.model);
-	if (!model) return "model not found";
 	try {
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		return auth.ok ? undefined : auth.error;
+		const model = ctx.modelRegistry.find(seat.provider, seat.model);
+		if (model) {
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			return auth.ok ? undefined : auth.error;
+		}
+		if (!ctx.modelRegistry.getProvider(seat.provider)) return `provider ${seat.provider} not found`;
+		return (await ctx.modelRegistry.getProviderAuth(seat.provider)) ? undefined : `no credentials for ${seat.provider}`;
 	} catch (error) {
 		return (error as Error).message ?? String(error);
 	}
@@ -256,6 +262,7 @@ type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 // parent's thinking level for an inherited model, and the session id and name it is saved under.
 interface Launch {
 	seat?: Seat;
+	fallback: boolean;
 	parent?: Seat;
 	thinkingLevel?: ThinkingLevel;
 	sessionId: string;
@@ -287,8 +294,8 @@ async function runSingleAgent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--session-id", launch.sessionId, "--name", launch.name];
-	const seat = launch.seat ?? (agent.model ? undefined : launch.parent);
+	const args: string[] = ["--mode", "json", "-p", "--session-dir", CHILD_SESSIONS, "--session-id", launch.sessionId, "--name", launch.name];
+	const seat = launch.seat ?? (launch.fallback || !agent.model ? launch.parent : undefined);
 	let model: string | undefined;
 	if (seat) {
 		args.push("--provider", seat.provider, "--model", seat.model);
@@ -446,7 +453,7 @@ export default function (pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const parent: Seat | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
 			const discovery = discoverAgents(ctx.cwd, agentScope);
@@ -508,9 +515,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			const launch: Launch = {
 				seat,
+				fallback: Boolean(warning),
 				parent,
 				thinkingLevel: ctx.thinkingLevel,
-				sessionId: `${ctx.sessionManager.getSessionId()}-${label.replace(":", "-")}-${Date.now().toString(36)}`,
+				sessionId: `${ctx.sessionManager.getSessionId()}-${label.replace(":", "-")}-${toolCallId.replace(/[^\w]+/g, "").slice(-12)}`,
 				name: `role:${label}${warning ? " fallback" : ""}`,
 			};
 			const result = await runSingleAgent(
