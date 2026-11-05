@@ -5,8 +5,11 @@
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
 // are told not to sleep or poll; (d) with no UI in an untrusted project, project agents are
 // refused; (e) children get an environment without forge or git credentials; (f) a session_start
-// check reports a missing policy, agent file or gh login, and offers the fix only with a UI. Upstream's parallel and
-// chain modes and its custom renderers are removed; pi's default tool renderer shows the result.
+// check reports a missing policy, agent file or gh login, and offers the fix only with a UI; (g) a child's
+// provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
+// parent model with a warning; (h) children save a session named role:<agent> so bin/check-models can read
+// what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
+// tool renderer shows the result.
 // See docs/SUBAGENT.md.
 
 /**
@@ -42,6 +45,7 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PACKAGE_POLICY = path.join(PACKAGE_DIR, "policy.md");
+const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
 const NO_POLLING_LINE =
 	"Do not use `sleep` or repeated polling to wait for anything. Long waits are the tick's job: report what you are waiting on and stop.";
 const POLICY_FRAMING =
@@ -104,6 +108,48 @@ function buildChildPrompt(agentPrompt: string): string {
 		parts.push(POLICY_FRAMING, policy);
 	}
 	return `${parts.join("\n\n")}\n`;
+}
+
+interface Seat {
+	provider: string;
+	model: string;
+}
+
+// The seat config/models.json gives an agent, keyed by agent name. A role whose value is a list has one seat
+// per variant (1-based), as the two designers do. No entry means the agent runs on the parent's model.
+function seatFor(agent: string, variant: number | undefined): { seat?: Seat; label: string; error?: string } {
+	let roles: Record<string, unknown>;
+	try {
+		roles = JSON.parse(fs.readFileSync(MODELS_CONFIG, "utf-8")).roles ?? {};
+	} catch (error) {
+		return { label: agent, error: `cannot read ${MODELS_CONFIG}: ${(error as Error).message}` };
+	}
+	const isSeat = (v: any): v is Seat => typeof v?.provider === "string" && typeof v?.model === "string";
+	const entry = Object.hasOwn(roles, agent) ? roles[agent] : undefined;
+	if (entry === undefined) {
+		return variant ? { label: agent, error: `${agent} has no seats in ${MODELS_CONFIG}; drop variant` } : { label: agent };
+	}
+	if (Array.isArray(entry)) {
+		if (!variant || variant > entry.length)
+			return { label: agent, error: `${agent} has ${entry.length} seats in ${MODELS_CONFIG}; pass variant 1 to ${entry.length}` };
+		const seat = entry[variant - 1];
+		return isSeat(seat) ? { seat, label: `${agent}:${variant}` } : { label: agent, error: `${agent} seat ${variant} in ${MODELS_CONFIG} needs provider and model` };
+	}
+	if (variant) return { label: agent, error: `${agent} has one seat in ${MODELS_CONFIG}; drop variant` };
+	return isSeat(entry) ? { seat: entry, label: agent } : { label: agent, error: `${agent} in ${MODELS_CONFIG} needs provider and model` };
+}
+
+// Resolves the seat's credentials in this process, refreshing an expired OAuth token, so a dead login is
+// caught before the child starts. Returns why the seat can't be used, or undefined when it can.
+async function seatProblem(ctx: ExtensionContext, seat: Seat): Promise<string | undefined> {
+	const model = ctx.modelRegistry.find(seat.provider, seat.model);
+	if (!model) return "model not found";
+	try {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		return auth.ok ? undefined : auth.error;
+	} catch (error) {
+		return (error as Error).message ?? String(error);
+	}
 }
 
 // Session-start check. A gap with fix=true is closed by bin/setup.sh, which never overwrites a file and
@@ -206,14 +252,19 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
-interface DispatchDefaults {
-	model?: string;
+// How one child is launched: its model (or none, to use the agent file's or the parent's), the
+// parent's thinking level for an inherited model, and the session id and name it is saved under.
+interface Launch {
+	seat?: Seat;
+	parent?: Seat;
 	thinkingLevel?: ThinkingLevel;
+	sessionId: string;
+	name: string;
 }
 
 async function runSingleAgent(
 	defaultCwd: string,
-	dispatchDefaults: DispatchDefaults,
+	launch: Launch,
 	agents: AgentConfig[],
 	agentName: string,
 	task: string,
@@ -236,13 +287,18 @@ async function runSingleAgent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = !agent.model;
-	const model = agent.model ?? dispatchDefaults.model;
-	if (model) args.push("--model", model);
-	if (inheritsDispatchConfig && dispatchDefaults.thinkingLevel) {
-		args.push("--thinking", dispatchDefaults.thinkingLevel);
+	const args: string[] = ["--mode", "json", "-p", "--session-id", launch.sessionId, "--name", launch.name];
+	const seat = launch.seat ?? (agent.model ? undefined : launch.parent);
+	let model: string | undefined;
+	if (seat) {
+		args.push("--provider", seat.provider, "--model", seat.model);
+		model = `${seat.provider}/${seat.model}`;
+	} else if (agent.model) {
+		args.push("--model", agent.model);
+		model = agent.model;
 	}
+	const parentModel = seat && launch.parent && seat.provider === launch.parent.provider && seat.model === launch.parent.model;
+	if (parentModel && launch.thinkingLevel) args.push("--thinking", launch.thinkingLevel);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	let tmpPromptDir: string | null = null;
@@ -372,6 +428,9 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	variant: Type.Optional(
+		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from config/models.json" }),
+	),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -389,10 +448,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
-			const dispatchDefaults: DispatchDefaults = {
-				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-				thinkingLevel: ctx.thinkingLevel,
-			};
+			const parent: Seat | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
@@ -438,9 +494,28 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			const { seat: configured, label, error: seatError } = seatFor(params.agent, params.variant);
+			if (seatError) return { content: [{ type: "text", text: `subagent: ${seatError}` }], details: makeDetails([]), isError: true };
+			let seat = configured;
+			let warning = "";
+			const sameAsParent = seat && parent && seat.provider === parent.provider && seat.model === parent.model;
+			const problem = seat && !sameAsParent ? await seatProblem(ctx, seat) : undefined;
+			if (seat && problem) {
+				const to = parent ? `${parent.provider}/${parent.model}` : "pi's default model";
+				warning = `subagent: WARNING ${label} cannot use ${seat.provider}/${seat.model} (${problem}); falling back to the parent model ${to}`;
+				console.error(warning);
+				seat = undefined;
+			}
+			const launch: Launch = {
+				seat,
+				parent,
+				thinkingLevel: ctx.thinkingLevel,
+				sessionId: `${ctx.sessionManager.getSessionId()}-${label.replace(":", "-")}-${Date.now().toString(36)}`,
+				name: `role:${label}${warning ? " fallback" : ""}`,
+			};
 			const result = await runSingleAgent(
 				ctx.cwd,
-				dispatchDefaults,
+				launch,
 				agents,
 				params.agent,
 				params.task,
@@ -449,15 +524,16 @@ export default function (pi: ExtensionAPI) {
 				onUpdate,
 				makeDetails,
 			);
+			const prefix = warning ? `${warning}\n\n` : "";
 			if (isFailedResult(result)) {
 				return {
-					content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}` }],
+					content: [{ type: "text", text: `${prefix}Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}` }],
 					details: makeDetails([result]),
 					isError: true,
 				};
 			}
 			return {
-				content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+				content: [{ type: "text", text: prefix + (getFinalOutput(result.messages) || "(no output)") }],
 				details: makeDetails([result]),
 			};
 		},

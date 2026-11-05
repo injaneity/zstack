@@ -1,17 +1,28 @@
 #!/bin/bash
-# model-for <role>: prints "<provider> <model>" for <role> from the package's config/models.json.
-# model-for --roles lists the roles. Exit 1 for a role the file does not name.
+# model-for <role>[:<n>]: prints "<provider> <model>" for <role> from the package's config/models.json.
+# A role with several seats (designer) needs :<n>, 1-based. model-for --roles lists every role and seat.
+# An alias (the launchers' older role names, such as coding) resolves to its role. Exit 1 for a name the file lacks.
 set -eu
 cfg="$(cd "$(dirname "$0")/.." && pwd)/config/models.json"
-case "${1:-}" in ''|-h|--help) echo "usage: model-for <role> | --roles" >&2; exit 2;; esac
+case "${1:-}" in ''|-h|--help) echo "usage: model-for <role>[:<n>] | --roles" >&2; exit 2;; esac
 exec python3 -I -c '
 import json, sys
-cfg, role = sys.argv[1:]
-roles = json.load(open(cfg)).get("roles", {})
-if role == "--roles":
-    print("\n".join(roles)); sys.exit(0)
-r = roles.get(role)
+cfg, want = sys.argv[1:]
+data = json.load(open(cfg))
+roles = data.get("roles", {})
+alias = data.get("aliases", {})
+if want != "--roles" and want.split(":")[0] in alias:
+    want = ":".join([alias[want.split(":")[0]]] + want.split(":")[1:])
+seats = {}
+for name, v in roles.items():
+    if isinstance(v, list):
+        for i, s in enumerate(v, 1): seats["%s:%d" % (name, i)] = s
+    else:
+        seats[name] = v
+if want == "--roles":
+    print("\n".join(seats)); sys.exit(0)
+r = seats.get(want)
 if not (isinstance(r, dict) and isinstance(r.get("provider"), str) and isinstance(r.get("model"), str)):
-    sys.exit("model-for: no role %r in %s (roles: %s)" % (role, cfg, ", ".join(roles)))
+    sys.exit("model-for: no role %r in %s (roles: %s)" % (want, cfg, ", ".join(seats)))
 print(r["provider"], r["model"])
 ' "$cfg" "$1"

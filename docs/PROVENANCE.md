@@ -7,13 +7,13 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 - **Model-invocable.** `disable-model-invocation: true` is stripped. In pi it hides a skill from the model instead of reserving it for a slash command.
 - **pi, not Cursor.** No `/loop`, cloud agents, `control-ui`, todo tool, Bugbot rubric, or `.cursor/` paths. Sessions are read from `~/.pi/agent/sessions/`, and PRs through `gh`.
 - **Repo-agnostic.** Project rules live in each repo's own `AGENTS.md`, and onigiri-mode's repo rules defer to it.
-- **No models in skills.** pstack named a model per role. zstack names none, so agents inherit the main model, and `bin/pi-run` uses pi's configured default unless given one.
+- **Models per role live in the config.** pstack named a model per role inside its skills. zstack names none in skills or agent files. `config/models.json` maps each role to a provider and model, the `subagent` tool reads it by agent name, and the host launchers read it through `bin/model-for`.
 
 ## Subagents
 
-The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `docs/SUBAGENT.md` has its source, what was cut, and its six changes. Its one agent is `onigiri-reviewer`, at `pull-requests` Open, because an author can't read its own diff cold.
+The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `docs/SUBAGENT.md` has its source, what was cut, and its changes.
 
-The explorer, designer and verifier agents (zstack-explorer, zstack-designer, zstack-verifier) were dropped in 0.2.0 because no session ever spawned them. Their steps run in the main session, and their one useful idea, saying what makes a change safe, is in the reviewer's prompt. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
+The explorer, designer and verifier agents were dropped in 0.2.0, when no session ever spawned them and a cold reviewer was the only agent. They came back, cheaper and with simple gates, when Zane chose a split by role: the main session builds, an optional `explorer` reads, two `designer`s compete on deep or new work only, and a `verifier` replaces that reviewer, reviewing the diff and running the matching verify skill. Explorer and verifier run on a cheaper model than the builder. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
 
 ## Kept
 
@@ -40,7 +40,7 @@ None of the zstack changes above apply to them. They keep `disable-model-invocat
 | `poteto-help`, `arena`, `swarm`, `interrogate`, `reflect`, `orchestrate`, `autopilot-*`, `teach`, `no-comments`, `ketchup*`, `recall`, `in-your-own-words`, `bro`, `setup-pstack`, `make-bot-ui` | They spawn or supervise agents, or serve a chat assistant rather than a coding session. |
 | `sharpen`, `correct`, `benchmark-checklist`, 21 principle leaves | No reader. Their rules are lines in onigiri-mode. |
 | `automate-me` | Nothing called it. onigiri-mode is written by hand. |
-| `blast-radius` | The reviewer covers it. Its one key idea, finding the fact a change is safe because of, is in the reviewer's prompt. |
+| `blast-radius` | The verifier covers it. Its one key idea, finding the fact a change is safe because of, is in the verifier's prompt. |
 | `tdd`, `technical-writing`, `typescript-best-practices` | `tdd` duplicated a personal skill. `technical-writing` overlapped `unslop` and opening-a-pr's description rules. The TypeScript rules are onigiri-mode guards. |
 | `experiment`, `visual-parity`, `multi-phase-plan`, `worktree-cleanup` playbooks | Niche, or built for a team process. Large work starts from onigiri-mode's no-playbook line. |
 | `why`'s vendor source guides, `bugbot-triage` | Each assumed a tool or bot we don't use. |

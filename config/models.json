@@ -1,8 +1,12 @@
 {
   "roles": {
-    "coding": { "provider": "claude-code", "model": "claude-opus-5-5" },
-    "review": { "provider": "openai-codex", "model": "gpt-6.1-terra" },
-    "reads": { "provider": "openai-codex", "model": "gpt-6.1-terra" },
-    "research": { "provider": "claude-code", "model": "claude-opus-5-5" }
-  }
+    "builder": { "provider": "claude-code", "model": "claude-opus-5-5" },
+    "explorer": { "provider": "openai-codex", "model": "gpt-6.1-terra" },
+    "designer": [
+      { "provider": "claude-code", "model": "claude-opus-5-5" },
+      { "provider": "openai-codex", "model": "gpt-6.1-terra" }
+    ],
+    "verifier": { "provider": "openai-codex", "model": "gpt-6.1-terra" }
+  },
+  "aliases": { "coding": "builder", "reads": "explorer", "research": "explorer", "review": "verifier" }
 }

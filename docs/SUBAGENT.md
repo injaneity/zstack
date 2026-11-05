@@ -1,6 +1,6 @@
 # subagent tool
 
-`extensions/subagent/` gives pi a `subagent` tool. Each call starts a separate `pi` process with its own context window, runs one agent from `~/.pi/agent/agents/` (or a project's `.pi/agents/` with `agentScope: "both"`), and returns the agent's final text. A call takes one `agent` and one `task`.
+`extensions/subagent/` gives pi a `subagent` tool. Each call starts a separate `pi` process with its own context window, runs one agent from `~/.pi/agent/agents/` (or a project's `.pi/agents/` with `agentScope: "both"`), and returns the agent's final text. A call takes one `agent` and one `task`, plus `variant` for a role with several seats (the two designers).
 
 It is pi 1.4.0's example extension, `examples/extensions/subagent/` in `@earendil-works/pi-coding-agent`, MIT, Copyright (c) 2025 Mario Zechner.
 
@@ -21,13 +21,15 @@ All are in `index.ts`.
    - `GH_CONFIG_DIR` points at an empty per-child directory, so `gh` finds no stored login, and git's `gh auth git-credential` helper gets nothing either.
    - `GIT_TERMINAL_PROMPT=0`, so git fails instead of asking for a password.
 6. **Dependency check at session start.** On `session_start` in a top-level session the extension names the policy file when it is not the package default, and checks three things: a policy resolved, the agent files are in `<pi agent dir>/agents/`, and `gh` is logged in when the working directory has a GitHub remote. With a UI, a missing policy copy or agent file is one confirm that offers to run `bin/setup.sh`, and no is a valid answer. Without a UI (`pi -p`) it prints one stderr line per gap with the command that fixes it, and goes on. `gh` is only ever a warning. Nothing is installed without a yes.
+7. **Model by role.** The child's provider and model come from the package's `config/models.json`, keyed by agent name. A role whose value is a list has one seat per `variant`, 1-based, so `designer` variant 1 and variant 2 run on different providers. The child gets both `--provider` and `--model`, so a claude-code parent can start an openai-codex child. Before spawning, the tool resolves that seat's credentials in the parent's process, refreshing an expired OAuth token, through `ctx.modelRegistry.getApiKeyAndHeaders`. If that fails, the tool prints `subagent: WARNING <agent> cannot use <provider>/<model> (<reason>); falling back to the parent model <parent>` to stderr, puts the same line at the top of the tool result, and runs the child on the parent's provider, model and thinking level. An agent with no config entry runs on the parent's model, or on its agent file's `model:` if it has one. No agent file in `agents/` names a model, and CI checks that.
+8. **Child sessions are saved.** Upstream ran children with `--no-session`. Each child now gets `--session-id <parent id>-<agent>[-<variant>]-<stamp>` and `--name role:<agent>[:<variant>]` (with ` fallback` appended after a fallback), so its transcript and the provider and model of every reply land in `~/.pi/agent/sessions/`, where `bin/check-models` reads them back against the config.
 
 ## What "read-only" means
 
-pi enforces an agent's `tools:` list: `onigiri-reviewer` gets `read, grep, find, ls, bash` and no `edit` or `write`. But `bash` is not sandboxed. A child can still write files through bash, run any local command, and reach the network. The reviewer keeps `bash` because it needs `git diff`, `git log` and `git show`. So "read-only" is an instruction in the reviewer's prompt, not a boundary. The real bound is trust in that prompt plus the missing credentials: without a token, a child cannot push, merge, comment or close through `gh` or git over HTTPS. Credentials kept elsewhere on disk (an SSH key, a `.netrc`) are not hidden.
+pi enforces an agent's `tools:` list: `explorer`, `designer` and `verifier` get `read, grep, find, ls, bash` and no `edit` or `write`. But `bash` is not sandboxed. A child can still write files through bash, run any local command, and reach the network. They keep `bash` because they need `git diff`, `git log`, `git show`, and for the verifier the repo's checks. So "read-only" is an instruction in each agent's prompt, not a boundary. The real bound is trust in that prompt plus the missing credentials: without a token, a child cannot push, merge, comment or close through `gh` or git over HTTPS. Credentials kept elsewhere on disk (an SSH key, a `.netrc`) are not hidden.
 
 ## Behaviour to know
 
-- **Model.** A child gets `--model` from its agent file's `model:`. Without one it inherits the parent's model and thinking level.
-- **Transcripts are not saved.** Children run with `--no-session`, so nothing lands in `~/.pi/agent/sessions/`. Only the final text and the tool details in the parent's session survive. That is a known cost: a child's reasoning can't be read back later, so ask it for evidence in its answer.
+- **Model.** Change 7. A seat that matches the parent's own provider and model skips the auth check and inherits the parent's thinking level. A seat on another provider runs at that provider's default thinking level.
+- **Transcripts are saved.** Change 8. A child's session file sits under the parent's working directory in `~/.pi/agent/sessions/`.
 - **Agents are installed, not discovered.** The loader can't see a package's own `agents/`. Run `bin/install-agents.sh` to copy them into `~/.pi/agent/agents/`.

@@ -37,16 +37,19 @@ license: MIT
 
 ## Subagents
 
-zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agent dir>/agents/` by `bin/install-agents.sh`. A child uses your model unless its agent file names one.
+zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agent dir>/agents/` by `bin/install-agents.sh`. Each child's provider and model come from the package's `config/models.json` by agent name. If that provider's login fails, the child runs on your model, and the tool's result starts with a warning line.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|
-| Review | `onigiri-reviewer` | Pull requests (Open) | A diff ships. |
+| Explore | `explorer` | Any | Optional. A narrow question would otherwise mean reading a lot of code, logs or PRs yourself. |
+| Design | `designer`, twice (`variant` 1 and 2) | Change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
+| Verify | `verifier` | Pull requests (Open), and after every push | Every diff that ships. Its `ran …; skipped …; result …` line feeds the `verified <sha>` PR comment, once you have checked each finding. |
 
 - **Nowhere else.** Do everything else yourself.
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.
-- **No nesting.** A child has no `subagent` tool, and a brief never asks its `bash` to start `pi`. Without the tool or the agent, review the diff yourself and say so.
+- **No nesting.** A child has no `subagent` tool, and a brief never asks its `bash` to start `pi`. Without the tool or the agent, do that step yourself and say so.
+- **No new gate.** A verifier's pass is evidence for your PR comment, not a merge gate. The policy's merge rule is unchanged.
 
 ## Autonomy
 

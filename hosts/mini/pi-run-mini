@@ -10,10 +10,10 @@ pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 [ $# -ge 2 ] || { echo "usage: pi-run-mini <slug> <brief file> [<role>]" >&2; exit 2; }
 slug=$1; brief=$2; role=${3:-coding}
 # the old third argument was a model id. Only the config picks models now, so a non-role runs as coding.
-if ! "$pkg/bin/model-for" --roles | grep -qxF -- "$role"; then
+if ! pm=$("$pkg/bin/model-for" "$role" 2>/dev/null); then
   echo "pi-run-mini: '$role' is not a role in config/models.json; running as role coding" >&2; role=coding
+  pm=$("$pkg/bin/model-for" "$role") || exit 2
 fi
-pm=$("$pkg/bin/model-for" "$role") || exit 2
 provider=${pm% *}; model=${pm#* }
 d=$HOME/onigiri/review/$slug; mkdir -p "$d"
 # launch lock: mkdir is atomic, so two near-simultaneous launches can't both pass the check below.
