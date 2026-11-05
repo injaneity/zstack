@@ -27,6 +27,7 @@ session() { # <id> <role or -> <provider> <model>
 session pi-good reads "$rp" "$rm"
 session pi-wrong reads "$cp" "$cm"
 session pi-old - "$cp" "$cm"
+echo '{"type":"session","id":"stray"}' > "$t/agent/sessions/x/stray.jsonl"  # no cwd: must not crash the scan
 out=$(PI_CODING_AGENT_DIR="$t/agent" "$pkg/bin/check-models" "$t/review"); rc=$?
 row() { echo "$out" | awk -v s="$1" '$1==s' ; }
 check "check-models exits 1 on a mismatch" "$rc" 1
