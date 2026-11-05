@@ -10,7 +10,7 @@ Three jobs: **Open** ends every change, and the policy's merge rule decides who 
 
 **Clean the diff.** Remove narrating comments, guards for impossible states, dead compatibility paths, and edits outside the stated scope.
 
-**Review it cold.** Spawn an `onigiri-reviewer` (onigiri-mode's Subagents rules) with the diff range and the stated scope. Check each finding against the code. Fix the real ones, and note dismissals with the reason in the description.
+**Verify it cold.** Spawn a `verifier` (onigiri-mode's Subagents rules) with the diff range, the stated scope and the worktree. Check each finding against the code, and rerun any check whose result you will cite. Fix the real ones, and note dismissals with the reason in the description.
 
 **Title.** `type(scope): subject`, short and imperative, naming a real symbol when one carries the change.
 

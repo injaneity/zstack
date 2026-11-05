@@ -2,7 +2,7 @@
 
 [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan, trimmed for pi.
 
-pstack splits work across agents: one model designs, a subagent implements, more subagents review and race. zstack keeps the same engineering standard with one main session doing the work. One subagent, **`onigiri-reviewer`**, reads the diff cold before every PR.
+pstack splits work across agents: one model designs, a subagent implements, more subagents review and race. zstack keeps the same engineering standard with one main session doing the work. The main session builds. A **`verifier`** reviews every diff cold and runs its checks, an optional **`explorer`** answers narrow reading questions, and two competing **`designer`**s plan deep or new work. Each role's model is in `config/models.json`.
 
 ## install
 
@@ -11,9 +11,9 @@ pi install git:github.com/injaneity/zstack
 ~/.pi/agent/git/github.com/injaneity/zstack/bin/setup.sh
 ```
 
-`setup.sh` is safe to re-run. It copies the default `policy.md` to `~/.pi/agent/onigiri/policy.md` if absent (edit that copy to add your holds), runs `bin/install-agents.sh`, and checks `gh` only for a GitHub repo. It changes nothing you already have. You still log in to each provider yourself. `config/models.json` maps each role (`coding`, `review`, `reads`, `research`) to a provider and model, and `bin/model-for <role>` prints the pair. Start a print-mode session with the policy appended with `bin/pi-run <session-id> [<provider> <model>] <brief-file>`, for example `bin/pi-run s1 $(bin/model-for coding) brief.md --name role:coding` (the name is how `bin/check-models` knows the role). Without a provider and model pi uses its own default. `bin/check-models` compares what each session under a review directory actually ran on with the config. `docs/HOST.md` and `hosts/` are one example deployment.
+`setup.sh` is safe to re-run. It copies the default `policy.md` to `~/.pi/agent/onigiri/policy.md` if absent (edit that copy to add your holds), runs `bin/install-agents.sh`, and checks `gh` only for a GitHub repo. It changes nothing you already have. You still log in to each provider yourself. `config/models.json` maps each role (`builder`, `explorer`, `designer`, `verifier`, `research`) to a provider and model, with the launchers' older names (`coding`, `reads`, `review`) as aliases, and `bin/model-for <role>` prints the pair. Start a print-mode session with the policy appended with `bin/pi-run <session-id> [<provider> <model>] <brief-file>`, for example `bin/pi-run s1 $(bin/model-for coding) brief.md --name role:coding` (the name is how `bin/check-models` knows the role). Without a provider and model pi uses its own default. `bin/check-models` compares what each session under a review directory actually ran on with the config. `docs/HOST.md` and `hosts/` are one example deployment.
 
-The package brings the `subagent` tool (`extensions/subagent/`, vendored from pi's example, see `docs/SUBAGENT.md`). The tool only finds agents in `~/.pi/agent/agents/` and a project's `.pi/agents/`, and a package can't add its own `agents/` to that list, so `bin/install-agents.sh` copies them into `~/.pi/agent/agents/`. It never overwrites a file you already have. An agent runs on your main model unless you add `model:` to its installed copy.
+The package brings the `subagent` tool (`extensions/subagent/`, vendored from pi's example, see `docs/SUBAGENT.md`). The tool only finds agents in `~/.pi/agent/agents/` and a project's `.pi/agents/`, and a package can't add its own `agents/` to that list, so `bin/install-agents.sh` copies them into `~/.pi/agent/agents/`. It never overwrites a file you already have. An agent runs on the provider and model `config/models.json` gives its name, or on your main model when the config has no entry for it.
 
 Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe the work and let the model route to it. The `/onigiri-mode` prompt template expands inside pi, so it works on any provider, including claude-code.
 
@@ -25,7 +25,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`unslop`**: strips AI tells from prose.
 - **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `.pi/skills/verify-<app>/` skill that launches the real app, drives it like a user, and captures evidence, then keep its feature map honest as the app changes.
 - **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart (the first run installs Java and TLC through mise, so it needs mise and the network, unless `TLA2TOOLS` points at a local `tla2tools.jar`, with `JAVA` optionally naming the Java binary). The other two generate a repo's formal verification skill and keep it in step with the code. All three are slash-command only: `/skill:<name>`.
-- **`subagent` tool** and **`agents/`** (`onigiri-reviewer`, no model named): pi's example extension, cut to one agent per call, with five safety changes and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
+- **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, with safety changes, a per-role model from `config/models.json`, and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 

@@ -8,6 +8,12 @@ launchers set. A session without one predates them: it is listed as unchecked, s
 is unknown, and still counts in the per-model tally. "used" lists every provider/model that answered
 (assistant messages), falling back to the session's model_change records. Prints one row per session,
 then the tally, and exits 1 when any row is a mismatch.
+
+Role names resolve like bin/model-for: an alias maps to its role, and a role with several seats is
+<role>:<n>. A subagent child is saved under sessions/subagents/ with an id that starts with its parent's id and a name role:<agent>
+(the extension adds " fallback" when the configured seat failed its auth check and the child ran on the
+parent's model). A child is checked against its seat, or against its parent's model when its agent has
+no seat or it fell back. A fallback that ran on the parent's model is reported, not counted as a mismatch.
 """
 import collections, glob, json, os, sys
 
@@ -43,24 +49,44 @@ def load(path):
     return out
 
 
+def seats():
+    data = json.load(open(os.path.join(PKG, "config", "models.json")))
+    out = {}
+    for name, v in data.get("roles", {}).items():
+        for i, seat in (enumerate(v, 1) if isinstance(v, list) else [(None, v)]):
+            out[name if i is None else "%s:%d" % (name, i)] = "%s/%s" % (seat["provider"], seat["model"])
+    for a, target in data.get("aliases", {}).items():
+        out.update({a + k[len(target):]: v for k, v in list(out.items()) if k == target or k.startswith(target + ":")})
+    return out
+
+
 def main(argv):
-    roles = json.load(open(os.path.join(PKG, "config", "models.json")))["roles"]
-    want = {r: "%s/%s" % (v["provider"], v["model"]) for r, v in roles.items()}
+    want = seats()
     roots = argv or [p for p in (os.path.expanduser("~/onigiri/review"), "/srv/onigiri/review") if os.path.isdir(p)]
-    sessions = [load(p) | {"path": p} for p in glob.glob(os.path.join(AGENT, "sessions", "*", "*.jsonl"))]
+    tops = [p for p in glob.glob(os.path.join(AGENT, "sessions", "*", "*.jsonl")) if os.sep + "subagents" + os.sep not in p]
+    kids = glob.glob(os.path.join(AGENT, "sessions", "subagents", "*.jsonl"))
+    sessions = [load(p) | {"path": p, "child": False} for p in tops] + [load(p) | {"path": p, "child": True} for p in kids]
     bad, tally = 0, collections.Counter()
-    print("%-34s %-9s %-30s %-40s %s" % ("session", "role", "config", "used", "status"))
+    print("%-34s %-11s %-30s %-40s %s" % ("session", "role", "config", "used", "status"))
     for root in roots:
         for d in sorted(p for p in glob.glob(os.path.join(os.path.realpath(root), "*")) if os.path.isdir(p)):
             slug = os.path.basename(d)
             mine = [s for s in sessions if s["id"] in (slug, "pi-" + slug)
                     or (s["cwd"] and (os.path.realpath(s["cwd"]) + os.sep).startswith(d + os.sep))]
             if not mine:
-                print("%-34s %-9s %-30s %-40s %s" % (slug, "-", "-", "-", "no session file"))
+                print("%-34s %-11s %-30s %-40s %s" % (slug, "-", "-", "-", "no session file"))
                 continue
+            by_id = {s["id"]: s for s in mine}
             for s in mine:
                 role = s["role"] or "?"
+                fallback = role.endswith(" fallback")
+                role = role.split(" ")[0]
+                parent = s["child"] and max((p for i, p in by_id.items() if i and not p["child"] and s["id"].startswith(i + "-")),
+                                            key=lambda p: len(p["id"]), default=None) or None
+                parent_used = parent and (parent["used"] or parent["set"])
                 exp = want.get(role)
+                if parent and (fallback or exp is None) and parent_used:
+                    exp = parent_used[0]
                 used = s["used"] or s["set"]
                 tally.update(used)
                 if not s["role"]:
@@ -71,13 +97,17 @@ def main(argv):
                     status = "no model recorded"
                 elif used != [exp]:
                     status = "MISMATCH"
+                elif fallback:
+                    status = "FALLBACK to parent model (configured %s)" % want.get(role, "-")
                 else:
                     status = "ok"
+                if parent:
+                    status += " (child of %s)" % parent["id"]
                 if s["errors"]:
                     status += " (%d error replies)" % s["errors"]
                 bad += status.startswith("MISMATCH")
                 name = slug if s["id"] in (slug, "pi-" + slug) else "%s:%s" % (slug, s["id"])
-                print("%-34s %-9s %-30s %-40s %s" % (name[:34], role, exp or "-", ",".join(used) or "-", status))
+                print("%-34s %-11s %-30s %-40s %s" % (name[:34], role, exp or "-", ",".join(used) or "-", status))
     print("sessions per model used: " + (", ".join("%s %d" % kv for kv in tally.most_common()) or "none"))
     print("%d mismatch(es)" % bad)
     return 1 if bad else 0
