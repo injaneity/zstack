@@ -13,7 +13,8 @@ urgent unexpected-merge wake for a merge as ME that this job did not make.
   merge_job.py --explain N every reason for trycua/cua#N and the action a run would take; read-only
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
-PAUSED (first line = reason) stops merge, ready and rerun. Outputs: $ROOT/events.log (one line per decision, only
+PAUSED (first line = reason) stops merge, ready and rerun, and holds back webhook POSTs (the buffer item is still
+written, so the hourly routine sees it; nothing re-sends it after the pause). Outputs: $ROOT/events.log (one line per decision, only
 when it changes), $ROOT/buffer.jsonl (needs onigiri; urgent ones also POST the webhook), $ROOT/tick/state.json and
 $ROOT/tick/last-run. ROOT is $ONIGIRI_ROOT, default /srv/onigiri.
 """
@@ -36,6 +37,9 @@ EVENTS, BUFFER, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/buffer.jsonl", f"{RO
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
 REPO, SHORT, ME = "trycua/cua", "cua", "injaneity"
 GATE_CHECK = "ci-gate"   # the one check the gate reads: it owns red checks and which platform lanes a PR needs
+NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a reason to wait
+WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
+WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
 TIERS = ["light", "standard", "deep", "human"]
 HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "hands-off-path", "exception", "preapprove")
 PATH_MODES = ("never", "split-undone")
@@ -217,6 +221,8 @@ def check_state(rollup):
     next_action() reads it, to choose between a rerun and a wait; the gate reads ci-gate alone."""
     pending, bad, runs, ok = [], [], set(), 0
     for c in latest_checks(rollup):
+        if check_name(c).lower() in NOT_RERUN:
+            continue
         st = conclusion(c)
         if st == "PENDING":
             pending.append(check_name(c))
@@ -473,14 +479,17 @@ class Job:
 
     def merge_watch(self):
         """Urgent unexpected-merge wake for a trycua/cua PR merged as ME that this job did not merge. Its `merged
-        cua#N` events are the whole allow list. Covers merges since state merges.since (set on the first run)."""
+        cua#N` events are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
+        up to WATCH_OVERLAP_S before this run only after a fetch that was not cut short, so no merge falls between two
+        windows; merges.seen keeps the ones already handled inside the overlap."""
         mw = self.s["merges"]
         known = mw.setdefault("seen", {})
         if not mw.get("since"):
             mw["since"] = now()
             return
         since = datetime.fromisoformat(mw["since"]).astimezone(ZoneInfo("UTC"))
-        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--limit", "200", "--search",
+        start = datetime.fromtimestamp(time.time() - WATCH_OVERLAP_S, SGT).isoformat(timespec="seconds")
+        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--limit", str(WATCH_LIMIT), "--search",
                           f"merged:>={since.date().isoformat()}", "--json", "number,mergedBy,mergedAt,title,mergeCommit"]) or []
         at_of = lambda p: datetime.fromisoformat(p["mergedAt"].replace("Z", "+00:00"))   # noqa: E731
         by_n = {p["number"]: p for p in merged if at_of(p) >= since}
@@ -495,6 +504,11 @@ class Job:
             elif act == "log":
                 self.event("merge-noted", ident, why)
             known[str(n)] = {"by": by, "at": at, "outcome": act}
+        if len(merged) >= WATCH_LIMIT:
+            self.errors += 1
+            return self.event("error", "merge-watch", f"{len(merged)} merged PRs since {mw['since']}: window cut short, since kept")
+        mw["since"] = max(mw["since"], start)
+        mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
 
     def run(self):
         if self.paused:
@@ -540,8 +554,8 @@ class Job:
 def main(argv=None):
     p = argparse.ArgumentParser(prog="merge_job.py", add_help=False, allow_abbrev=False,
                                 description="trycua/cua merge job. A bare run is one real run (cron, under flock).")
-    p.add_argument("--dry-run", action="store_true", help="decide everything, change nothing, write nothing")
     m = p.add_mutually_exclusive_group()
+    m.add_argument("--dry-run", action="store_true", help="decide everything, change nothing, write nothing")
     m.add_argument("--explain", type=int, metavar="N", help="every reason for trycua/cua#N; read-only")
     m.add_argument("--webhook-test", action="store_true", help="one wiring-test POST")
     # No automatic --help: a usage probe must never run a merge, so any unknown argument prints usage and exits 2.

@@ -142,6 +142,10 @@ class NextAction(unittest.TestCase):
         self.assertEqual(verdict(p), ("rerun", "red once: ci-gate, rust"))
         self.assertEqual(verdict(p, rerun_head=H), ("buffer", "red after rerun: ci-gate, rust"))
         self.assertEqual(verdict(p, rerun_head=H2)[0], "rerun")   # a new head resets the allowance
+        for cla in (cr("cla", status="IN_PROGRESS", conclusion=None), cr("cla", conclusion="FAILURE", run="999")):
+            got = verdict(pr(statusCheckRollup=self.RED + [cla]))   # cla neither holds a rerun back nor gets one
+            self.assertEqual(got, ("rerun", "red once: ci-gate, rust"), cla)
+            self.assertEqual(mj.check_state(self.RED + [cla])[2], {"777", "778"})
         status = pr(statusCheckRollup=[{"__typename": "StatusContext", "context": "ci-gate", "state": "FAILURE"}])
         self.assertEqual(verdict(status)[0], "buffer")             # nothing to rerun
 
@@ -180,7 +184,7 @@ class Holds(unittest.TestCase):
     def test_live_holds_file_parses(self):
         if not os.path.exists(mj.HOLDS_FILE):
             self.skipTest("no live holds file on this machine")
-        h = mj.parse_holds(open(mj.HOLDS_FILE).read())
+        h = mj.parse_holds(mj.read(mj.HOLDS_FILE))
         self.assertIn(5675, h["hold"])
         self.assertEqual(h["preapproved"].get(5650), "8bd1c068b26f5e75b15cb6f55d3136785facd2d6")
 
@@ -410,6 +414,32 @@ class Stage(unittest.TestCase):
         self.assertEqual(sum(x.startswith("merge-noted cua#12") for x in ev), 1)
         self.assertIn("urgent cua#10 webhook not configured", ev)
         self.assertFalse(any("cua#13" in x for x in ev))
+        st = json.loads((self.d / "tick/state.json").read_text())
+        self.assertGreater(st["merges"]["since"], "2026-11-05T00:00:00+08:00")   # the window moved up
+        self.assertEqual(st["merges"]["seen"], {})                                # and forgot what fell out of it
+
+    def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
+        since = "2026-11-05T00:00:00+08:00"
+        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": since, "seen": {}}}))
+        self.merged = [{"number": n, "mergedBy": {"login": "zane"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+                        "mergeCommit": {"oid": "c" * 40}} for n in range(3)]
+        with patch.object(mj, "WATCH_LIMIT", 3):
+            self.run_()
+        st = json.loads((self.d / "tick/state.json").read_text())
+        self.assertEqual(st["merges"]["since"], since)
+        self.assertEqual(sorted(st["merges"]["seen"]), ["0", "1", "2"])
+        self.assertIn("window cut short", " ".join(self.events()))
+        self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
+
+    def test_paused_buffers_an_unexpected_merge_but_does_not_post(self):
+        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-05T00:00:00+08:00"}}))
+        (self.d / "tick/PAUSED").write_text("manual\n")
+        self.merged = [{"number": 10, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+                        "mergeCommit": {"oid": "c" * 40}}]
+        with patch.object(mj, "post_webhook", Mock(side_effect=AssertionError("no POST while paused"))):
+            self.run_()
+        self.assertEqual([b["kind"] for b in self.buffered()], ["unexpected-merge"])
+        self.assertIn("urgent cua#10 not sent: paused", self.events())
 
 
 class Webhook(unittest.TestCase):
@@ -447,7 +477,8 @@ class Cli(unittest.TestCase):
 
     def test_unknown_args_exit_2_without_a_run(self):
         with patch.object(mj, "Job") as J, patch.object(mj, "post_webhook") as hook:
-            for argv in (["--help"], ["-h"], ["--bogus"], ["--dry"], ["--disk-guard"], ["--explain", "1", "--webhook-test"]):
+            for argv in (["--help"], ["-h"], ["--bogus"], ["--dry"], ["--disk-guard"], ["--explain", "1", "--webhook-test"],
+                         ["--dry-run", "--webhook-test"], ["--dry-run", "--explain", "1"]):
                 code, _, err = self.main(*argv)
                 self.assertEqual(code, 2, argv)
                 self.assertIn("usage:", err)
@@ -546,7 +577,7 @@ class PatentPush(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
-            items = [json.loads(x) for x in open(f"{root}/buffer.jsonl")]
+            items = [json.loads(x) for x in mj.read(f"{root}/buffer.jsonl").splitlines()]
             self.assertEqual([(i["kind"], i["id"]) for i in items], [("patent-held-publish", "cua:onigiri/x")])
 
     def test_a_relay_diff_is_pushed(self):
