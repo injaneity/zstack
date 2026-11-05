@@ -445,6 +445,15 @@ class Stage(unittest.TestCase):
         self.assertIn("urgent cua#10 not sent: paused", self.events())
 
 
+class CronEnv(unittest.TestCase):
+    def test_gh_is_found_under_crons_bare_path(self):
+        """cron runs the job with PATH=/usr/bin:/bin; gh is usually in /usr/local/bin."""
+        r = subprocess.run([sys.executable, "-I", "-c", "import importlib.util as u, sys; s = u.spec_from_file_location('m', sys.argv[1]); "
+                            "m = u.module_from_spec(s); s.loader.exec_module(m); print(m.ENV['PATH'])", str(VM / "merge_job.py")],
+                           env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}, capture_output=True, text=True, check=True)
+        self.assertTrue({"/usr/local/bin", "/usr/bin", "/bin"} <= set(r.stdout.strip().split(os.pathsep)), r.stdout)
+
+
 class Webhook(unittest.TestCase):
     def test_posts_with_the_key_and_never_echoes_it(self):
         with tempfile.TemporaryDirectory() as d:

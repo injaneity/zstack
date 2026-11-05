@@ -48,7 +48,9 @@ SPLIT_PR = 2886
 WEBHOOK_URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
 WEBHOOK_KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
-ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh")}
+# cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
+ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
+       "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", os.environ.get("PATH") or "/usr/bin:/bin"])}
 
 Reason = namedtuple("Reason", "code text")
 # gate codes: ci | holds-unreadable | hold | hands-off | risk. blocker codes: draft | conflict | mergeable | paused
