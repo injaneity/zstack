@@ -1,6 +1,6 @@
 # One example host
 
-This is how Zane's deployment runs zstack. It is one example, not a requirement: nothing in the package reads these paths, and a fresh install needs none of them. It is the only file in the repo that names them.
+This is how Zane's deployment runs zstack. It is one example, not a requirement: nothing outside `hosts/` reads these paths, and a fresh install needs none of them. This file and `hosts/` are the only places in the repo that name them.
 
 ## Machines
 
@@ -15,8 +15,11 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## Launching
 
-- `/home/box/bin/pi-run <session-id> <provider> <model> <brief-file>` predates the package's `bin/pi-run`. It sources `/home/box/.profile`, which holds the Claude token, and appends `/srv/onigiri/policy.md` by literal path. A non-login shell without the profile looks logged out.
-- The tick's pickup sets its provider and model in `/srv/onigiri/tick/pi-task.sh`. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
+- Models come only from `config/models.json`, one provider and model per role. Each launcher takes a role, resolves it with `bin/model-for`, and records it as the session name `role:<role>`. `bin/check-models` reads that name and the provider and model each reply came from in the pi session files, and prints every mismatch with the config. Run it on either host with no arguments.
+- VM: `/home/box/bin/pi-run` is a shim that execs `hosts/vm/pi-run <session-id> <role> <brief-file>`. It sources `/home/box/.profile`, which holds the Claude token, and appends `/srv/onigiri/policy.md` by literal path. A non-login shell without the profile looks logged out. The old `<provider> <model>` form still parses but runs as role `coding` with a warning.
+- Mini: `~/onigiri/bin/pi-run-mini` is a shim that execs `hosts/mini/pi-run-mini <slug> <brief-file> [<role>]` (default `coding`). It prepends `hosts/mini/host-mini.md` to the brief and starts the package's `bin/pi-run` detached in `~/onigiri/review/<slug>`.
+- The tick's pickup calls the VM launcher from `/srv/onigiri/tick/pi-task.sh`. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
+- Each host keeps its own provider logins in `<agent dir>/auth.json`. Never copy one host's tokens to the other: an OpenAI refresh token is single use, so two hosts sharing one invalidate each other with `refresh_token_reused`.
 - `gh` runs as injaneity with `GH_CONFIG_DIR=/home/box/.config/gh HOME=/home/box`. Upstream or public posts go only through dumpling.
 
 ## Disk

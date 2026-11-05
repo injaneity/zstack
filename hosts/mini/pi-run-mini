@@ -1,0 +1,47 @@
+#!/bin/bash
+# pi-run-mini <slug> <brief file> [<role>]: one detached pi session on the mini host in ~/onigiri/review/<slug>.
+# <role> (default coding; anything else that is not a role also runs as coding, with a warning) picks provider and model from config/models.json via bin/model-for; the role is
+# recorded as the session name role:<role>, which bin/check-models reads back.
+# done when run.log has more than 2 lines; exit code in run.rc.
+# one live session per slug: refuses (exit 3) while run.pid is alive or any pi process holds --session-id pi-<slug>.
+# PI_RUN_MINI_DRY=1 prints what it would start and exits 0.
+set -u
+pkg="$(cd "$(dirname "$0")/../.." && pwd)"
+[ $# -ge 2 ] || { echo "usage: pi-run-mini <slug> <brief file> [<role>]" >&2; exit 2; }
+slug=$1; brief=$2; role=${3:-coding}
+# the old third argument was a model id. Only the config picks models now, so a non-role runs as coding.
+if ! "$pkg/bin/model-for" --roles | grep -qx -- "$role"; then
+  echo "pi-run-mini: '$role' is not a role in config/models.json; running as role coding" >&2; role=coding
+fi
+pm=$("$pkg/bin/model-for" "$role") || exit 2
+provider=${pm% *}; model=${pm#* }
+d=$HOME/onigiri/review/$slug; mkdir -p "$d"
+# launch lock: mkdir is atomic, so two near-simultaneous launches can't both pass the check below.
+lock=$d/.launch.lock
+if ! mkdir "$lock" 2>/dev/null; then
+  age=$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || echo 0) ))
+  if [ "$age" -gt 300 ]; then rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null || { echo "pi-run-mini: $slug launch lock busy" >&2; exit 3; }
+  else echo "pi-run-mini: $slug is being launched by another call (lock ${age}s old); not starting a second" >&2; exit 3; fi
+fi
+trap 'rmdir "$lock" 2>/dev/null' EXIT
+# already running? pidfile first (stale pid = dead or reused for something else), then any pi with this session id.
+if [ -f "$d/run.pid" ]; then
+  old=$(cat "$d/run.pid")
+  if [ -n "$old" ] && kill -0 "$old" 2>/dev/null && ps -o command= -p "$old" | grep -Eq -- "pi-$slug( |$)"; then
+    echo "pi-run-mini: pi-$slug already running (pid $old); not starting a second" >&2; exit 3
+  fi
+fi
+live=$(pgrep -f -- "--session-id pi-$slug( |\$)" | head -1)
+[ -z "$live" ] && live=$(pgrep -f -- "zstack/bin/pi-run pi-$slug( |\$)" | head -1)
+if [ -n "$live" ]; then echo "pi-run-mini: pi-$slug already running (pid $live); not starting a second" >&2; exit 3; fi
+[ -n "${PI_RUN_MINI_DRY:-}" ] && { echo "pi-run-mini: dry run, would start pi-$slug in $d as role $role: $provider $model"; exit 0; }
+source "$HOME/onigiri/env.sh"; . "$HOME/.cargo/env"
+export PATH="$HOME/onigiri/mamba/envs/bash/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-3}
+"$HOME/onigiri/bin/sync-from-vm.sh" || echo "pi-run-mini: sync failed, using copies from $(cat $HOME/onigiri/sync/synced-at)" >&2
+cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
+cd "$d"; rm -f run.rc
+nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+  /bin/bash -c '"$0" "$@"; echo $? > run.rc; rm -f run.pid' "$pkg/bin/pi-run" \
+  "pi-$slug" "$provider" "$model" "$d/brief.full.md" --name "role:$role" > "$d/run.log" 2>&1 < /dev/null &
+echo $! > "$d/run.pid"
+echo "pi-run-mini: started pi-$slug pid $! in $d as role $role: $provider $model"
