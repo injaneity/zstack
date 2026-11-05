@@ -428,7 +428,10 @@ class Stage(unittest.TestCase):
         st = json.loads((self.d / "tick/state.json").read_text())
         self.assertEqual(st["merges"]["since"], since)
         self.assertEqual(sorted(st["merges"]["seen"]), ["0", "1", "2"])
-        self.assertIn("window cut short", " ".join(self.events()))
+        with patch.object(mj, "WATCH_LIMIT", 3):
+            self.run_()
+        self.assertEqual([(b["kind"], b.get("urgent")) for b in self.buffered()], [("merge-watch-overflow", True)])
+        self.assertIn("the fetch limit: check merges as injaneity by hand", self.buffered()[0]["reason"])
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
 
     def test_paused_buffers_an_unexpected_merge_but_does_not_post(self):

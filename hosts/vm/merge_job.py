@@ -504,9 +504,11 @@ class Job:
             elif act == "log":
                 self.event("merge-noted", ident, why)
             known[str(n)] = {"by": by, "at": at, "outcome": act}
-        if len(merged) >= WATCH_LIMIT:
+        if len(merged) >= WATCH_LIMIT:   # merges past the page are unseen: keep the window and wake a person, once per window
             self.errors += 1
-            return self.event("error", "merge-watch", f"{len(merged)} merged PRs since {mw['since']}: window cut short, since kept")
+            why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges as {ME} by hand, then move merges.since"
+            self.event("error", "merge-watch", why)
+            return self.buffer("merge-watch-overflow", "merge-watch", mw["since"], why, urgent=True)
         mw["since"] = max(mw["since"], start)
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
 
