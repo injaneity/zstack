@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""check-models [<review root>...]: compare the model each session actually used with config/models.json.
+
+Each directory under a review root (default ~/onigiri/review and /srv/onigiri/review, whichever exist)
+is one session. Its pi session file is the one in the pi agent dir's sessions/ whose id is <slug> or
+pi-<slug>, or whose cwd is inside the directory. The role is the session name role:<role> that the
+launchers set. A session without one predates them: it is listed as unchecked, since its intended role
+is unknown, and still counts in the per-model tally. "used" lists every provider/model that answered
+(assistant messages), falling back to the session's model_change records. Prints one row per session,
+then the tally, and exits 1 when any row is a mismatch.
+"""
+import collections, glob, json, os, sys
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+AGENT = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+
+
+def load(path):
+    out = {"id": None, "cwd": None, "role": None, "used": [], "set": [], "errors": 0}
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            t = o.get("type")
+            if t == "session":
+                out["id"], out["cwd"] = o.get("id"), o.get("cwd")
+            elif t == "session_info" and str(o.get("name", "")).startswith("role:"):
+                out["role"] = o["name"][5:]
+            elif t == "model_change":
+                pm = "%s/%s" % (o.get("provider"), o.get("modelId"))
+                if pm not in out["set"]:
+                    out["set"].append(pm)
+            elif t == "message" and (o.get("message") or {}).get("role") == "assistant":
+                m = o["message"]
+                if m.get("stopReason") == "error":
+                    out["errors"] += 1
+                    continue
+                pm = "%s/%s" % (m.get("provider"), m.get("model"))
+                if pm not in out["used"]:
+                    out["used"].append(pm)
+    return out
+
+
+def main(argv):
+    roles = json.load(open(os.path.join(PKG, "config", "models.json")))["roles"]
+    want = {r: "%s/%s" % (v["provider"], v["model"]) for r, v in roles.items()}
+    roots = argv or [p for p in (os.path.expanduser("~/onigiri/review"), "/srv/onigiri/review") if os.path.isdir(p)]
+    sessions = [load(p) | {"path": p} for p in glob.glob(os.path.join(AGENT, "sessions", "*", "*.jsonl"))]
+    bad, tally = 0, collections.Counter()
+    print("%-34s %-9s %-30s %-40s %s" % ("session", "role", "config", "used", "status"))
+    for root in roots:
+        for d in sorted(p for p in glob.glob(os.path.join(os.path.realpath(root), "*")) if os.path.isdir(p)):
+            slug = os.path.basename(d)
+            mine = [s for s in sessions if s["id"] in (slug, "pi-" + slug)
+                    or (s["cwd"] and os.path.realpath(s["cwd"]).startswith(d + os.sep)) or os.path.realpath(s["cwd"]) == d]
+            if not mine:
+                print("%-34s %-9s %-30s %-40s %s" % (slug, "-", "-", "-", "no session file"))
+                continue
+            for s in mine:
+                role = s["role"] or "?"
+                exp = want.get(role)
+                used = s["used"] or s["set"]
+                tally.update(used)
+                if not s["role"]:
+                    status = "unchecked (no role recorded)"
+                elif exp is None:
+                    status = "MISMATCH: role %s is not in config" % role
+                elif not used:
+                    status = "no model recorded"
+                elif used != [exp]:
+                    status = "MISMATCH"
+                else:
+                    status = "ok"
+                if s["errors"]:
+                    status += " (%d error replies)" % s["errors"]
+                bad += status.startswith("MISMATCH")
+                name = slug if s["id"] in (slug, "pi-" + slug) else "%s:%s" % (slug, s["id"])
+                print("%-34s %-9s %-30s %-40s %s" % (name[:34], role, exp or "-", ",".join(used) or "-", status))
+    print("sessions per model used: " + (", ".join("%s %d" % kv for kv in tally.most_common()) or "none"))
+    print("%d mismatch(es)" % bad)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

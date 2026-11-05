@@ -15,7 +15,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: scripts parse
         run: |
-          for f in bin/*; do bash -n "$f"; done
+          for f in bin/* hosts/*/*; do
+            case "$(head -1 "$f")" in
+              *python3*) python3 -m py_compile "$f";;
+              '#!/bin/bash'*) bash -n "$f";;
+            esac
+          done
+      - name: model config resolves and check-models flags a mismatch
+        run: tests/models.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0

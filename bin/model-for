@@ -1,0 +1,17 @@
+#!/bin/bash
+# model-for <role>: prints "<provider> <model>" for <role> from the package's config/models.json.
+# model-for --roles lists the roles. Exit 1 for a role the file does not name.
+set -eu
+cfg="$(cd "$(dirname "$0")/.." && pwd)/config/models.json"
+case "${1:-}" in ''|-h|--help) echo "usage: model-for <role> | --roles" >&2; exit 2;; esac
+exec python3 -I -c '
+import json, sys
+cfg, role = sys.argv[1:]
+roles = json.load(open(cfg)).get("roles", {})
+if role == "--roles":
+    print("\n".join(roles)); sys.exit(0)
+r = roles.get(role)
+if not (isinstance(r, dict) and isinstance(r.get("provider"), str) and isinstance(r.get("model"), str)):
+    sys.exit("model-for: no role %r in %s (roles: %s)" % (role, cfg, ", ".join(roles)))
+print(r["provider"], r["model"])
+' "$cfg" "$1"
