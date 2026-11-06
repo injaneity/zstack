@@ -8,10 +8,12 @@ set -u
 packages=("npm:@ff-labs/pi-fff@0.11.0")
 die() { echo "ensure-extensions: $*; not launching without it" >&2; exit 1; }
 command -v pi >/dev/null || die "pi is not on PATH"
-listed=$(pi list 2>&1) || die "pi list failed: $listed"
+# Only the user section counts: a project's settings would not follow the session into its review dir.
+user_has() { pi list 2>&1 | awk -v want="  $1" '/^[^ ]/ { user = ($0 == "User packages:") } user && $0 == want { found = 1 } END { exit !found }'; }
+pi list >/dev/null 2>&1 || die "pi list failed: $(pi list 2>&1 | tail -3 | tr '\n' ' ')"
 for src in "${packages[@]}"; do
-  if printf '%s\n' "$listed" | grep -qxF "  $src"; then echo "extensions: $src present"; continue; fi
+  if user_has "$src"; then echo "extensions: $src present"; continue; fi
   out=$(pi install "$src" 2>&1) || die "pi install $src failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
-  pi list 2>&1 | grep -qxF "  $src" || die "pi install $src exited 0 but pi list does not show it"
+  user_has "$src" || die "pi install $src exited 0 but pi list does not show it"
   echo "extensions: installed $src"
 done

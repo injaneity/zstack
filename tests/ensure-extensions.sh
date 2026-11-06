@@ -15,7 +15,8 @@ mkdir -p "$tmp/bin"
 cat > "$tmp/bin/pi" <<EOF
 #!/bin/bash
 case "\$1" in
-  list) echo "User packages:"; while read -r s; do echo "  \$s"; echo "    /somewhere"; done < "$tmp/installed";;
+  list) echo "User packages:"; while read -r s; do echo "  \$s"; echo "    /somewhere"; done < "$tmp/installed"
+        [ -s "$tmp/project" ] && { echo; echo "Project packages:"; echo "  \$(cat "$tmp/project")"; echo "    /proj"; }; true;;
   install) echo "\$2" >> "$tmp/calls"; [ -e "$tmp/fail-install" ] && { echo "npm ERR! 404"; exit 1; }
            [ -e "$tmp/lie" ] || echo "\$2" >> "$tmp/installed";;
 esac
@@ -23,7 +24,7 @@ EOF
 chmod +x "$tmp/bin/pi"
 run() { PATH="$tmp/bin:/usr/bin:/bin" "$src/bin/ensure-extensions" 2>&1; }
 
-echo "git:github.com/injaneity/zstack" > "$tmp/installed"; : > "$tmp/calls"
+echo "git:github.com/injaneity/zstack" > "$tmp/installed"; : > "$tmp/calls"; : > "$tmp/project"
 out=$(run); rc=$?
 check "missing package installs and exits 0" "$rc" 0
 check "missing package says it installed it" "$out" "extensions: installed $src_pkg"
@@ -45,6 +46,12 @@ touch "$tmp/lie"; out=$(run); rc=$?
 check "install that does not land exits 1" "$rc" 1
 has "install that does not land says so" "$out" "does not show it"
 rm "$tmp/lie"
+
+echo "git:github.com/injaneity/zstack" > "$tmp/installed"; echo "$src_pkg" > "$tmp/project"; : > "$tmp/calls"
+out=$(run); rc=$?
+check "a project-only entry still installs for the user" "$out" "extensions: installed $src_pkg"
+check "a project-only entry runs pi install" "$(cat "$tmp/calls")" "$src_pkg"
+: > "$tmp/project"
 
 out=$(PATH="/nonexistent" /bin/bash "$src/bin/ensure-extensions" 2>&1); rc=$?
 check "no pi on PATH exits 1" "$rc" 1
