@@ -10,6 +10,7 @@ A hold stops a session from touching a PR, a person's work or a path. The defaul
 
 - `hold | <PR number> | why`: never pick it up, push to it, mark it ready or merge it.
 - `hands-off-user | <login> | why`: never salvage, rewrite, close or comment on their PRs.
+- `review-only | <login> | why`: a first review of their PRs is allowed. Never push to, rebase, salvage, close, comment on or request changes on them.
 - `hands-off-path | <path> | why`: a change touching this path is opened as a PR and left for a human. Nothing merges it automatically.
 
 ## Pushes to a separate remote
