@@ -1,6 +1,7 @@
 #!/bin/bash
 # pi-run-mini <slug> <brief file> [<role>]: one detached pi session on the mini host in ~/onigiri/review/<slug>.
-# <role> (default coding; anything else that is not a role also runs as coding, with a warning) picks provider and model from config/models.json via bin/model-for; the role is
+# <role> (default coding) picks provider and model from config/models.json via bin/model-for; a name that is not a
+# role exits 2 with model-for's error. The role is
 # recorded as the session name role:<role>, which bin/check-models reads back.
 # done when run.log has more than 2 lines; exit code in run.rc.
 # one live session per slug: refuses (exit 3) while run.pid is alive or any pi process holds --session-id pi-<slug>.
@@ -10,11 +11,7 @@ pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit 4; ZSTACK_ENSURED=1 exec "$0" "$@"; fi; unset ZSTACK_ENSURED
 [ $# -ge 2 ] || { echo "usage: pi-run-mini <slug> <brief file> [<role>]" >&2; exit 2; }
 slug=$1; brief=$2; role=${3:-coding}
-# the old third argument was a model id. Only the config picks models now, so a non-role runs as coding.
-if ! pm=$("$pkg/bin/model-for" "$role" 2>/dev/null); then
-  echo "pi-run-mini: '$role' is not a role in config/models.json; running as role coding" >&2; role=coding
-  pm=$("$pkg/bin/model-for" "$role") || exit 2
-fi
+pm=$("$pkg/bin/model-for" "$role") || exit 2
 provider=${pm% *}; model=${pm#* }
 d=$HOME/onigiri/review/$slug; mkdir -p "$d"
 # launch lock: mkdir is atomic, so two near-simultaneous launches can't both pass the check below.

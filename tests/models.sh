@@ -18,6 +18,15 @@ check "research keeps its own claude seat" "$("$pkg/bin/model-for" research)" "c
 check "explorer is openai-codex gpt-6.1-terra" "$("$pkg/bin/model-for" explorer)" "openai-codex gpt-6.1-terra"
 "$pkg/bin/model-for" designer >/dev/null 2>&1; check "a role with several seats needs a seat number" "$?" 1
 "$pkg/bin/model-for" no-such-role >/dev/null 2>&1; check "model-for rejects an unknown role" "$?" 1
+# launchers take a role only: the old provider/model form is an unknown role, never a silent run as coding.
+lt=$(mktemp -d); b=$lt/brief.md; echo brief > "$b"
+err=$(ZSTACK_ENSURED=1 PI_RUN_DRY=1 "$pkg/hosts/vm/pi-run" t-legacy claude-code claude-opus-5-5 "$b" 2>&1); check "pi-run refuses the old provider/model form" "$?" 2
+check "pi-run names the bad role" "$(echo "$err" | grep -c "no role 'claude-code'")" 1
+check "pi-run no longer falls back to coding" "$(echo "$err" | grep -c 'running as role coding')" 0
+err=$(ZSTACK_ENSURED=1 PI_RUN_DRY=1 "$pkg/hosts/vm/pi-run" t-missing coding "$b.missing" 2>&1); check "pi-run refuses a missing prompt file" "$?" 2
+err=$(ZSTACK_ENSURED=1 PI_RUN_MINI_DRY=1 HOME="$lt" "$pkg/hosts/mini/pi-run-mini" t-legacy "$b" claude-opus-5-5 2>&1); check "pi-run-mini refuses a model id as its role" "$?" 2
+check "pi-run-mini no longer falls back to coding" "$(echo "$err" | grep -c 'running as role coding')" 0
+rm -rf "$lt"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 mkdir -p "$t/review/good" "$t/review/wrong" "$t/review/old" "$t/review/none" "$t/review/kids" "$t/agent/sessions/x" "$t/agent/sessions/subagents"
