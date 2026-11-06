@@ -15,9 +15,10 @@ cat > "$tmp/bin/pi" <<EOF
 #!/bin/bash
 case "\$1" in
   list) echo "User packages:"; sed -n 's/^packages=("\([^"]*\)")\$/  \1/p' "$src/bin/ensure-extensions";;
-  *) echo "\$ONIGIRI_WAKE" > "$tmp/seen-wake"
-     [ -e "$tmp/hang" ] && { trap 'echo TERM > "$tmp/got-sig"; exit 143' TERM; trap 'echo HUP > "$tmp/got-sig"; exit 129' HUP
-                             while :; do sleep 0.1; done; }
+  *) /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$tmp/int-ignored"
+     trap 'echo TERM > "$tmp/got-sig"; exit 143' TERM; trap 'echo HUP > "$tmp/got-sig"; exit 129' HUP
+     echo "\$ONIGIRI_WAKE" > "$tmp/seen-wake"   # last: the signal checks wait for it, so the traps are set by then
+     [ -e "$tmp/hang" ] && while :; do sleep 0.1; done
      exit \$(cat "$tmp/rc");;
 esac
 EOF
@@ -65,4 +66,13 @@ for sig in TERM:143 HUP:129; do
   has "vm: $name still fires pi-failed" "$(cat "$tmp/out")" '"kind": "pi-failed"'
 done
 rm "$tmp/hang"
+
+# pi keeps a working Ctrl-C though it now runs as a background job, which bash starts with INT ignored.
+# The subshell's trap - INT restores it on bash 4 and later (the VM and CI); macOS /bin/bash 3.2 does not.
+# LAUNCH_BASH picks the bash that runs the launcher (default its #!/bin/bash).
+lb=${LAUNCH_BASH:-/bin/bash}
+if [ "$("$lb" -c "echo \${BASH_VERSINFO[0]}")" -ge 4 ]; then
+  env_run "$lb" "$src/hosts/vm/pi-run" vm-int coding "$tmp/brief.md" > /dev/null 2>&1
+  check "vm: pi starts with INT not ignored" "$(cat "$tmp/int-ignored")" False
+else echo "skip  vm: INT disposition needs bash 4+ ($lb is older; set LAUNCH_BASH)"; fi
 exit $fail
