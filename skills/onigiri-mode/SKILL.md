@@ -45,7 +45,7 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agen
 |---|---|---|---|
 | Explore | `explorer`, 2 to 4 at once | Diagnose, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
 | Design | `designer`, twice (`variant` 1 and 2) | Change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
-| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Required for every diff and every done claim that rests on one, in coding and research sessions alike. Its `ran …; skipped …; result …` line feeds the `verified <sha>` PR comment, once you have checked each finding. |
+| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Required for every diff and every done claim that rests on one, in coding and research sessions alike. Its `ran …; skipped …; result …` line is the verification you record the way the policy's Merging section says, once you have checked each finding. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one `subagent` call per angle with `agent: explorer`. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
 - **Nowhere else.** Do everything else yourself.
