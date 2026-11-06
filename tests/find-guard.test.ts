@@ -28,6 +28,12 @@ test("whole-disk and whole-home finds are blocked however they are written", () 
 		"ls; find /opt/homebrew -name cmake",
 		"x=$(find / -name cmake | head -1)",
 		"echo hi | xargs find / -name",
+		"find /usr/.. -name cmake",
+		"find /usr//local -name cmake",
+		"find /opt/./homebrew/ -name cmake",
+		"find / -exec echo -maxdepth 2 \\;",
+		'echo "$(find / -name cmake)"',
+		'echo "`find ~ -name cmake`"',
 	])
 		blocked(c);
 });
@@ -42,6 +48,11 @@ test("scoped or shallow finds run", () => {
 		"find / -maxdepth 1 -type d",
 		"find ~ -maxdepth 2 -name '.zshrc'",
 		"find /tmp/build-123 -name x",
+		"find . -maxdepth 1 -exec ls {} \\;",
+		'echo "find / is blocked"',
+		'echo "$(pwd) then find / in prose"',
+		'echo "`date` find ~ text"',
+		"echo 'find / -name x' \"$(pwd)\"",
 		"which cmake || command -v cmake",
 		"echo 'find / -name x'",
 		"grep -rn 'find /' docs",
