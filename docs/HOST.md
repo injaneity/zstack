@@ -7,6 +7,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 - **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key and `~/onigiri-vm/vm`.
 - Reach the VM from the box with `HOME=/home/box /srv/onigiri/tools/cua-main-88e6d9f do --no-record shell '~/onigiri-vm/vm "..."'`. For anything longer than a line, base64 a script over and run it as `bash /tmp/x.sh`. If the VM is unreachable, stop and ask Zane. Never do the work in the chat instead.
 - `pi list` on the VM shows `git:github.com/injaneity/zstack`, checked out at `/home/box/.pi/agent/git/github.com/injaneity/zstack`. `/home/box/.pi/agent/skills/` is empty by design.
+- That checkout is the only zstack on the VM that anything runs from. `/srv/onigiri/zstack` is a stale clone left at `3d56b7d` (2 Nov), before `config/models.json`, the launchers and the merge job existed. Nothing reads it: no cron line, hook, symlink, shim or launcher names it since the merge job replaced its `gate/` cron on 5 Nov. Don't read, run or branch from it. It is kept, not deleted, until Zane says otherwise.
 
 ## Policy
 
