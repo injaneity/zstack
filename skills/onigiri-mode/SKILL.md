@@ -33,6 +33,7 @@ license: MIT
 **Run it well.**
 - Small units, each ending in a check that can fail. Don't advance on red. Bulk output goes to a file, and you read back the slice you need. Before reporting a number, name what bounds it and what else it might measure. A recurring mistake gets a line in the repo's rules file, and the second time a check.
 - **When no playbook fits**, write done as a predicate that can fail, then split the work into units that land alone, riskiest unknown first.
+- **Wall clock.** Resolve a tool with `command -v`, `which -a` or `brew --prefix`, or its known install directory. Never `find /` or a whole home directory for one; the `tool-guard` extension refuses it. Run a long build or test in the background with its output in a log and wait on it once (`wait <pid>`, or until the log shows its end marker or the pid exits), never `sleep N; tail` it. A measurement is a fixed, time-bounded matrix, not a long serial loop in the foreground.
 - **On a long or unattended run**, keep an append-only log with one row per decision: what, why, and a pointer to the evidence (a sha, `file:line`, or artifact path). Reread it before each attempt and before handing back.
 
 ## Subagents

@@ -27,6 +27,11 @@ jobs:
         run: |
           pipx run ruff==0.17.3 check hosts/vm tests
           shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: find guard refuses whole-disk and whole-home finds
+        run: node --test tests/find-guard.test.ts
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
       - name: launchers fast-forward the package to origin/main or refuse to start

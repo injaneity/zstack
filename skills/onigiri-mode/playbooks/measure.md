@@ -4,7 +4,7 @@
 
 1. Ground the workload with **how**. Name what can move the result (data size, state, concurrency) and pick a case that reproduces the complaint. No repro, no optimizing.
 2. Fix one metric, the better direction, and a stop predicate. A loop pairs the target with a minimum number of attempts, so an early lucky win cannot end it.
-3. Build the harness and prove it can tell a slow case from a fast one, then freeze it. One command emits the metric sampled enough to clear noise, with its error count and work done. Record the baseline and a green regression run before any change.
+3. Build the harness and prove it can tell a slow case from a fast one, then freeze it. One command emits the metric sampled enough to clear noise, with its error count and work done. Bound it: a fixed matrix of runs, each under `timeout`, built in the background and waited on once, never a long serial loop in the foreground. Record the baseline and a green regression run before any change.
 4. Ground each hypothesis in a mechanism. Try the cheapest first: don't do it, do it once, do less, do it later, do it concurrently, do it cheaper.
 5. Measure before and after under the same conditions. Keep a change only when the number moves past noise and the regression gate stays green. Otherwise revert it fully.
 6. One commit per kept change, staging only its files.

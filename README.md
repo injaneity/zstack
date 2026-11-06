@@ -27,6 +27,8 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart (the first run installs Java and TLC through mise, so it needs mise and the network, unless `TLA2TOOLS` points at a local `tla2tools.jar`, with `JAVA` optionally naming the Java binary). The other two generate a repo's formal verification skill and keep it in step with the code. All three are slash-command only: `/skill:<name>`.
 - **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, with safety changes, a per-role model from `config/models.json`, and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
+- **`tool-guard` extension** (`extensions/tool-guard/`): refuses a bash `find` over the whole disk or a whole home directory, and adds rules against that and `sleep`-and-`tail` polling to every session's system prompt. `docs/TOOL-GUARD.md` has the details.
+
 `docs/PROVENANCE.md` records what changed from pstack and why.
 
 ## license
