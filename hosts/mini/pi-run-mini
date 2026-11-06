@@ -7,6 +7,7 @@
 # PI_RUN_MINI_DRY=1 prints what it would start and exits 0.
 set -u
 pkg="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit 4; ZSTACK_ENSURED=1 exec "$0" "$@"; fi; unset ZSTACK_ENSURED
 [ $# -ge 2 ] || { echo "usage: pi-run-mini <slug> <brief file> [<role>]" >&2; exit 2; }
 slug=$1; brief=$2; role=${3:-coding}
 # the old third argument was a model id. Only the config picks models now, so a non-role runs as coding.

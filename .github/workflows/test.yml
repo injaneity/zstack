@@ -26,7 +26,7 @@ jobs:
       - name: lint the VM host scripts
         run: |
           pipx run ruff==0.17.3 check hosts/vm tests
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push bin/ensure-package-main tests/ensure-package-main.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,6 +34,8 @@ jobs:
         run: node --test tests/find-guard.test.ts
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
+      - name: launchers fast-forward the package to origin/main or refuse to start
+        run: tests/ensure-package-main.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0
