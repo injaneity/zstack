@@ -2,7 +2,7 @@
 // `find / -name cmake` and `find /tmp /Users/<user> ...` while looking for a tool. Pure, so tests run it without pi.
 import * as path from "node:path";
 
-const WRAPPERS = new Set(["sudo", "time", "command", "exec", "nohup", "env", "nice", "ionice", "timeout", "gtimeout", "xargs", "stdbuf"]);
+const WRAPPERS = new Set(["{", "sudo", "time", "command", "exec", "nohup", "env", "nice", "ionice", "timeout", "gtimeout", "xargs", "stdbuf"]);
 // Directories too big to walk. A top-level directory (/usr, /tmp, /opt, ...) counts too, by depth below.
 const BROAD = new Set(["/usr/local", "/opt/homebrew", "/private/tmp", "/private/var", "/home", "/Users"]);
 const MAX_DEPTH = 2;
@@ -60,7 +60,7 @@ function commands(line: string): string[][] {
 			word += line[++i];
 			inWord = true;
 		} else if (c === " " || c === "\t") endWord();
-		else if (";&|\n()`{}".includes(c) || (c === "$" && line[i + 1] === "(")) {
+		else if (";&|\n()`".includes(c) || (c === "$" && line[i + 1] === "(")) {
 			if (c === "$") i++;
 			endCommand();
 		} else {
@@ -108,7 +108,13 @@ function broad(p: string, home: string): boolean {
 
 /** The reason to refuse `command`, or undefined to let it run. */
 export function checkFind(command: string, home = "/home/user"): string | undefined {
+	let cwd = ""; // set by a literal `cd <dir>` earlier in the line, so `cd / && find .` is seen
 	for (const words of commands(command)) {
+		if (words[0] === "cd") {
+			const to = normalize(words[1] ?? "~", home);
+			cwd = to.startsWith("/") ? to : cwd && path.posix.resolve(cwd, to);
+			continue;
+		}
 		const args = findArgs(words);
 		if (!args) continue;
 		let j = 0;
@@ -120,7 +126,10 @@ export function checkFind(command: string, home = "/home/user"): string | undefi
 		const actions = args.findIndex((a, k) => k >= j && /^-(exec|execdir|ok|okdir)$/.test(a));
 		const depth = args.slice(j, actions < 0 ? undefined : actions).indexOf("-maxdepth");
 		if (depth >= 0 && Number(args[j + depth + 1]) <= MAX_DEPTH) continue;
-		const hit = paths.map((p) => normalize(p, home)).filter((p) => broad(p, home));
+		const hit = (paths.length ? paths : ["."])
+			.map((p) => normalize(p, home))
+			.map((p) => (cwd && !p.startsWith("/") ? path.posix.resolve(cwd, p) : p))
+			.filter((p) => broad(p, home));
 		if (hit.length)
 			return `blocked: \`find ${hit.join(" ")}\` walks the whole disk or a whole home directory and can run for tens of minutes. ${FIND_HINT}`;
 	}

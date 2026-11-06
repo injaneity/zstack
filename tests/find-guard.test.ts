@@ -34,6 +34,11 @@ test("whole-disk and whole-home finds are blocked however they are written", () 
 		"find / -exec echo -maxdepth 2 \\;",
 		'echo "$(find / -name cmake)"',
 		'echo "`find ~ -name cmake`"',
+		"find ${HOME} -name cmake",
+		"cd / && find . -name cmake",
+		"cd ~ && find -name cmake",
+		"cd /usr; find local -name cmake",
+		"{ find / -name x; }",
 	])
 		blocked(c);
 });
@@ -49,6 +54,10 @@ test("scoped or shallow finds run", () => {
 		"find ~ -maxdepth 2 -name '.zshrc'",
 		"find /tmp/build-123 -name x",
 		"find . -maxdepth 1 -exec ls {} \\;",
+		"cd /tmp/build-1 && find . -name '*.o'",
+		"cd src && find . -name x",
+		"find ${HOME}/project -name x",
+		"{ find . -name x; }",
 		'echo "find / is blocked"',
 		'echo "$(pwd) then find / in prose"',
 		'echo "`date` find ~ text"',
