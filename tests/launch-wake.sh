@@ -78,6 +78,21 @@ check "mini: pi got $name" "$(cat "$tmp/got-sig" 2>/dev/null)" "$name"
 check "mini: $name still writes run.rc" "$(cat "$d/run.rc" 2>/dev/null)" "$want"
 check "mini: $name removes run.pid" "$([ -e "$d/run.pid" ] && echo left || echo gone)" gone
 has "mini: $name fires pi-failed" "$(cat "$d/run.log")" '"kind": "pi-failed"'
+# a TERM before pi starts still leaves run.rc and no pi: the VM's during setup (a slow .profile), the mini's at once.
+rm -f "$tmp/seen-wake"; printf 'sleep 2\n' > "$tmp/.profile"
+env_run "$src/hosts/vm/pi-run" vm-early coding "$tmp/brief.md" > /dev/null 2>&1 & w=$!
+for _ in $(seq 50); do [ -s "$tmp/root/run/vm-early.pid" ] && break; sleep 0.1; done   # bounded: 5s
+kill -TERM "$(cut -d' ' -f1 "$tmp/root/run/vm-early.pid")"; wait $w; got=$?; rm "$tmp/.profile"
+check "vm: TERM during setup exits 143" "$got" 143
+check "vm: TERM during setup writes run.rc" "$(cat "$tmp/root/review/vm-early/run.rc" 2>/dev/null)" 143
+check "vm: TERM during setup starts no pi" "$([ -e "$tmp/seen-wake" ] && echo started || echo none)" none
+env_run "$src/hosts/mini/pi-run-mini" mini-early "$tmp/brief.md" > /dev/null 2>&1
+d="$tmp/onigiri/review/mini-early"; kill -TERM "$(cat "$d/run.pid")"
+for _ in $(seq 50); do [ -e "$d/run.pid" ] || break; sleep 0.1; done   # bounded: 5s
+check "mini: TERM right after launch writes run.rc" "$(cat "$d/run.rc" 2>/dev/null)" 143
+check "mini: TERM right after launch removes run.pid" "$([ -e "$d/run.pid" ] && echo left || echo gone)" gone
+for _ in $(seq 20); do pgrep -f -- "--session-id pi-mini-early" > /dev/null || break; sleep 0.1; done   # bounded: 2s
+check "mini: TERM right after launch leaves no pi" "$(pgrep -f -- "--session-id pi-mini-early" > /dev/null && echo left || echo none)" none
 rm "$tmp/hang"
 # a relaunch clears the last run.rc, so a live run never looks finished.
 echo 0 > "$tmp/rc"; echo 9 > "$tmp/root/review/vm-s0/run.rc"

@@ -48,9 +48,13 @@ cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
 cd "$d"; rm -f run.rc
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
 nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  /bin/bash -c '"$0" "$@" & c=$!; trap "kill -TERM $c 2>/dev/null" TERM
+  /bin/bash -c 'sid=$1; fin() { "$ONIGIRI_WAKE" --exit "$1" "$sid"; echo "$1" > run.rc; rm -f run.pid; exit "$1"; }
+    fwd() { if [ -n "$!" ]; then kill -TERM "$!" 2>/dev/null; else fin 143; fi; }
+    trap fwd TERM; echo $$ > run.pid
+    "$0" "$@" & c=$!
     while :; do wait $c; rc=$?; kill -0 $c 2>/dev/null || break; done
-    "$ONIGIRI_WAKE" --exit $rc "$1"; echo $rc > run.rc; rm -f run.pid' "$pkg/bin/pi-run" \
+    fin $rc' "$pkg/bin/pi-run" \
   "pi-$slug" "$provider" "$model" "$d/brief.full.md" --name "role:$role" > "$d/run.log" 2>&1 < /dev/null &
-echo $! > "$d/run.pid"
-echo "pi-run-mini: started pi-$slug pid $! in $d as role $role: $provider $model"
+# the wrapper writes run.pid itself once its TERM trap is set; hold the launch lock until it has (bounded: 5s).
+for _ in $(seq 50); do [ -s run.pid ] && break; sleep 0.1; done
+echo "pi-run-mini: started pi-$slug pid $(cat run.pid 2>/dev/null || echo "$!") in $d as role $role: $provider $model"
