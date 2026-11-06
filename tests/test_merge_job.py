@@ -592,6 +592,79 @@ class PatentPush(unittest.TestCase):
             items = [json.loads(x) for x in mj.read(f"{root}/buffer.jsonl").splitlines()]
             self.assertEqual([(i["kind"], i["id"]) for i in items], [("patent-held-publish", "cua:onigiri/x")])
 
+    def commits(self, tmp, branch, steps):
+        """Commit each step (a dict of path -> text, None deletes, ("mv", a, b) renames), then push branch."""
+        g, pub, work, root = self.repo(tmp)
+        g("checkout", "-qb", branch, cwd=work)
+        for i, step in enumerate(steps):
+            if isinstance(step, tuple):
+                g("mv", step[1], step[2], cwd=work)
+            else:
+                for name, text in step.items():
+                    if text is None:
+                        g("rm", "-q", name, cwd=work)
+                        continue
+                    Path(work, name).parent.mkdir(parents=True, exist_ok=True)
+                    Path(work, name).write_text(text)
+                    g("add", name, cwd=work)
+            g("commit", "-qm", f"step {i}", cwd=work)
+        r = subprocess.run(["git", "push", "origin", branch], cwd=work, capture_output=True, text=True)
+        return r, g("ls-remote", pub, f"refs/heads/{branch}")
+
+    def test_a_held_commit_reverted_later_in_the_push_is_still_held(self):
+        with tempfile.TemporaryDirectory() as tmp:   # net diff is empty; the first commit still publishes the line
+            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// keyvault probe\n"}, {"a.rs": None}])
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("patent hold", r.stderr)
+            self.assertEqual(remote, "")
+
+    def test_a_held_file_renamed_away_is_held(self):
+        with tempfile.TemporaryDirectory() as tmp:   # net diff adds only src/link.rs; history has pairing.rs
+            r, remote = self.commits(tmp, "onigiri/mv", [{"src/pairing.rs": "fn x() {}\n"}, ("mv", "src/pairing.rs", "src/link.rs")])
+            self.assertNotEqual(r.returncode, 0)
+            self.assertEqual(remote, "")
+
+    def test_rename_source_and_target_paths_both_count(self):
+        ns = "R100\tsrc/pairing.rs\tsrc/link.rs\nM\tREADME\n"
+        self.assertEqual(pp.status_paths(ns), ["src/pairing.rs", "src/link.rs", "README"])
+        self.assertEqual(pp.held_hits(pp.status_paths(ns), ""), ["src/pairing.rs"])
+        self.assertEqual(pp.held_hits(pp.status_paths("R090\tsrc/a.rs\tsrc/teleport.rs\n"), ""), ["src/teleport.rs"])
+
+    def test_a_combined_diff_counts_only_the_merges_own_lines(self):
+        cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
+              " +// teleport from main\n++// resolved\n")
+        self.assertEqual(pp.held_hits([], cc), [])   # column 2 only: the line came from a parent, not the merge
+        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// keyvault in the resolution")))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- teleport removed\n"))
+
+    def test_merging_main_that_already_has_held_work_is_pushed(self):
+        with tempfile.TemporaryDirectory() as tmp:   # main's own pairing.rs arrives by merge; the branch adds none
+            g, pub, work, root = self.repo(tmp)
+            g("checkout", "-qb", "onigiri/m", cwd=work)
+            Path(work, "mine.rs").write_text("fn mine() {}\n")
+            g("add", ".", cwd=work)
+            g("commit", "-qm", "mine", cwd=work)
+            up = f"{tmp}/upstream"   # someone else's clone, without the hook, lands held work on main
+            g("clone", "-q", "-b", "main", pub, up)
+            for k, v in (("user.name", "u"), ("user.email", "u@u"), ("commit.gpgsign", "false")):
+                g("config", k, v, cwd=up)
+            Path(up, "src").mkdir()
+            Path(up, "src/pairing.rs").write_text("fn pair() {}\n")
+            g("add", ".", cwd=up)
+            g("commit", "-qm", "upstream", cwd=up)
+            g("push", "-q", "origin", "HEAD:main", cwd=up)
+            g("fetch", "-q", "origin", cwd=work)
+            g("checkout", "-q", "onigiri/m", cwd=work)
+            g("merge", "-q", "--no-edit", "origin/main", cwd=work)
+            r = subprocess.run(["git", "push", "origin", "onigiri/m"], cwd=work, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_branch_whose_history_is_clean_is_pushed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/ok", [{"a.rs": "fn a() {}\n"}, ("mv", "a.rs", "b.rs")])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(remote, "")
+
     def test_a_relay_diff_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:
             r, remote, root = self.push(tmp, "onigiri/y", "relay.rs", "fn relay_unregister() {}\n")

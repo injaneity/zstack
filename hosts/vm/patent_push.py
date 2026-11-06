@@ -6,9 +6,12 @@ built normally (models may see it), but it is never pushed to public trycua/cua:
 private repo trycua/cua-staging instead. Relay work in general is not held.
 
 This is cua's pre-push hook (hosts/vm/pre-push, installed as /srv/onigiri/cua/.git/hooks/pre-push), so every push from
-the cua clone and its run worktrees passes here: the single place where the remote is chosen. For each pushed ref it diffs the new head
-against its merge base with origin/main (changed paths and changed lines). If that diff matches HELD and the remote
-is not trycua/cua-staging, the public push is refused and:
+the cua clone and its run worktrees passes here: the single place where the remote is chosen. For each pushed ref it
+checks the net diff from its merge base with origin/main and every commit in the push range (<head> --not origin/main),
+changed paths and changed lines, with renames found so a rename's source and target paths both count. A held change
+that a later commit reverts is still in the history being published. A merge commit is read as a combined diff, so only
+what the merge itself adds counts, not the main it brings in. If any of that matches HELD and the remote is not
+trycua/cua-staging, the public push is refused and:
   - when injaneity can push to trycua/cua-staging, the same commit is pushed there (never forced) and the run is told
     to open its PR with `gh pr create -R trycua/cua-staging`;
   - otherwise the branch stays local and a buffer item tells Zane it is held for the private repo.
@@ -41,16 +44,32 @@ def is_staging(url):
 
 
 def held_hits(paths, diff):
-    """Changed paths and changed diff lines that match HELD (at most 5). Lockfiles are skipped."""
+    """Changed paths and changed diff lines that match HELD (at most 5). Lockfiles are skipped. The diff may be a
+    plain one (`diff --git`, one +/- column) or a merge's combined diff (`diff --cc`, one column per parent), where
+    only the lines the merge itself adds or drops against every parent count."""
     hits = [p for p in paths if not LOCKFILE.search(p) and HELD.search(p)]
-    lock = False
+    # cols: the number of +/- columns, set by each hunk header (@@ is 1, @@@ is 2). The ---/+++ file names are
+    # skipped only in a file header, so a changed line that starts with -- or ++ is still read.
+    lock, cols, hunk = False, 1, False
     for line in (diff or "").splitlines():
-        if line.startswith("diff --git "):
-            lock = bool(LOCKFILE.search(line.rsplit(" b/", 1)[-1]))
+        if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
+            path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
+            lock, cols, hunk = bool(LOCKFILE.search(path)), 1, False
             continue
-        if not lock and line[:1] in "+-" and not line.startswith(("+++", "---")) and HELD.search(line):
+        if line.startswith("@@"):
+            cols, hunk = len(line) - len(line.lstrip("@")) - 1, True
+            continue
+        if not hunk and line.startswith(("+++ ", "--- ")):
+            continue
+        # a changed line has + (or -) in every column; " +" in a merge came from a parent, not from the merge
+        if not lock and line[:cols] in ("+" * cols, "-" * cols) and HELD.search(line[cols:]):
             hits.append(line[:100])
     return list(dict.fromkeys(hits))[:5]
+
+
+def status_paths(name_status):
+    """Every path in `git diff --name-status` output: both sides of a rename or copy, and every merge column."""
+    return [p for line in name_status.splitlines() for p in line.split("\t")[1:]]
 
 
 def choose_remote(url, hits, staging_ok):
@@ -67,15 +86,25 @@ def git(*args, cwd=None):
 
 
 def diff_hits(sha, cwd=None):
+    """HELD hits in the net diff from the merge base with origin/main, then in each commit of <sha> --not origin/main."""
     rc, base = git("merge-base", sha, "refs/remotes/origin/main", cwd=cwd)
     base = base.strip() if rc == 0 and base.strip() else None
     if not base:
         return ["no merge base with origin/main (diff unreadable)"]
-    rc1, paths = git("diff", "--name-only", base, sha, cwd=cwd)
-    rc2, diff = git("diff", "-U0", "--no-color", base, sha, cwd=cwd)
-    if rc1 or rc2:
+    rc1, paths = git("diff", "--name-status", "--find-renames", "--no-color", base, sha, cwd=cwd)
+    rc2, diff = git("diff", "-U0", "--find-renames", "--no-color", base, sha, cwd=cwd)
+    rc3, revs = git("rev-list", "--reverse", sha, "--not", "refs/remotes/origin/main", cwd=cwd)
+    if rc1 or rc2 or rc3:
         return ["diff unreadable"]
-    return held_hits(paths.splitlines(), diff)
+    hits = held_hits(status_paths(paths), diff)
+    for c in revs.split():
+        # diff-tree prints the commit id first; --cc gives a merge only the lines it adds, and nothing for a root commit
+        rc1, paths = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "--name-status", "--find-renames", c, cwd=cwd)
+        rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd)
+        if rc1 or rc2:
+            return hits + [f"commit {c[:12]} diff unreadable"]
+        hits += [f"{c[:12]}: {h}" for h in held_hits(status_paths(paths), diff)]
+    return list(dict.fromkeys(hits))[:5]
 
 
 def staging_push_ok():
