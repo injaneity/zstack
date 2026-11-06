@@ -78,8 +78,9 @@ check "mini: pi got $name" "$(cat "$tmp/got-sig" 2>/dev/null)" "$name"
 check "mini: $name still writes run.rc" "$(cat "$d/run.rc" 2>/dev/null)" "$want"
 check "mini: $name removes run.pid" "$([ -e "$d/run.pid" ] && echo left || echo gone)" gone
 has "mini: $name fires pi-failed" "$(cat "$d/run.log")" '"kind": "pi-failed"'
-# a TERM before pi starts still leaves run.rc and no pi: the VM's during setup (a slow .profile), the mini's at once.
-rm -f "$tmp/seen-wake"; printf 'sleep 2\n' > "$tmp/.profile"
+# a TERM before pi starts still leaves run.rc and no pi: the VM's during setup (a slow .profile that also leaves a
+# background job, which must not be taken for pi), the mini's at once.
+rm -f "$tmp/seen-wake"; printf 'sleep 3 &\nsleep 2\n' > "$tmp/.profile"
 env_run "$src/hosts/vm/pi-run" vm-early coding "$tmp/brief.md" > /dev/null 2>&1 & w=$!
 for _ in $(seq 50); do [ -s "$tmp/root/run/vm-early.pid" ] && break; sleep 0.1; done   # bounded: 5s
 kill -TERM "$(cut -d' ' -f1 "$tmp/root/run/vm-early.pid")"; wait $w; got=$?; rm "$tmp/.profile"

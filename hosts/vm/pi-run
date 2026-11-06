@@ -48,8 +48,10 @@ done
 # From here every exit, a failed setup or pi's own end, leaves run.rc in the session's review dir, which the pickup reads.
 # The traps go in before the pidfile names this process, so nothing can stop it unrecorded once it owns the id.
 rv=${ONIGIRI_ROOT:-/srv/onigiri}/review/$sid; mkdir -p "$rv"; rm -f "$rv/run.rc"
-# A signal before pi is forked ends the launcher; after, it goes to pi ($! is set by the fork, nothing else backgrounds).
-fwd() { if [ -n "$!" ]; then kill -"$1" "$!" 2>/dev/null; else exit "$2"; fi; }
+# A signal before pi is forked ends the launcher; after, it goes to pi. pre is $! before the fork, so a signal between
+# the fork and child=$! still finds pi, and a job .profile might start is never mistaken for it.
+child=; pre=
+fwd() { local c=$child; [ -z "$c" ] && [ -n "$pre" ] && [ "x$!" != "$pre" ] && c=$!; if [ -n "$c" ]; then kill -"$1" "$c" 2>/dev/null; else exit "$2"; fi; }
 trap 'rc=$?; [ -n "$lock" ] && rmdir "$lock" 2>/dev/null; echo $rc > "$rv/run.rc"' EXIT
 trap 'fwd TERM 143' TERM; trap 'fwd HUP 129' HUP
 echo "$$ $(starttime $$)" > "$rd/$sid.pid"
@@ -64,6 +66,7 @@ shift 2
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
 # Background pi so a trap can forward signals; an async job starts with INT ignored, so the subshell restores it
 # (bash 5) and <&0 keeps stdin, as the old exec did. A terminal's Ctrl-C reaches pi through the process group.
+pre=x$!
 ( trap - INT; exec pi "${args[@]}" "${@:2}" -p "$(cat "$1")" ) <&0 & child=$!
 trap : INT   # outlive the Ctrl-C to send the wake
 while :; do wait "$child"; rc=$?; kill -0 "$child" 2>/dev/null || break; done
