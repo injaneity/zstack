@@ -45,11 +45,12 @@ for p in $(pgrep -f -- "pi-run $sid( |\$)"); do
   echo "pi-run: $sid already running (wrapper pid $p); not starting a second" >&2; exit 3
 done
 [ -n "${PI_RUN_DRY:-}" ] && { echo "pi-run: dry run, would start $sid as role $role: $provider $model"; exit 0; }
+# From here every exit, a failed setup or pi's own end, leaves run.rc in the session's review dir, which the pickup reads.
+# The traps go in before the pidfile names this process, so nothing can stop it unrecorded once it owns the id.
+rv=${ONIGIRI_ROOT:-/srv/onigiri}/review/$sid; mkdir -p "$rv"; rm -f "$rv/run.rc"
+trap 'rc=$?; rmdir "$lock" 2>/dev/null; echo $rc > "$rv/run.rc"' EXIT; trap 'exit 143' TERM; trap 'exit 129' HUP
 echo "$$ $(starttime $$)" > "$rd/$sid.pid"
 rmdir "$lock" 2>/dev/null
-# From here every exit, a failed setup or pi's own end, leaves run.rc in the session's review dir, which the pickup reads.
-rv=${ONIGIRI_ROOT:-/srv/onigiri}/review/$sid; mkdir -p "$rv"; rm -f "$rv/run.rc"
-trap 'echo $? > "$rv/run.rc"' EXIT; trap 'exit 143' TERM; trap 'exit 129' HUP
 if [ -r "$HOME/.profile" ]; then . "$HOME/.profile" >/dev/null 2>&1; fi
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 "$pkg/bin/ensure-extensions" >&2 || { rm -f "$rd/$sid.pid"; exit 4; }

@@ -3,7 +3,7 @@
 # <role> (default coding) picks provider and model from config/models.json via bin/model-for; a name that is not a
 # role exits 2 with model-for's error. The role is
 # recorded as the session name role:<role>, which bin/check-models reads back.
-# done when run.log has more than 2 lines; exit code in run.rc, which the periodic pickup reads. Then it runs
+# done when run.rc exists: the exit code, written after the wake, which the periodic pickup reads. Before it, it runs
 # hosts/vm/wake.py, which wakes onigiri only when rc is not 0 (pi-failed, best effort; "webhook not configured" in
 # run.log when this host has no key).
 # one live session per slug: refuses (exit 3) while run.pid is alive or any pi process holds --session-id pi-<slug>.
@@ -50,7 +50,7 @@ export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
 nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
   /bin/bash -c '"$0" "$@" & c=$!; trap "kill -TERM $c 2>/dev/null" TERM
     while :; do wait $c; rc=$?; kill -0 $c 2>/dev/null || break; done
-    echo $rc > run.rc; "$ONIGIRI_WAKE" --exit $rc "$1"; rm -f run.pid' "$pkg/bin/pi-run" \
+    "$ONIGIRI_WAKE" --exit $rc "$1"; echo $rc > run.rc; rm -f run.pid' "$pkg/bin/pi-run" \
   "pi-$slug" "$provider" "$model" "$d/brief.full.md" --name "role:$role" > "$d/run.log" 2>&1 < /dev/null &
 echo $! > "$d/run.pid"
 echo "pi-run-mini: started pi-$slug pid $! in $d as role $role: $provider $model"
