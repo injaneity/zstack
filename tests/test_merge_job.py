@@ -30,7 +30,7 @@ H, H2 = "a" * 40, "b" * 40
 HOLDS = """# comment
 hold           | 5675          | yes | open PR, never touch
 no-move        | 5700          | no  | keep it a draft
-hands-off-user | ruicongg      | no  | hands-off login
+hands-off-user | someone       | no  | hands-off login
 skip-author    | app/cua-agents | no | bot
 review-only    | f-trycua      | no  | teammate: first review only
 hands-off-path | impl_.rs      | yes | only if it undoes #2886
