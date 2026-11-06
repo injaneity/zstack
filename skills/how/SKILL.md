@@ -16,11 +16,9 @@ When in doubt, take the simple path. If the scope is ambiguous, state your readi
 
 ## 2. Explore
 
-Split the question into 2 to 4 angles, each a distinct slice. Keep notes per angle with the file that taught you each fact.
+Split the question into 2 to 4 angles, each a distinct slice. Spawn all explorers in a single message, one `subagent` call per angle with `agent: explorer`. Each brief names its angle, where to look, and asks for file pointers, the call path and gotchas as a short summary, not pasted code. Without the `subagent` tool, read each slice yourself and say so.
 
-Read each slice yourself, noting file pointers, the call path, and gotchas.
-
-Reconcile the notes. Where two angles disagree, go back to the code and settle it.
+Keep only the explorers' summaries. Reconcile them. Where two angles disagree, go back to the code and settle it.
 
 ## 3. Explain
 
