@@ -26,6 +26,9 @@ check "pi-run no longer falls back to coding" "$(echo "$err" | grep -c 'running 
 err=$(ZSTACK_ENSURED=1 PI_RUN_DRY=1 "$pkg/hosts/vm/pi-run" t-missing coding "$b.missing" 2>&1); check "pi-run refuses a missing prompt file" "$?" 2
 err=$(ZSTACK_ENSURED=1 PI_RUN_MINI_DRY=1 HOME="$lt" "$pkg/hosts/mini/pi-run-mini" t-legacy "$b" claude-opus-5-5 2>&1); check "pi-run-mini refuses a model id as its role" "$?" 2
 check "pi-run-mini no longer falls back to coding" "$(echo "$err" | grep -c 'running as role coding')" 0
+err=$(ZSTACK_ENSURED=1 PI_RUN_MINI_DRY=1 HOME="$lt" "$pkg/hosts/mini/pi-run-mini" t-missing "$b.missing" 2>&1); check "pi-run-mini refuses a missing brief" "$?" 2
+check "pi-run-mini made no review dir for a missing brief" "$(ls "$lt/onigiri/review" 2>/dev/null)" ""
+err=$(ZSTACK_ENSURED=1 PI_RUN_DRY=1 "$pkg/hosts/vm/pi-run" t-dir coding "$lt" 2>&1); check "pi-run refuses a directory as its prompt" "$?" 2
 rm -rf "$lt"
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT

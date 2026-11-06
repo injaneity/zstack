@@ -14,7 +14,7 @@ case $sid in ''|*/*) echo "pi-run: bad session id: $sid" >&2; exit 2;; esac
 [ $# -ge 3 ] || { echo "usage: pi-run <session-id> <role> <promptfile> [extra pi args...]" >&2; exit 2; }
 role=$2
 pm=$("$pkg/bin/model-for" "$role") || exit 2
-[ -r "$3" ] || { echo "pi-run: cannot read prompt file $3" >&2; exit 2; }
+[ -r "$3" ] && [ ! -d "$3" ] || { echo "pi-run: cannot read prompt file $3" >&2; exit 2; }
 provider=${pm% *}; model=${pm#* }
 rd=/srv/onigiri/run; mkdir -p "$rd"
 starttime() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }

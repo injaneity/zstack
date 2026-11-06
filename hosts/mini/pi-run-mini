@@ -12,6 +12,7 @@ if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit
 [ $# -ge 2 ] || { echo "usage: pi-run-mini <slug> <brief file> [<role>]" >&2; exit 2; }
 slug=$1; brief=$2; role=${3:-coding}
 pm=$("$pkg/bin/model-for" "$role") || exit 2
+[ -r "$brief" ] && [ ! -d "$brief" ] || { echo "pi-run-mini: cannot read brief file $brief" >&2; exit 2; }
 provider=${pm% *}; model=${pm#* }
 d=$HOME/onigiri/review/$slug; mkdir -p "$d"
 # launch lock: mkdir is atomic, so two near-simultaneous launches can't both pass the check below.
