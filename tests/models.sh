@@ -16,7 +16,11 @@ for a in coding:builder reads:explorer review:verifier; do
 done
 check "research keeps its own claude seat" "$("$pkg/bin/model-for" research)" "claude-code claude-opus-5-5"
 check "explorer is openai-codex gpt-6.1-terra" "$("$pkg/bin/model-for" explorer)" "openai-codex gpt-6.1-terra"
-"$pkg/bin/model-for" designer >/dev/null 2>&1; check "a role with several seats needs a seat number" "$?" 1
+err=$("$pkg/bin/model-for" designer 2>&1 >/dev/null); check "a role with several seats needs a seat number" "$?" 1
+check "bare designer names both seats" "$err" "model-for: designer has 2 seats, one per side of a race; pass one of designer:1, designer:2. A race runs every seat."
+err=$("$pkg/bin/model-for" coding:1 2>&1 >/dev/null); check "a one-seat role takes no seat number" "$?" 1
+err=$(ZSTACK_ENSURED=1 PI_RUN_DRY=1 "$pkg/hosts/vm/pi-run" t-designer designer "$pkg/README.md" 2>&1); check "pi-run refuses bare designer" "$?" 2
+check "pi-run says which seats exist" "$(echo "$err" | grep -c 'pass one of designer:1, designer:2')" 1
 "$pkg/bin/model-for" no-such-role >/dev/null 2>&1; check "model-for rejects an unknown role" "$?" 1
 
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT

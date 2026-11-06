@@ -1,6 +1,7 @@
 #!/bin/bash
 # model-for <role>[:<n>]: prints "<provider> <model>" for <role> from the package's config/models.json.
-# A role with several seats (designer) needs :<n>, 1-based. model-for --roles lists every role and seat.
+# A role with several seats (designer) needs :<n>, 1-based: the bare name exits 1 naming its seats, because one
+# launch cannot run a race. model-for --roles lists every role and seat.
 # An alias (the launchers' older role names, such as coding) resolves to its role. Exit 1 for a name the file lacks.
 set -eu
 cfg="$(cd "$(dirname "$0")/.." && pwd)/config/models.json"
@@ -22,6 +23,10 @@ for name, v in roles.items():
 if want == "--roles":
     print("\n".join(seats)); sys.exit(0)
 r = seats.get(want)
+race = [k for k in seats if k.startswith(want + ":")]
+if r is None and race:
+    sys.exit("model-for: %s has %d seats, one per side of a race; pass one of %s. A race runs every seat."
+             % (want, len(race), ", ".join(race)))
 if not (isinstance(r, dict) and isinstance(r.get("provider"), str) and isinstance(r.get("model"), str)):
     sys.exit("model-for: no role %r in %s (roles: %s)" % (want, cfg, ", ".join(seats)))
 print(r["provider"], r["model"])
