@@ -34,6 +34,7 @@ Some paths must never be pushed to the public remote. A change whose diff touche
 ## Checks
 
 - Run the repository's own checks (format, lint, tests) for each touched package before opening a PR. Say in the PR which checks could not run here, and why.
+- Then, before you call a diff done or open a PR, spawn the `verifier` subagent on the diff range. Your own checks do not replace it. Check each finding, and report its `ran …; skipped …; result …` line as your verification. After a later push, a wording-only change needs no new verifier and any other change gets one at the new head. Only a read-only answer with no diff skips it, and says so.
 - Never commit build output.
 
 ## Scope

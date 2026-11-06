@@ -1,6 +1,6 @@
 ---
 name: onigiri-mode
-description: "Zane's coding mode, read by a pi session doing the work or by the chat orchestrator that files it. Coding runs in pi, one session per task, routed to a playbook. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
+description: "Read in full before any coding task: Zane's coding mode, for the pi session doing the work and the chat orchestrator that files it. Coding runs in pi, one session per task, routed to a playbook. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
 license: MIT
 ---
 
@@ -20,6 +20,7 @@ license: MIT
 - **Restate the goal first.** Name the problem and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
 - **Name the principle that changed a decision**, and the decision it changed.
 - **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. Never hand over a check you could run.
+- **A cold verifier checks every diff.** Your own checks do not replace it. Spawn the `verifier` (Subagents) on the diff range before you call a diff done or open a PR. After that first verification, a later rebase or minor fix gets one verifier at the new head and a wording-only change gets none. Only a read-only answer with no diff and no PR skips it, and says so.
 - **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
 - **Clean up your scratch.** Remove only what you created, after saving the evidence.
 
@@ -44,10 +45,9 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agen
 |---|---|---|---|
 | Explore | `explorer`, 2 to 4 at once | Diagnose, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
 | Design | `designer`, twice (`variant` 1 and 2) | Change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
-| Verify | `verifier` | Before you call the work done or open a PR, and after every push | Required for every diff and every done claim that rests on one, in coding and research sessions alike. Its `ran …; skipped …; result …` line feeds the `verified <sha>` PR comment, once you have checked each finding. |
+| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Required for every diff and every done claim that rests on one, in coding and research sessions alike. Its `ran …; skipped …; result …` line is the verification you record the way the policy's Merging section says, once you have checked each finding. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one `subagent` call per angle with `agent: explorer`. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
-- **Verify is not optional.** Spawn the `verifier` on the diff range and the claims before saying done or opening a PR. Only a read-only answer with no diff and no PR skips it, and says so.
 - **Nowhere else.** Do everything else yourself.
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.
@@ -76,7 +76,7 @@ Pause for the irreversible: force-pushes to shared branches, deploys, data delet
 
 ## Playbooks
 
-Each is `playbooks/<name>.md`. Other skills are `../<name>/SKILL.md`: **how**, **why**, **architect**, **unslop**.
+Each is `playbooks/<name>.md`. Read the matched one in full, and list its numbered steps in your first message. A step you skip stays in the list as `skip: <reason>`. Other skills are `../<name>/SKILL.md`: **how**, **why**, **architect**, **unslop**.
 
 - **Diagnose** (`diagnose`). A read-only question or unexplained behavior. The deliverable is a cited answer, not a fix.
 - **Change** (`change`). A bug fix, a feature, or a refactor, through to an open PR.

@@ -14,6 +14,7 @@
 4. Verify on the real surface. A bug's original repro now passes. A refactor's outputs match the old ones. Inconclusive or wrong-surface is not a pass.
 5. If the design is contested, argue hardest against your choice: name where it fails and check whether a rejected shape answers it. Revert a refactor that doesn't lower reader load somewhere.
 6. Commit in small ordered commits. A bug with a cheap local test lands its failing test first. A refactor lands the deletions first. Follow-ups get their own PRs.
-7. Run **Pull requests** to open it. Once step 4 passes at the PR's head, add the `verify:` and `risk:` lines the policy's Merging section defines, and update them whenever the head moves.
+7. Spawn the `verifier` on the diff range (onigiri-mode's Subagents). Fix or dismiss each finding with the reason.
+8. Run **Pull requests** to open it, and record verification and risk as the policy's Merging section defines, again whenever the head moves.
 
 **Reply:** for a bug, what broke, the root cause, and the failing-then-passing repro verbatim. For a feature, what you built and chose, and open decisions. For a refactor, the structure that changed, the pin, and the equivalence proof.
