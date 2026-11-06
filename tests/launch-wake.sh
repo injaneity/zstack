@@ -36,6 +36,7 @@ for rc in 0 7; do
   check "vm: $n $want event for vm-s$rc" "$(printf '%s' "$out" | /usr/bin/python3 -c 'import json,sys; b=[json.loads(l) for l in sys.stdin]; print(len(b), *(b[0]["kind"], b[0]["id"], b[0]["rc"]) if b else ())')" "$([ $n = 1 ] && echo "1 $want vm-s$rc $rc" || echo 0)"
   has "vm: status line on stderr" "$(cat "$tmp/err")" "wake: $want $status"
   check "vm: pi saw ONIGIRI_WAKE" "$(cat "$tmp/seen-wake")" "$src/hosts/vm/wake.py"
+  check "vm: review/vm-s$rc/run.rc is pi's rc $rc" "$(cat "$tmp/root/review/vm-s$rc/run.rc" 2>/dev/null)" $rc
 
   rm -f "$tmp/seen-wake"
   env_run "$src/hosts/mini/pi-run-mini" mini-s$rc "$tmp/brief.md" > /dev/null 2>&1
@@ -62,10 +63,31 @@ for sig in TERM:143 HUP:129; do
   for _ in $(seq 50); do [ -e "$tmp/seen-wake" ] && break; sleep 0.1; done   # bounded: 5s
   kill -"$name" "$(cut -d' ' -f1 "$tmp/root/run/vm-$name.pid")"; wait $w; got=$?
   check "vm: $name to the wrapper exits with pi's rc" "$got" "$want"
+  check "vm: $name still writes run.rc" "$(cat "$tmp/root/review/vm-$name/run.rc" 2>/dev/null)" "$want"
   check "vm: pi got $name" "$(cat "$tmp/got-sig" 2>/dev/null)" "$name"
   has "vm: $name still fires pi-failed" "$(cat "$tmp/out")" '"kind": "pi-failed"'
 done
+# the mini's run.pid is the wrapper; TERM to it reaches pi and still leaves run.rc, the wake and no run.pid.
+name=TERM want=143; rm -f "$tmp/seen-wake" "$tmp/got-sig"
+env_run "$src/hosts/mini/pi-run-mini" "mini-$name" "$tmp/brief.md" > /dev/null 2>&1
+d="$tmp/onigiri/review/mini-$name"
+for _ in $(seq 50); do [ -e "$tmp/seen-wake" ] && break; sleep 0.1; done   # bounded: 5s
+kill -"$name" "$(cat "$d/run.pid")"
+for _ in $(seq 50); do [ -e "$d/run.pid" ] || break; sleep 0.1; done   # bounded: 5s
+check "mini: pi got $name" "$(cat "$tmp/got-sig" 2>/dev/null)" "$name"
+check "mini: $name still writes run.rc" "$(cat "$d/run.rc" 2>/dev/null)" "$want"
+check "mini: $name removes run.pid" "$([ -e "$d/run.pid" ] && echo left || echo gone)" gone
+has "mini: $name fires pi-failed" "$(cat "$d/run.log")" '"kind": "pi-failed"'
 rm "$tmp/hang"
+# a relaunch clears the last run.rc, so a live run never looks finished.
+echo 0 > "$tmp/rc"; echo 9 > "$tmp/root/review/vm-s0/run.rc"
+env_run "$src/hosts/vm/pi-run" vm-s0 coding "$tmp/brief.md" > /dev/null 2>&1
+check "vm: a relaunch replaces the old run.rc" "$(cat "$tmp/root/review/vm-s0/run.rc")" 0
+# a dry run starts nothing, so it leaves no review dir behind for a pickup to read as a dead run.
+env_run env PI_RUN_MINI_DRY=1 "$src/hosts/mini/pi-run-mini" mini-dry "$tmp/brief.md" > /dev/null 2>&1
+check "mini: a dry run leaves no review dir" "$([ -e "$tmp/onigiri/review/mini-dry" ] && echo left || echo none)" none
+env_run env PI_RUN_DRY=1 "$src/hosts/vm/pi-run" vm-dry coding "$tmp/brief.md" > /dev/null 2>&1
+check "vm: a dry run leaves no review dir" "$([ -e "$tmp/root/review/vm-dry" ] && echo left || echo none)" none
 
 # pi keeps a working Ctrl-C though it now runs as a background job, which bash starts with INT ignored.
 # The subshell's trap - INT restores it on bash 4 and later (the VM and CI); macOS /bin/bash 3.2 does not.

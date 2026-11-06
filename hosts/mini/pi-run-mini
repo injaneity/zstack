@@ -7,7 +7,8 @@
 # hosts/vm/wake.py, which wakes onigiri only when rc is not 0 (pi-failed, best effort; "webhook not configured" in
 # run.log when this host has no key).
 # one live session per slug: refuses (exit 3) while run.pid is alive or any pi process holds --session-id pi-<slug>.
-# PI_RUN_MINI_DRY=1 prints what it would start and exits 0.
+# PI_RUN_MINI_DRY=1 prints what it would start and exits 0, removing the review dir if it made it.
+# run.pid is the wrapper; TERM to it is passed on to pi, and run.rc is still written. nohup leaves HUP ignored.
 set -u
 pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit 4; ZSTACK_ENSURED=1 exec "$0" "$@"; fi; unset ZSTACK_ENSURED
@@ -16,7 +17,7 @@ slug=$1; brief=$2; role=${3:-coding}
 pm=$("$pkg/bin/model-for" "$role") || exit 2
 [ -r "$brief" ] && [ ! -d "$brief" ] || { echo "pi-run-mini: cannot read brief file $brief" >&2; exit 2; }
 provider=${pm% *}; model=${pm#* }
-d=$HOME/onigiri/review/$slug; mkdir -p "$d"
+d=$HOME/onigiri/review/$slug; [ -d "$d" ] && made= || made=1; mkdir -p "$d"
 # launch lock: mkdir is atomic, so two near-simultaneous launches can't both pass the check below.
 lock=$d/.launch.lock
 if ! mkdir "$lock" 2>/dev/null; then
@@ -35,7 +36,10 @@ fi
 live=$(pgrep -f -- "--session-id pi-$slug( |\$)" | head -1)
 [ -z "$live" ] && live=$(pgrep -f -- "zstack/bin/pi-run pi-$slug( |\$)" | head -1)
 if [ -n "$live" ]; then echo "pi-run-mini: pi-$slug already running (pid $live); not starting a second" >&2; exit 3; fi
-[ -n "${PI_RUN_MINI_DRY:-}" ] && { echo "pi-run-mini: dry run, would start pi-$slug in $d as role $role: $provider $model"; exit 0; }
+if [ -n "${PI_RUN_MINI_DRY:-}" ]; then
+  echo "pi-run-mini: dry run, would start pi-$slug in $d as role $role: $provider $model"
+  rmdir "$lock"; [ -n "$made" ] && rmdir "$d"; exit 0
+fi
 source "$HOME/onigiri/env.sh"; . "$HOME/.cargo/env"
 export PATH="$HOME/onigiri/mamba/envs/bash/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-3}
 "$pkg/bin/ensure-extensions" >&2 || exit 4
@@ -44,7 +48,9 @@ cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
 cd "$d"; rm -f run.rc
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
 nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-  /bin/bash -c '"$0" "$@"; rc=$?; echo $rc > run.rc; "$ONIGIRI_WAKE" --exit $rc "$1"; rm -f run.pid' "$pkg/bin/pi-run" \
+  /bin/bash -c '"$0" "$@" & c=$!; trap "kill -TERM $c 2>/dev/null" TERM
+    while :; do wait $c; rc=$?; kill -0 $c 2>/dev/null || break; done
+    echo $rc > run.rc; "$ONIGIRI_WAKE" --exit $rc "$1"; rm -f run.pid' "$pkg/bin/pi-run" \
   "pi-$slug" "$provider" "$model" "$d/brief.full.md" --name "role:$role" > "$d/run.log" 2>&1 < /dev/null &
 echo $! > "$d/run.pid"
 echo "pi-run-mini: started pi-$slug pid $! in $d as role $role: $provider $model"
