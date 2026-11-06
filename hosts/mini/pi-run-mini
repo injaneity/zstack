@@ -3,8 +3,9 @@
 # <role> (default coding) picks provider and model from config/models.json via bin/model-for; a name that is not a
 # role exits 2 with model-for's error. The role is
 # recorded as the session name role:<role>, which bin/check-models reads back.
-# done when run.log has more than 2 lines; exit code in run.rc. Then it wakes onigiri through hosts/vm/wake.py
-# (pi-done or pi-failed, best effort; "webhook not configured" in run.log when this host has no key).
+# done when run.log has more than 2 lines; exit code in run.rc, which the periodic pickup reads. Then it runs
+# hosts/vm/wake.py, which wakes onigiri only when rc is not 0 (pi-failed, best effort; "webhook not configured" in
+# run.log when this host has no key).
 # one live session per slug: refuses (exit 3) while run.pid is alive or any pi process holds --session-id pi-<slug>.
 # PI_RUN_MINI_DRY=1 prints what it would start and exits 0.
 set -u

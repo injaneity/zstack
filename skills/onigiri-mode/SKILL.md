@@ -60,7 +60,7 @@ Reversible work proceeds without asking. Never block on a question you could ans
 
 A pi run is one-shot. It stops when the task ends and never runs under a supervisor (launchd `KeepAlive`, systemd `Restart=`, a loop). A new provider gets a fresh session id, never another provider's session.
 
-When `$ONIGIRI_WAKE` is set, the launcher wakes the orchestrator when you exit. To wake it mid-run, for a blocker, a question it must answer, or an opened PR, run `"$ONIGIRI_WAKE" <kind> "<message>" [pr=N]`, where kind is a slug like `blocked`. It is best effort and never fails your run.
+When `$ONIGIRI_WAKE` is set, only failures wake the orchestrator. The launcher wakes it when you exit non-zero, and a periodic pickup collects a run that exits 0. A run that cannot go on runs `"$ONIGIRI_WAKE" blocked "<message>" [pr=N]` (or `failed`) and stops. Any other kind is logged and not sent. A question for Zane goes in a `questions:` list in your final report, never in a wake. It is best effort and never fails your run.
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 

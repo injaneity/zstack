@@ -38,7 +38,7 @@ jobs:
         run: tests/ensure-package-main.sh
       - name: launchers install the pinned extensions or refuse to start
         run: tests/ensure-extensions.sh
-      - name: launchers wake onigiri on pi's exit and keep its exit code
+      - name: launchers wake onigiri only when pi fails and keep its exit code
         run: tests/launch-wake.sh
       - name: skills and agent types have frontmatter
         run: |

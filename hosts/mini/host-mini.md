@@ -8,7 +8,7 @@ This session runs on the relay Mac mini. The onigiri policy below names VM paths
 - The patent pre-push hook is installed in `~/onigiri/cua`; same rules as the policy.
 - macOS crates build and test here. Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: say in the verdict which checks could not run here.
 - There is no `timeout` or `setsid` command; default bash is 3.2 (bash 5 is first on PATH).
-- To wake the orchestrator mid-run (blocked, a question, a PR opened), run `"$ONIGIRI_WAKE" <kind> "<message>" [pr=N]`. The launcher already sends pi-done or pi-failed when you exit. It skips silently when this host has no key.
+- Only failures wake the orchestrator. The launcher sends pi-failed when you exit non-zero, and a periodic pickup collects a run that exits 0 from its `run.rc` and report. If you cannot go on, run `"$ONIGIRI_WAKE" blocked "<message>" [pr=N]` (or `failed`) and stop. Don't wake for an opened PR or a milestone. If you need Zane, put the question in a `questions:` list in your final report. It skips silently when this host has no key.
 - When you push to an existing PR, rerun the scoped checks on the new head, spawn one verifier there unless the change is wording-only, and post a new `verified <new full head sha>: ...` comment, as the policy says. A comment for an older head does not count.
 
 - Pruning is allowed on the mini to stay productive: stale lume worker VMs, finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.

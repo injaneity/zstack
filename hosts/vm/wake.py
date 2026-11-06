@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to. Best effort only.
+"""wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to, on failures only. Best effort.
 
-  wake.py <kind> <message> [field=value ...]   a pi session mid-run: blocked, question, pr-opened, any kind
-  wake.py --exit <rc> <session-id>             a launcher after pi exits: pi-done (rc 0) or pi-failed, with rc
+  wake.py <kind> <message> [field=value ...]   a pi session mid-run that reports itself blocked or failed
+  wake.py --exit <rc> <session-id>             a launcher after pi exits: pi-failed with rc when rc is not 0
+
+Only the kinds in WAKES POST. Everything else (pi-done on rc 0, pr-opened, question, milestone) logs "not sent" and
+exits 0: the periodic pickup run collects finished runs from their run.rc and report, and a session puts a question
+for Zane in its report's questions: list.
 
 <kind> is a lowercase slug the sender picks. The body keeps the merge job's keys (kind, id, pr, reason,
 time) so the routine reads it the same way: <message> goes in reason, id defaults to $PI_SESSION_ID (pi sets it in
@@ -28,6 +32,7 @@ SGT = ZoneInfo("Asia/Singapore")
 KIND = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 FIELD = re.compile(r"([a-z][a-z0-9_]{0,31})=(.{0,500})", re.S)
 RESERVED = {"kind", "reason", "time", "source"}
+WAKES = {"blocked", "failed", "pi-failed"}
 
 
 def now():
@@ -86,7 +91,9 @@ def main(argv):
             return 2
         fields[m.group(1)] = m.group(2)
     body = event(argv[0], argv[1][:1000], fields)
-    if os.environ.get("ONIGIRI_WAKE_DRY"):
+    if argv[0] not in WAKES:
+        status = "not sent: only failures wake"
+    elif os.environ.get("ONIGIRI_WAKE_DRY"):
         print(json.dumps(body))
         status = "not sent: dry run"
     else:
