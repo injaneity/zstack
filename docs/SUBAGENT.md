@@ -26,7 +26,7 @@ All are in `index.ts`.
 
 ## What "read-only" means
 
-pi enforces an agent's `tools:` list: `explorer`, `designer` and `verifier` get `read, grep, find, ls, bash` and no `edit` or `write`. But `bash` is not sandboxed. A child can still write files through bash, run any local command, and reach the network. They keep `bash` because they need `git diff`, `git log`, `git show`, and for the verifier the repo's checks. So "read-only" is an instruction in each agent's prompt, not a boundary. The real bound is trust in that prompt plus the missing credentials: without a token, a child cannot push, merge, comment or close through `gh` or git over HTTPS. Credentials kept elsewhere on disk (an SSH key, a `.netrc`) are not hidden.
+pi enforces an agent's `tools:` list: `explorer`, `designer` and `verifier` get `read, grep, find, ls, bash` plus FFF's `fffind`, `ffgrep` and `fff-multi-grep` (where that package is installed; pi skips a listed tool that is not registered) and no `edit` or `write`. But `bash` is not sandboxed. A child can still write files through bash, run any local command, and reach the network. They keep `bash` because they need `git diff`, `git log`, `git show`, and for the verifier the repo's checks. So "read-only" is an instruction in each agent's prompt, not a boundary. The real bound is trust in that prompt plus the missing credentials: without a token, a child cannot push, merge, comment or close through `gh` or git over HTTPS. Credentials kept elsewhere on disk (an SSH key, a `.netrc`) are not hidden.
 
 ## Behaviour to know
 
