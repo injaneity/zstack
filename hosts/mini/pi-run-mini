@@ -36,6 +36,7 @@ if [ -n "$live" ]; then echo "pi-run-mini: pi-$slug already running (pid $live);
 [ -n "${PI_RUN_MINI_DRY:-}" ] && { echo "pi-run-mini: dry run, would start pi-$slug in $d as role $role: $provider $model"; exit 0; }
 source "$HOME/onigiri/env.sh"; . "$HOME/.cargo/env"
 export PATH="$HOME/onigiri/mamba/envs/bash/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-3}
+"$pkg/bin/ensure-extensions" >&2 || exit 4
 "$HOME/onigiri/bin/sync-from-vm.sh" || echo "pi-run-mini: sync failed, using copies from $(cat $HOME/onigiri/sync/synced-at)" >&2
 cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
 cd "$d"; rm -f run.rc

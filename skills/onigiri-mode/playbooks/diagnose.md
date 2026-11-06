@@ -2,7 +2,7 @@
 
 **You own the answer. Find it from evidence, not from reading source and guessing.** No fix unless asked. Once the cause is known, hand off to Change or Measure.
 
-1. A how or why question goes through the **how** skill, plus **why** for motivation, regressions, or "was this deliberate".
+1. A how or why question goes through the **how** skill, plus **why** for motivation, regressions, or "was this deliberate". A complex question (many files, a broad search, a cross-cutting flow) fans out to 2 to 4 `explorer` subagents spawned in one message, per onigiri-mode's Subagents rules. You synthesize from their pointers and summaries. A simple one stays inline.
 2. A live process gets its signal captured before any theory: a CPU profile for a spin, a heap snapshot for a leak, a trace for a visual glitch. Drive the app until it happens.
 3. A handed-over artifact gets loaded into a queryable shape first, such as sqlite with one row per sample or node. Then reduce it with a script that prints only the smoking gun: the hot function, the retainer chain to a GC root, the loop firing without input.
 4. Prove the mechanism. Instrument or hotfix the running process and watch the hypothesis hold or fail. For an artifact, a before-and-after capture confirms it. Without one, call it the strongest hypothesis, not a confirmed cause.

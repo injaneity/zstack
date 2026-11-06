@@ -46,6 +46,7 @@ echo "$$ $(starttime $$)" > "$rd/$sid.pid"
 rmdir "$lock" 2>/dev/null; trap - EXIT
 if [ -r "$HOME/.profile" ]; then . "$HOME/.profile" >/dev/null 2>&1; fi
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+"$pkg/bin/ensure-extensions" >&2 || { rm -f "$rd/$sid.pid"; exit 4; }
 POLICY=/srv/onigiri/policy.md
 args=("--session-id" "$sid" "--provider" "$provider" "--model" "$model" "--name" "role:$role")
 if [ -r "$POLICY" ]; then args+=("--append-system-prompt" "$POLICY"); fi
