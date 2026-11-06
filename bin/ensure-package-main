@@ -1,0 +1,21 @@
+#!/bin/bash
+# ensure-package-main: fast-forward the zstack checkout that holds this script to origin/main.
+# The launchers run it before every new session, so a launch runs on the latest merged main or not at all.
+# Prints "zstack: <old> -> <new>" or "zstack: already at <sha>". Exit 1 with the reason on stderr when the
+# checkout is not on main, has local edits, cannot fetch, or cannot fast-forward. It never stashes, resets,
+# forces or deletes anything: a failure leaves the checkout exactly as it was.
+set -u
+die() { echo "ensure-package-main: $*; not launching on an old tree" >&2; exit 1; }
+here="$(cd "$(dirname "$0")/.." && pwd)"
+root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null) || die "$here is not a git checkout"
+g() { git -C "$root" "$@"; }
+branch=$(g symbolic-ref --short -q HEAD) || die "$root has a detached HEAD at $(g rev-parse --short HEAD); check out main"
+[ "$branch" = main ] || die "$root is on branch $branch, not main"
+[ -z "$(g status --porcelain --untracked-files=no)" ] || die "$root has uncommitted changes: $(g status --porcelain --untracked-files=no | head -3 | tr '\n' ' ')"
+g fetch --quiet origin refs/heads/main:refs/remotes/origin/main || die "git fetch origin main failed in $root (network or remote?)"
+old=$(g rev-parse HEAD) || die "cannot read HEAD in $root"
+new=$(g rev-parse refs/remotes/origin/main) || die "cannot read origin/main in $root"
+if [ "$old" = "$new" ]; then echo "zstack: already at $old"; exit 0; fi
+g merge-base --is-ancestor "$old" "$new" || die "$root main ($old) has commits not on origin/main ($new); not a fast-forward"
+g merge --ff-only --quiet "$new" || die "git merge --ff-only origin/main failed in $root"
+echo "zstack: $old -> $new"
