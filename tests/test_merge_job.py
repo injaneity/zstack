@@ -23,6 +23,7 @@ def load(name):
 
 
 mj = load("merge_job")
+wake = mj.wake   # the module merge_job imported; tests patch its KEY_FILE and urlopen
 pp = load("patent_push")
 
 H, H2 = "a" * 40, "b" * 40
@@ -256,9 +257,12 @@ class Stage(unittest.TestCase):
         (d / "hold-prs.txt").write_text(HOLDS)
         p = patch.multiple(mj, EVENTS=str(d / "events.log"), BUFFER=str(d / "buffer.jsonl"), HOLDS_FILE=str(d / "hold-prs.txt"),
                            STATE=str(d / "tick/state.json"), PAUSED=str(d / "tick/PAUSED"), LAST=str(d / "tick/last-run"),
-                           WEBHOOK_KEY_FILE=str(d / "no-key"), gh_json=self.gh, sh=self.sh)
+                           gh_json=self.gh, sh=self.sh)
         p.start()
         self.addCleanup(p.stop)
+        k = patch.object(wake, "KEY_FILE", str(d / "no-key"))
+        k.start()
+        self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged = d, {}, [], []
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
@@ -468,12 +472,12 @@ class Webhook(unittest.TestCase):
             def urlopen(req, timeout):
                 seen["auth"], seen["body"] = req.get_header("Authorization"), json.loads(req.data)
                 return R()
-            with patch.object(mj, "WEBHOOK_KEY_FILE", f"{d}/k"), patch.object(mj.urllib.request, "urlopen", urlopen):
+            with patch.object(wake, "KEY_FILE", f"{d}/k"), patch.object(wake.urllib.request, "urlopen", urlopen):
                 got = mj.post_webhook("unexpected-merge", "cua#10", "why")
             self.assertEqual(got, "webhook sent (200)")
             self.assertEqual(seen["auth"], "Bearer sekrit")
             self.assertEqual((seen["body"]["kind"], seen["body"]["pr"]), ("unexpected-merge", 10))
-            with patch.object(mj, "WEBHOOK_KEY_FILE", f"{d}/none"):
+            with patch.object(wake, "KEY_FILE", f"{d}/none"):
                 self.assertEqual(mj.post_webhook("x", None, "y"), "webhook not configured")
 
 
