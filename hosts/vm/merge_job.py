@@ -25,11 +25,12 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from collections import namedtuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # wake.py sits beside this file, also under python3 -I
+import wake  # noqa: E402  the urgent webhook's URL, key file and POST
 
 ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
 DIR = f"{ROOT}/tick"   # the data dir the hourly routine and the mini mirror read; no code lives there any more
@@ -44,9 +45,6 @@ TIERS = ["light", "standard", "deep", "human"]
 HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "hands-off-path", "exception", "preapprove")
 PATH_MODES = ("never", "split-undone")
 SPLIT_PR = 2886
-# The urgent wake routine. The URL is not secret; the key is only in WEBHOOK_KEY_FILE (0600).
-WEBHOOK_URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
-WEBHOOK_KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
 # cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
 ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
@@ -350,23 +348,9 @@ def gh_json(args):
 
 def post_webhook(kind, ident, reason):
     """POST one urgent event. Returns a log-safe status line; never echoes the key."""
-    try:
-        key = read(WEBHOOK_KEY_FILE).strip()
-    except OSError:
-        key = ""
-    if not key:
-        return "webhook not configured"
     m = re.search(r"#(\d+)$", ident or "")
-    body = {"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason, "time": now()}
-    req = urllib.request.Request(WEBHOOK_URL, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return f"webhook sent ({r.status})"
-    except urllib.error.HTTPError as e:
-        return f"webhook failed: HTTP {e.code}"
-    except Exception as e:
-        return f"webhook failed: {type(e).__name__}"
+    return wake.send({"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason, "time": now()},
+                     attempts=1, timeout=8)
 
 
 class Job:
