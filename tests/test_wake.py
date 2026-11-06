@@ -89,7 +89,7 @@ class Wake(unittest.TestCase):
     def test_mid_run_wakes_only_for_blocked_or_failed(self):
         self.key.write_text("k")
         with self.urlopen(None, None):
-            for kind in ("pr-opened", "question", "milestone", "blocked", "failed"):
+            for kind in ("pr-opened", "question", "milestone", "pi-failed", "pi-done", "blocked", "failed"):
                 self.assertEqual(run(kind, "x", "pr=9")[0], 0, kind)
         self.assertEqual([b["kind"] for _, b, _ in self.sent], ["blocked", "failed"])
         with self.urlopen():
