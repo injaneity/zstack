@@ -42,7 +42,7 @@ NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
 TIERS = ["light", "standard", "deep", "human"]
-HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "hands-off-path", "exception", "preapprove")
+HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
 PATH_MODES = ("never", "split-undone")
 SPLIT_PR = 2886
 SGT = ZoneInfo("Asia/Singapore")
@@ -67,7 +67,8 @@ def read(path):
 
 def parse_holds(text):
     """The rows the gate reads. Every row is validated: a malformed one raises ValueError, because a hold must never
-    be dropped silently. Rows only pickup used (hands-off-user, skip-author, exception) are checked, not kept."""
+    be dropped silently. Rows only pickup reads (hands-off-user, skip-author, review-only, exception) are checked,
+    not kept."""
     h = {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()

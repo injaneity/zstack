@@ -13,6 +13,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 - The live policy is `/srv/onigiri/policy.md`. `/home/box/.pi/agent/onigiri/policy.md` is a symlink to it, so lookup step 2 finds it with no `$ONIGIRI_POLICY` set.
 - Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. The merge job reads it on every run. Only Zane edits it.
+- Author rows steer the hourly pickup, not the merge job. `skip-author` (bots) is never picked up or reviewed, and neither is a PR of our own. `review-only` (teammates) gets a first review and nothing else: no push, rebase, salvage, close, comment or request-changes, so a review task for one is filed, never cancelled.
 
 ## Launching
 

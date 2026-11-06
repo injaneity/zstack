@@ -31,7 +31,8 @@ HOLDS = """# comment
 hold           | 5675          | yes | open PR, never touch
 no-move        | 5700          | no  | keep it a draft
 hands-off-user | ruicongg      | no  | hands-off login
-skip-author    | f-trycua      | no  | skip list
+skip-author    | app/cua-agents | no | bot
+review-only    | f-trycua      | no  | teammate: first review only
 hands-off-path | impl_.rs      | yes | only if it undoes #2886
 exception      | impl_.rs      | yes | #5686 follow-up | the MSAA path | Zane 26 Oct
 """
@@ -173,6 +174,14 @@ class Holds(unittest.TestCase):
         self.assertEqual(mj.parse_holds("\n".join(reversed(both.split("\n"))))["path_modes"], {"x.rs": "never"})
         h = mj.parse_holds(f"preapprove | #5650 | no | {H} | Zane\npreapprove | 5690 | no | {H2} | x\n")
         self.assertEqual(h["preapproved"], {5650: H, 5690: H2})
+
+    def test_author_rows_are_checked_but_never_hold_a_pr(self):
+        # review-only and skip-author steer pickup only; the gate keeps nothing for them
+        h = mj.parse_holds("review-only | f-trycua | no | teammate\nskip-author | app/cua-agents | no | bot\n")
+        self.assertEqual(h, {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}})
+        for bad in ("review-only | | no | x", "review-only | f-trycua | maybe | x", "review-only | f-trycua | no"):
+            with self.assertRaises(ValueError, msg=bad):
+                mj.parse_holds(bad)
 
     def test_malformed_rows_raise(self):
         for bad in ("hold 5675", "hodl | 5675 | no | x", "hold | 5675 | maybe | x", "hold | | no | x", "hold | abc | no | x",
