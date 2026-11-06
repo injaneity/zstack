@@ -8,7 +8,7 @@
 # one live session per id: refuses (exit 3) while $ONIGIRI_ROOT/run/<id>.pid (default /srv/onigiri) is alive or another
 # pi-run wrapper for <id> is running. PI_RUN_DRY=1 checks and exits 0 without starting pi.
 # On pi's exit it wakes onigiri through hosts/vm/wake.py (pi-done or pi-failed, best effort) and exits with pi's rc.
-# The pidfile names this wrapper, so TERM, INT or HUP to it are passed on to pi.
+# The pidfile names this wrapper, so TERM, INT or HUP to it is passed on to pi as the same signal.
 pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit 4; ZSTACK_ENSURED=1 exec "$0" "$@"; fi; unset ZSTACK_ENSURED
 sid=$1
@@ -55,7 +55,7 @@ if [ -r "$POLICY" ]; then args+=("--append-system-prompt" "$POLICY"); fi
 shift 2
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
 pi "${args[@]}" "${@:2}" -p "$(cat "$1")" <&0 & child=$!   # <&0: keep stdin, as the old exec did
-trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
+for sig in TERM INT HUP; do trap "kill -$sig \$child 2>/dev/null" $sig; done
 while :; do wait "$child"; rc=$?; kill -0 "$child" 2>/dev/null || break; done
 "$ONIGIRI_WAKE" --exit "$rc" "$sid" || true
 exit "$rc"

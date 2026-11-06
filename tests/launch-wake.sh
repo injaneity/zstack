@@ -16,7 +16,8 @@ cat > "$tmp/bin/pi" <<EOF
 case "\$1" in
   list) echo "User packages:"; sed -n 's/^packages=("\([^"]*\)")\$/  \1/p' "$src/bin/ensure-extensions";;
   *) echo "\$ONIGIRI_WAKE" > "$tmp/seen-wake"
-     [ -e "$tmp/hang" ] && { trap 'echo term > "$tmp/got-term"; exit 143' TERM; while :; do sleep 0.1; done; }
+     [ -e "$tmp/hang" ] && { trap 'echo TERM > "$tmp/got-sig"; exit 143' TERM; trap 'echo HUP > "$tmp/got-sig"; exit 129' HUP
+                             while :; do sleep 0.1; done; }
      exit \$(cat "$tmp/rc");;
 esac
 EOF
@@ -52,13 +53,16 @@ HOME="$tmp" PATH="$tmp/bin:/usr/bin:/bin" ZSTACK_ENSURED=1 ONIGIRI_ROOT="$tmp/ro
   "$src/hosts/vm/pi-run" vm-nokey coding "$tmp/brief.md" > /dev/null 2>"$tmp/err"; got=$?
 check "vm: no key still exits 0" "$got" 0
 has "vm: no key says so" "$(cat "$tmp/err")" "wake: pi-done webhook not configured"
-# TERM to the wrapper (the pid in the pidfile) reaches pi, and the wake still fires with pi's rc.
-touch "$tmp/hang"; rm -f "$tmp/seen-wake"
-env_run "$src/hosts/vm/pi-run" vm-term coding "$tmp/brief.md" > "$tmp/out" 2>&1 & w=$!
-for _ in $(seq 50); do [ -e "$tmp/seen-wake" ] && break; sleep 0.1; done   # bounded: 5s
-kill -TERM "$(cut -d' ' -f1 "$tmp/root/run/vm-term.pid")"; wait $w; got=$?
-check "vm: TERM to the wrapper exits with pi's rc" "$got" 143
-check "vm: pi got the TERM" "$(cat "$tmp/got-term" 2>/dev/null)" term
-has "vm: TERM still fires pi-failed" "$(cat "$tmp/out")" '"kind": "pi-failed"'
+# a signal to the wrapper (the pid in the pidfile) reaches pi as the same signal, and the wake still fires with pi's rc.
+touch "$tmp/hang"
+for sig in TERM:143 HUP:129; do
+  name=${sig%:*}; want=${sig#*:}; rm -f "$tmp/seen-wake" "$tmp/got-sig"
+  env_run "$src/hosts/vm/pi-run" "vm-$name" coding "$tmp/brief.md" > "$tmp/out" 2>&1 & w=$!
+  for _ in $(seq 50); do [ -e "$tmp/seen-wake" ] && break; sleep 0.1; done   # bounded: 5s
+  kill -"$name" "$(cut -d' ' -f1 "$tmp/root/run/vm-$name.pid")"; wait $w; got=$?
+  check "vm: $name to the wrapper exits with pi's rc" "$got" "$want"
+  check "vm: pi got $name" "$(cat "$tmp/got-sig" 2>/dev/null)" "$name"
+  has "vm: $name still fires pi-failed" "$(cat "$tmp/out")" '"kind": "pi-failed"'
+done
 rm "$tmp/hang"
 exit $fail

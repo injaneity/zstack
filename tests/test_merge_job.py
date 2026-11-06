@@ -470,11 +470,18 @@ class Webhook(unittest.TestCase):
                 __exit__ = lambda self, *a: None   # noqa: E731
 
             def urlopen(req, timeout):
-                seen["auth"], seen["body"] = req.get_header("Authorization"), json.loads(req.data)
+                seen.setdefault("calls", 0)
+                seen["calls"] += 1
+                seen["auth"], seen["body"], seen["timeout"] = req.get_header("Authorization"), json.loads(req.data), timeout
+                if seen.get("down"):
+                    raise OSError("down")
                 return R()
             with patch.object(wake, "KEY_FILE", f"{d}/k"), patch.object(wake.urllib.request, "urlopen", urlopen):
                 got = mj.post_webhook("unexpected-merge", "cua#10", "why")
-            self.assertEqual(got, "webhook sent (200)")
+                self.assertEqual(got, "webhook sent (200)")
+                seen.update(calls=0, down=True)
+                self.assertEqual(mj.post_webhook("unexpected-merge", "cua#10", "why"), "webhook failed: OSError")
+            self.assertEqual((seen["calls"], seen["timeout"]), (1, 8))   # one try per urgent item, as before the shared sender
             self.assertEqual(seen["auth"], "Bearer sekrit")
             self.assertEqual((seen["body"]["kind"], seen["body"]["pr"]), ("unexpected-merge", 10))
             with patch.object(wake, "KEY_FILE", f"{d}/none"):

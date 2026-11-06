@@ -44,6 +44,11 @@ class Wake(unittest.TestCase):
         s.start()
         self.addCleanup(s.stop)
         self.sent = []
+        e = patch.dict(os.environ)
+        e.start()
+        self.addCleanup(e.stop)
+        for k in ("ONIGIRI_WAKE_DRY", "PI_SESSION_ID"):
+            os.environ.pop(k, None)
 
     def urlopen(self, *results):
         results = list(results)
@@ -60,7 +65,7 @@ class Wake(unittest.TestCase):
         self.key.write_text("sekrit\n")
         with self.urlopen(None):
             code, out, err = run("blocked", "need a key on the mini", "pr=31", "repo=injaneity/zstack",
-                                 env={"PI_SESSION_ID": "pi-x", "ONIGIRI_WAKE_DRY": ""})
+                                 env={"PI_SESSION_ID": "pi-x"})
         self.assertEqual(code, 0)
         auth, body, timeout = self.sent[0]
         self.assertEqual(auth, "Bearer sekrit")

@@ -349,7 +349,8 @@ def gh_json(args):
 def post_webhook(kind, ident, reason):
     """POST one urgent event. Returns a log-safe status line; never echoes the key."""
     m = re.search(r"#(\d+)$", ident or "")
-    return wake.send({"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason, "time": now()})
+    return wake.send({"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason, "time": now()},
+                     attempts=1, timeout=8)
 
 
 class Job:
