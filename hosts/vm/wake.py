@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to. Best effort only.
+"""wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to, on failures only. Best effort.
 
-  wake.py <kind> <message> [field=value ...]   a pi session mid-run: blocked, question, pr-opened, any kind
-  wake.py --exit <rc> <session-id>             a launcher after pi exits: pi-done (rc 0) or pi-failed, with rc
+  wake.py <kind> <message> [field=value ...]   a pi session mid-run that reports itself blocked or failed
+  wake.py --exit <rc> <session-id>             a launcher after pi exits: pi-failed with rc when rc is not 0
+
+Only pi-failed from --exit and a mid-run kind in WAKES POST. Everything else (pi-done, pr-opened, question) logs "not sent" and
+exits 0: the periodic pickup run collects finished runs from their run.rc and report, and a session puts a question
+for Zane in its report's questions: list.
 
 <kind> is a lowercase slug the sender picks. The body keeps the merge job's keys (kind, id, pr, reason,
 time) so the routine reads it the same way: <message> goes in reason, id defaults to $PI_SESSION_ID (pi sets it in
@@ -28,6 +32,7 @@ SGT = ZoneInfo("Asia/Singapore")
 KIND = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 FIELD = re.compile(r"([a-z][a-z0-9_]{0,31})=(.{0,500})", re.S)
 RESERVED = {"kind", "reason", "time", "source"}
+WAKES = {"blocked", "failed"}   # mid-run kinds that POST; pi-failed is the launcher's, from --exit only
 
 
 def now():
@@ -71,8 +76,10 @@ def event(kind, message, fields):
 
 def main(argv):
     usage = "usage: wake.py <kind> <message> [field=value ...] | wake.py --exit <rc> <session-id>"
+    wakes = bool(argv) and argv[0] in WAKES
     if len(argv) == 3 and argv[0] == "--exit" and argv[1].isdigit() and argv[2]:
         rc, sid = argv[1:]
+        wakes = rc != "0"
         argv = ["pi-done" if rc == "0" else "pi-failed", f"{sid} exited rc={rc}", f"rc={rc}", f"id={sid}"]
     if len(argv) < 2 or not KIND.fullmatch(argv[0]) or not argv[1].strip():
         print(f"{usage}\n<kind> is a lowercase slug like blocked or pi-done; <message> is not empty", file=sys.stderr)
@@ -86,7 +93,9 @@ def main(argv):
             return 2
         fields[m.group(1)] = m.group(2)
     body = event(argv[0], argv[1][:1000], fields)
-    if os.environ.get("ONIGIRI_WAKE_DRY"):
+    if not wakes:
+        status = "not sent: only failures wake"
+    elif os.environ.get("ONIGIRI_WAKE_DRY"):
         print(json.dumps(body))
         status = "not sent: dry run"
     else:

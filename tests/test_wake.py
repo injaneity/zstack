@@ -76,43 +76,55 @@ class Wake(unittest.TestCase):
         self.assertEqual(err.strip(), "wake: blocked webhook sent (200)")
         self.assertNotIn("sekrit", out + err)
 
-    def test_launcher_exit_maps_rc_to_done_or_failed(self):
+    def test_launcher_exit_posts_only_a_failure(self):
         self.key.write_text("k")
         with self.urlopen(None, None):
-            run("--exit", "0", "pi-a")
+            ok = run("--exit", "0", "pi-a")
             run("--exit", "3", "pi-b")
+            run("--exit", "143", "pi-c")
         got = [(b["kind"], b["id"], b["rc"]) for _, b, _ in self.sent]
-        self.assertEqual(got, [("pi-done", "pi-a", "0"), ("pi-failed", "pi-b", "3")])
+        self.assertEqual(got, [("pi-failed", "pi-b", "3"), ("pi-failed", "pi-c", "143")])
+        self.assertEqual(ok, (0, "", "wake: pi-done not sent: only failures wake\n"))
+
+    def test_mid_run_wakes_only_for_blocked_or_failed(self):
+        self.key.write_text("k")
+        with self.urlopen(None, None):
+            for kind in ("pr-opened", "question", "milestone", "pi-failed", "pi-done", "blocked", "failed"):
+                self.assertEqual(run(kind, "x", "pr=9")[0], 0, kind)
+        self.assertEqual([b["kind"] for _, b, _ in self.sent], ["blocked", "failed"])
+        with self.urlopen():
+            code, out, err = run("question", "which branch?", env={"ONIGIRI_WAKE_DRY": "1"})
+        self.assertEqual((code, out, err), (0, "", "wake: question not sent: only failures wake\n"))
 
     def test_retries_network_errors_and_5xx_but_not_4xx_and_always_exits_0(self):
         self.key.write_text("k")
         with self.urlopen(OSError("down"), urllib.error.HTTPError("u", 502, "bad", {}, None), None):
-            code, _, err = run("milestone", "built")
+            code, _, err = run("failed", "build broke")
         self.assertEqual((code, len(self.sent)), (0, 3))
         self.assertIn("webhook sent (200)", err)
         self.sent.clear()
         with self.urlopen(urllib.error.HTTPError("u", 401, "no", {}, None)):
-            code, _, err = run("milestone", "built")
+            code, _, err = run("failed", "build broke")
         self.assertEqual((code, len(self.sent)), (0, 1))
         self.assertIn("webhook failed: HTTP 401", err)
         self.sent.clear()
         with self.urlopen(OSError(), OSError(), OSError()):
-            code, _, err = run("milestone", "built")
+            code, _, err = run("failed", "build broke")
         self.assertEqual((code, len(self.sent)), (0, 3))
         self.assertIn("webhook failed: OSError", err)
 
     def test_no_key_skips_without_a_post(self):
         with self.urlopen():
-            code, _, err = run("question", "which branch?")
+            code, _, err = run("blocked", "which branch?")
         self.assertEqual((code, self.sent), (0, []))
-        self.assertEqual(err.strip(), "wake: question webhook not configured")
+        self.assertEqual(err.strip(), "wake: blocked webhook not configured")
 
     def test_dry_prints_the_body_and_posts_nothing(self):
         self.key.write_text("sekrit")
         with self.urlopen():
-            code, out, err = run("pr-opened", "https://github.com/o/r/pull/9", "pr=9", env={"ONIGIRI_WAKE_DRY": "1"})
+            code, out, err = run("failed", "https://github.com/o/r/pull/9", "pr=9", env={"ONIGIRI_WAKE_DRY": "1"})
         self.assertEqual((code, self.sent), (0, []))
-        self.assertEqual((json.loads(out)["kind"], json.loads(out)["pr"]), ("pr-opened", 9))
+        self.assertEqual((json.loads(out)["kind"], json.loads(out)["pr"]), ("failed", 9))
         self.assertIn("not sent: dry run", err)
         self.assertNotIn("sekrit", out + err)
 
