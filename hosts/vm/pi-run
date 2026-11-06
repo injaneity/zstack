@@ -2,9 +2,8 @@
 # pi-run <session-id> <role> <promptfile> [extra pi args...]: one pi session on the VM.
 # Installed as ~/bin/pi-run on the VM by a shim that execs this file.
 # <role> picks provider and model from config/models.json via bin/model-for and is recorded as the
-# session name role:<role>, which bin/check-models reads back. The old form
-# pi-run <session-id> <provider> <model> <promptfile> still parses, but its provider and model are
-# ignored: it runs as role coding and says so on stderr, so the config stays the only model choice.
+# session name role:<role>, which bin/check-models reads back. It takes no provider or model: a name that is
+# not a role in the config exits 2 with model-for's error, so the config stays the only model choice.
 # Appends the one onigiri policy file to every session's system prompt.
 # one live session per id: refuses (exit 3) while /srv/onigiri/run/<id>.pid is alive or another
 # pi-run wrapper for <id> is running. PI_RUN_DRY=1 checks and exits 0 without starting pi.
@@ -12,13 +11,10 @@ pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${ZSTACK_ENSURED:-}" ]; then "$pkg/bin/ensure-package-main" >&2 || exit 4; ZSTACK_ENSURED=1 exec "$0" "$@"; fi; unset ZSTACK_ENSURED
 sid=$1
 case $sid in ''|*/*) echo "pi-run: bad session id: $sid" >&2; exit 2;; esac
-if [ $# -ge 4 ] && [ ! -f "$3" ] && [ -f "$4" ]; then
-  echo "pi-run: legacy provider/model args '$2 $3' ignored; running as role coding" >&2
-  set -- "$1" coding "${@:4}"
-fi
 [ $# -ge 3 ] || { echo "usage: pi-run <session-id> <role> <promptfile> [extra pi args...]" >&2; exit 2; }
 role=$2
 pm=$("$pkg/bin/model-for" "$role") || exit 2
+[ -r "$3" ] && [ ! -d "$3" ] || { echo "pi-run: cannot read prompt file $3" >&2; exit 2; }
 provider=${pm% *}; model=${pm#* }
 rd=/srv/onigiri/run; mkdir -p "$rd"
 starttime() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
