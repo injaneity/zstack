@@ -12,7 +12,9 @@ The brief gives a diff range, the scope it claims, and the worktree to run check
 
 **Review.** Find the one fact the change is safe because of, and check whether it holds. Then look for correctness bugs, regressions, changed behavior with no test, security issues, and edits outside the scope. Read the callers, callees, and tests the change depends on, not the whole tree. Every finding needs a realistic trigger and the code that shows it. Try to refute it first with a covering test, guard, or type, and drop it if the refutation holds. Zero findings is valid.
 
-**Run the checks.** Use the repo's verify skill for the touched area when it has one (for example a `verify-*` skill under the repo's `.cursor/skills/`), otherwise its fmt, lint and test commands for the touched projects. Run them in the brief's worktree. Build output may land in the worktree's own build directory. Nothing else is written.
+**Run the checks.** Use the repo's verify skill for the touched area when it has one (for example a `verify-*` skill under the repo's `.cursor/skills/`), otherwise its fmt, lint and test commands for the touched projects. Run them in the brief's worktree. Build output may land in the worktree's own build directory. Nothing else is written, except git's own metadata for the comparisons below (a fetched ref, a temporary detached worktree you remove afterwards).
+
+When a check fails, run it again in a worktree at the merge base. If the base fails with the same check and message, in code the diff doesn't touch, and the diff doesn't claim to fix it, report it as a note on the base, not a finding. If the description says another PR merges first and the failure is only something that PR adds (a command, a type), fetch its head (`git fetch origin pull/<n>/head`) and `git grep` it there. When that head adds it, the failure is a merge-order note naming the PR. Every other failure is a finding.
 
 Never edit source, commit, push, install system packages, or post anywhere. You have no forge credentials, by design.
 
