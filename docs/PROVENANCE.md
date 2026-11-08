@@ -33,6 +33,23 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 None of the zstack changes above apply to them. They keep `disable-model-invocation: true`, so pi leaves them out of the model's skill list and they run only as `/skill:statechart`, `/skill:create-formal-verification-skill` and `/skill:maintain-formal-verification-skill`. Their text still says `/statechart` and other bare slash commands, and create still calls statechart "the pstack skill". The test workflow skips the bold-name check in these three directories, because the copied text uses lowercase bold as emphasis, such as maintain's outcome labels. Links such as `../statechart/SKILL.md` are still checked. To update them, copy the three directories again from a newer cursor/plugins commit and change the sha here.
 
+## Copied from trycua/cua
+
+`skills/cua/verify-cua-driver` and `skills/cua/verify-cua-spaces` are the Markdown files of trycua/cua's `.cursor/skills/verify-cua-driver` and `.cursor/skills/verify-cua-spaces` at commit `53ad9e23e7ecc8a3ff70bcb143e3bbe2909e24aa`, byte for byte. That commit includes #6898. trycua/cua stays the source of truth, and a change to these skills goes to that repo first. They are here because pi loads skills from the package and from `.pi/skills/` or `.agents/skills/`, never from `.cursor/skills/`, so a session in a cua checkout would not see them otherwise. pi finds `skills/cua/*/SKILL.md` through the package's `skills` entry, which it searches recursively, so a host picks them up on its next launch after `bin/ensure-package-main` fast-forwards the package.
+
+The `scripts/` directories are left out. `verify-linux.sh`, `verify-macos.sh` and `spaces-desk.sh` find the repository root as four directories above themselves, which is only right inside a cua checkout, and the other scripts are called by those. The skills already call them as `.cursor/skills/<skill>/scripts/...` from the checkout root. The two `../../../libs/` links in `verify-cua-driver/macos-lume.md` don't resolve from this copy, since a link is read from the file's own directory. Resolve them against the checkout's `.cursor/skills/verify-cua-driver/`, which puts them at `libs/cua-driver/tests/runners/macos-lume/README.md` from the checkout root.
+
+zstack's rewrites don't apply to these files. The test workflow checks their frontmatter and their skill references such as `skills/verify-cua-driver/`, not their relative Markdown links. To refresh them, run this from the zstack root with `CUA` set to a trycua/cua checkout and `SHA` to the commit, then change the sha above:
+
+```bash
+for s in verify-cua-driver verify-cua-spaces; do
+  rm -rf "skills/cua/$s"
+  git -C "$CUA" ls-tree -r --name-only "$SHA" ".cursor/skills/$s" | grep '\.md$' | while read -r f; do
+    d="skills/cua/${f#.cursor/skills/}"; mkdir -p "$(dirname "$d")"; git -C "$CUA" show "$SHA:$f" > "$d"
+  done
+done
+```
+
 ## Dropped
 
 | Dropped | Why |
