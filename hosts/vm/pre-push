@@ -1,4 +1,7 @@
 #!/bin/sh
 # cua's pre-push hook: the patent hold at publish time (patent_push.py, next to this file). docs/HOST.md installs it
-# as a symlink at /srv/onigiri/cua/.git/hooks/pre-push, so it follows this checkout. Do not bypass with --no-verify.
-exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/patent_push.py" "$@"
+# as a symlink at <root>/cua/.git/hooks/pre-push on every host, so it follows this checkout, and hosts/check-parity
+# fails when it is anything else. Do not bypass with --no-verify.
+# <root> holds buffer.jsonl and events.log: $ONIGIRI_ROOT, or the directory the clone is in (git runs a worktree's
+# hook from the clone's own .git/hooks).
+ONIGIRI_ROOT=${ONIGIRI_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)} exec /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/patent_push.py" "$@"

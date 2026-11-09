@@ -2,9 +2,13 @@
 """merge_job.py: the one scheduled merger for trycua/cua on the VM. Cron runs it every 15 minutes through
 hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge stage on 6 Nov 2026.
 
+A bare run first moves the package checkout to origin/main (bin/ensure-package-main) and restarts on it, then runs
+hosts/check-parity: a host whose package, hook or agents differ from main raises an urgent parity wake.
+
 For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a
 risk tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
-conflict, mergeability not MERGEABLE, PAUSED). next_action() turns both into one action: merge, rerun a red
+conflict, mergeability not MERGEABLE, PAUSED). A mergeability GitHub has not computed yet (UNKNOWN) is read again in the
+same run when it is the only thing in the way. next_action() turns both into one action: merge, rerun a red
 ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. A draft is a skip: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
 urgent unexpected-merge wake for a merge as ME that this job did not make.
@@ -43,9 +47,8 @@ NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
 TIERS = ["light", "standard", "deep", "human"]   # the one risk enum; a PR declaring none of these never merges
-HOLD_KINDS = ("hold", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
-PATH_MODES = ("never", "split-undone")
-SPLIT_PR = 2886
+MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5   # GitHub computes mergeability on the first ask, so UNKNOWN is read again
+PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SGT = ZoneInfo("Asia/Singapore")
 # cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
 ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
@@ -67,116 +70,39 @@ def read(path):
 # ---------------- holds file ----------------
 
 def parse_holds(text):
-    """The rows the gate reads. Every row is validated: a malformed one raises ValueError, because a hold must never
-    be dropped silently. Rows only pickup reads (hands-off-user, skip-author, review-only, exception) are checked,
-    not kept."""
-    h = {"hold": set(), "path_modes": {}, "preapproved": {}}
+    """The rows the gate reads: hold, preapprove and hands-off-path. A malformed one raises ValueError, and so does a
+    row of any other kind that names a PR number, because a hold must never be dropped silently. A row about a login
+    is the pickup's and is not read; neither is the third column."""
+    h = {"hold": set(), "paths": [], "preapproved": {}}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         f = [x.strip() for x in line.split("|")]
-        if len(f) < 4 or f[0] not in HOLD_KINDS or f[2] not in ("yes", "no") or not f[1]:
-            raise ValueError(f"holds file line {ln}: {line[:80]}")
-        kind, target = f[0], f[1]
-        if kind == "exception" and (len(f) < 6 or not all(f[3:6])):
-            raise ValueError(f"holds file line {ln}: exception needs match | scope | source")
-        if kind == "preapprove":
-            if not re.fullmatch(r"#?\d+", target) or not re.fullmatch(r"[0-9a-f]{40}", f[3]) or len(f) < 5 or not f[4]:
-                raise ValueError(f"holds file line {ln}: preapprove needs #N | rules | <40-char sha> | source")
-            n = int(target.lstrip("#"))
-            if h["preapproved"].get(n, f[3]) != f[3]:
-                raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
-            h["preapproved"][n] = f[3]
-        elif kind == "hold":
-            if not re.fullmatch(r"#?\d+", target):
-                raise ValueError(f"holds file line {ln}: hold needs a PR number")
-            h["hold"].add(int(target.lstrip("#")))
-        elif kind == "hands-off-path":
-            mode = f[3][len("mode="):].strip() if f[3].startswith("mode=") else "never"
-            if mode not in PATH_MODES:
-                raise ValueError(f"holds file line {ln}: unknown hands-off-path mode {mode!r}")
-            if h["path_modes"].get(target) != "never":   # two rows for one path: the stricter (never) wins
-                h["path_modes"][target] = mode
+        kind, pr = f[0], re.fullmatch(r"#?(\d+)", f[1]) if len(f) > 1 else None
+        if kind == "hands-off-path":
+            mode = f[3][len("mode="):].strip() if len(f) > 3 and f[3].startswith("mode=") else "never"
+            if len(f) < 4 or not f[1] or mode not in ("never", "split-undone"):
+                raise ValueError(f"holds file line {ln}: {line[:80]}")
+            if mode == "never":   # split-undone is retired (Zane 10 Nov): its row holds nothing, a hold row stops a PR
+                h["paths"].append(f[1])
+            continue
+        if kind not in ("hold", "preapprove"):
+            if len(f) < 2 or not f[1] or pr:
+                raise ValueError(f"holds file line {ln}: {line[:80]}")
+            continue
+        if len(f) < 4 or not pr:
+            raise ValueError(f"holds file line {ln}: {kind} needs a PR number | rules | note")
+        n = int(pr.group(1))
+        if kind == "hold":
+            h["hold"].add(n)
+            continue
+        if not re.fullmatch(r"[0-9a-f]{40}", f[3]) or len(f) < 5 or not f[4]:
+            raise ValueError(f"holds file line {ln}: preapprove needs #N | rules | <40-char sha> | source")
+        if h["preapproved"].get(n, f[3]) != f[3]:
+            raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
+        h["preapproved"][n] = f[3]
     return h
-
-
-def path_hits(files, holds):
-    """The hands-off paths (matched by file name) that the PR's changed files hit, in row order."""
-    return [p for p in holds["path_modes"] if any(re.search(r"(^|/)" + re.escape(p) + "$", f) for f in files)]
-
-
-# split-undone (Zane 20 Oct): an impl_.rs PR is held only when its diff undoes the #2886 per-tool split.
-_MOD_DECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;")
-_WIRING = re.compile(r"^\s*(#\[path\b|include!)")
-_USE_SUPER = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?use\s+super::\{")
-_TOOL_NAME = re.compile(r"\b([A-Z]\w*Tool)\b")
-_TOOL_IMPORT = re.compile(r"^\s*([a-z_]\w*::)?\{?\s*([A-Z]\w*Tool\s*,\s*)*[A-Z]\w*Tool\s*,?\s*\}?,?\s*$")
-_TOOL_DEF = re.compile(r"^\s*(impl(<[^>]*>)?\s+Tool\s+for\s+\w+Tool\b|(pub(\([^)]*\))?\s+)?struct\s+\w+Tool\b)")
-MOVED_BACK_MIN = 3
-
-
-def _lines(patch, sign):
-    return [x[1:] for x in (patch or "").split("\n") if x.startswith(sign) and not x.startswith(sign * 3 + " ")]
-
-
-def split_undone(files, path):
-    """Why the diff undoes the #2886 split of `path`, or None. files: GitHub pulls/N/files entries (filename,
-    status, patch, previous_filename). With D the changed impl_.rs's directory, the diff undoes the split if it
-    deletes or renames impl_.rs or a file under D, drops a `mod x;` from impl_.rs or D/mod.rs, adds or drops a
-    #[path]/include! line, drops impl_.rs's `use super::{` line or a tool import, adds a tool type to impl_.rs, or
-    moves MOVED_BACK_MIN lines from files under D into impl_.rs. A missing patch cannot be checked and counts."""
-    for h in [f for f in files if re.search(r"(^|/)" + re.escape(path) + "$", f["filename"])]:
-        if h.get("status") in ("removed", "renamed"):
-            return f"{h['status']} {h.get('previous_filename') or h['filename']}"
-        d = h["filename"].rsplit("/", 1)[0] + "/" if "/" in h["filename"] else ""
-        sib = [f for f in files if f is not h and (f["filename"].startswith(d) or (f.get("previous_filename") or "").startswith(d))]
-        for f in sib:
-            old = f.get("previous_filename") or f["filename"]
-            if f.get("status") == "removed" or (f.get("status") == "renamed" and old.startswith(d)):
-                return f"{'deletes' if f.get('status') == 'removed' else 'renames'} split module {old}"
-        for f in [h] + sib:
-            if f.get("patch") is None:
-                return f"no diff from GitHub for {f['filename']} (cannot check; buffered to be safe)"
-        add, rem = _lines(h["patch"], "+"), _lines(h["patch"], "-")
-        wiring = [(h["filename"], add, rem)] + [(f["filename"], _lines(f["patch"], "+"), _lines(f["patch"], "-"))
-                                                for f in sib if f["filename"] == d + "mod.rs"]
-        for name, a, r in wiring:
-            mods = {m.group(1) for x in r if (m := _MOD_DECL.match(x))} - {m.group(1) for x in a if (m := _MOD_DECL.match(x))}
-            if mods:
-                return f"rewrites the split's module wiring in {name} (drops mod {', '.join(sorted(mods))})"
-            bad = next((x for x in a + r if _WIRING.match(x)), None) or \
-                next((x for x in r if name == h["filename"] and _USE_SUPER.match(x)), None)
-            if bad:
-                return f"rewrites the split's module wiring in {name} ({bad.strip()[:80]!r})"
-        dropped = {t for x in rem if _TOOL_IMPORT.match(x) for t in _TOOL_NAME.findall(x)} - \
-            {t for x in add if _TOOL_IMPORT.match(x) or re.match(r"\s*(pub(\([^)]*\))?\s+)?use\s", x) for t in _TOOL_NAME.findall(x)}
-        if dropped:
-            return f"rewrites the split's module wiring in {h['filename']} (drops the import of {', '.join(sorted(dropped))})"
-        bad = next((x for x in add if _TOOL_DEF.match(x)), None)
-        if bad:
-            return f"re-inlines a tool into {h['filename']} ({bad.strip()[:80]!r})"
-        gone = {x.strip() for f in sib for x in _lines(f.get("patch"), "-")}
-        back = {x.strip() for x in add if len(re.sub(r"//.*|[\s{}()\[\];,]", "", x)) >= 8} & gone
-        if len(back) >= MOVED_BACK_MIN:
-            return f"re-inlines {len(back)} lines removed from its per-tool modules into {h['filename']}"
-    return None
-
-
-def hands_off_verdict(paths, patches, holds):
-    """(held, why) for the hands-off paths a PR hits. patches() gives pulls/N/files; it raising means held."""
-    allowed = []
-    for p in paths:
-        if holds["path_modes"].get(p, "never") == "never":
-            return True, f"touches {p} (hands-off path, mode never; see the holds file)"
-        try:
-            why = split_undone(patches(), p)
-        except Exception as e:
-            return True, f"touches {p}: diff unreadable, cannot check the #{SPLIT_PR} per-tool split ({str(e)[:100]}); buffered to be safe"
-        if why:
-            return True, f"touches {p}: undoes the #{SPLIT_PR} per-tool split: {why} (hands-off path, mode split-undone; see the holds file)"
-        allowed.append(f"touches {p}: does not undo the #{SPLIT_PR} per-tool split (hands-off path, mode split-undone)")
-    return False, "; ".join(allowed)
 
 
 # ---------------- checks ----------------
@@ -239,10 +165,10 @@ def check_state(rollup):
     return "red", bad, runs
 
 
-def gate(pr, holds, hands_off=None, notes=None):
+def gate(pr, holds, notes=None):
     """The merge gate: exactly three checks at the PR head, every one run, returning [Reason] (empty = pass).
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
-    2. No hold row: hold, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
+    2. No hold row: hold, or a hands-off-path that names one of the PR's changed files.
        holds None (the file is unreadable) holds every PR.
     3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head."""
     notes = [] if notes is None else notes
@@ -256,11 +182,8 @@ def gate(pr, holds, hands_off=None, notes=None):
         R.append(Reason("holds-unreadable", "holds file unreadable: every PR counts as held"))
     elif n in holds["hold"]:
         R.append(Reason("hold", f"hold: #{n} has a hold row in the holds file"))
-    elif hands_off and (hit := hands_off()):
-        if hit[0]:
-            R.append(Reason("hands-off", hit[1]))
-        else:
-            notes.append(hit[1])
+    elif hit := [p for p in holds["paths"] if any(re.search(r"(^|/)" + re.escape(p) + "$", f) for f in pr.get("files") or [])]:
+        R.append(Reason("hands-off", f"touches {hit[0]} (hands-off path, mode never; see the holds file)"))
     tier, pre = declared_risk(pr.get("labels") or [], pr.get("body")), (holds or {}).get("preapproved", {}).get(n)
     if tier is None:
         R.append(Reason("no-tier", f"no risk tier ({'|'.join(TIERS)})"))
@@ -352,6 +275,16 @@ def post_webhook(kind, ident, reason):
                      attempts=1, timeout=8)
 
 
+def parity_problem():
+    """Why this host is not merged main and nothing else (hosts/check-parity's FAIL lines), or None."""
+    try:
+        r = subprocess.run([f"{PKG}/hosts/check-parity"], env={**ENV, "ONIGIRI_ROOT": ROOT}, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return f"check-parity did not run: {type(e).__name__}: {str(e)[:150]}"
+    return None if r.returncode == 0 else "; ".join(x for x in (r.stdout + r.stderr).splitlines() if x.startswith("FAIL"))[:300] \
+        or f"check-parity exit {r.returncode}"
+
+
 class Job:
     def __init__(self, dry):
         self.dry = dry
@@ -414,17 +347,16 @@ class Job:
         p["labels"] = [x["name"] if isinstance(x, dict) else x for x in p.get("labels") or []]
         p.update(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "mergeable,statusCheckRollup,files"]) or {})
         p["files"] = [f["path"] if isinstance(f, dict) else f for f in p.get("files") or []]
-        cache = {}
-
-        def patches():
-            if "f" not in cache:
-                pages = gh_json(["api", f"repos/{REPO}/pulls/{n}/files?per_page=100", "--paginate", "--slurp"]) or []
-                cache["f"] = [f for page in pages for f in page]
-            return cache["f"]
-        hits = path_hits(p["files"], holds) if holds else []
         notes = []
-        reasons = gate(p, holds, (lambda: hands_off_verdict(hits, patches, holds)) if hits else None, notes)
-        return reasons + blockers(p, self.paused), notes
+        reasons = gate(p, holds, notes)
+        stop = blockers(p, self.paused)
+        for _ in range(MERGEABLE_REREADS):
+            if reasons or [r.code for r in stop] != ["mergeable"] or p.get("mergeable") != "UNKNOWN":
+                break
+            time.sleep(MERGEABLE_WAIT_S)
+            p.update(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "mergeable"]) or {})
+            stop = blockers(p, self.paused)
+        return reasons + stop, notes
 
     def merges(self, holds):
         prs = gh_json(["pr", "list", "-R", REPO, "--state", "open", "--author", ME, "--limit", "100",
@@ -499,6 +431,10 @@ class Job:
             self.decide("paused", "tick", "-", self.paused)
         elif self.s["last_reason"].pop("tick", None):
             self.event("resumed", "tick", "PAUSED removed")
+        if not self.dry and (drift := parity_problem()):   # merging goes on; a person is woken, once an hour while it lasts
+            self.errors += 1
+            self.event("error", "parity", drift)
+            self.buffer("parity", "host", now()[:13], drift, urgent=True)
         holds = self.holds()
         for name, fn in (("merge", lambda: self.merges(holds)), ("merge-watch", self.merge_watch)):
             try:
@@ -553,5 +489,16 @@ def main(argv=None):
         Job(dry=a.dry_run).run()
 
 
+def run_on_main():
+    """Cron runs whatever is checked out, so a bare run first moves the package to origin/main and restarts on it. A
+    checkout that cannot move runs as it is, and hosts/check-parity reports it in run()."""
+    if os.environ.pop("ZSTACK_ENSURED", None):
+        return
+    if subprocess.run([f"{PKG}/bin/ensure-package-main"], stdout=subprocess.DEVNULL).returncode == 0:
+        os.execve(sys.executable, [sys.executable, os.path.abspath(__file__)], {**os.environ, "ZSTACK_ENSURED": "1"})
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        run_on_main()
     main()

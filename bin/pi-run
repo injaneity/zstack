@@ -18,7 +18,9 @@ Exit codes: 0 done, 2 usage, 3 refused by the state, 4 setup failed. PI_RUN_DRY=
 
 $ONIGIRI_HOST names hosts/<name>/host.sh, sourced with the subcommand as $1 for the host's paths and env
 (ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief). The role picks provider and
-model through bin/model-for. onigiri-mode's Hard rules (bin/hard-rules) are appended to the system prompt.
+model through bin/model-for. onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md) are appended to the system
+prompt as that file. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
+then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
 """
 import fcntl
 import json
@@ -30,6 +32,7 @@ import sys
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
+RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = "usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect <id> | pi-run list [<state>...]"
 
@@ -213,14 +216,11 @@ def start(sid, role, brief, extra):
     if os.environ.get("PI_RUN_DRY"):
         print(f"pi-run: dry run, would start {sid} in {d} as role {role}: {provider} {model}")
         return 0
-    if subprocess.run([os.path.join(PKG, "bin", "ensure-extensions")], stdout=sys.stderr, env=env).returncode:
-        sys.exit(4)
-    rules = subprocess.run([os.path.join(PKG, "bin", "hard-rules")], capture_output=True, text=True)
-    if rules.returncode:
-        die(2, rules.stderr.strip())
+    if not os.path.isfile(RULES) or not open(RULES).read().strip():
+        die(2, f"no Hard rules in {RULES}")
     env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in text.splitlines() else "0")
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
-           "--append-system-prompt", rules.stdout.rstrip("\n"), *extra, "-p", "--", text]
+           "--append-system-prompt", RULES, *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check_start(d, sid, r.run)

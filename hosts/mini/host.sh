@@ -6,3 +6,5 @@ export ONIGIRI_ROOT="${ONIGIRI_ROOT:-$HOME/onigiri}" ONIGIRI_BRIEF_PREFIX="${BAS
 if [ "$1" = start ]; then
   "$HOME/onigiri/bin/sync-from-vm.sh" || echo "host: sync failed, using copies from $(cat "$HOME/onigiri/sync/synced-at")"
 fi
+# A launch on a host that is not merged main and nothing else starts nothing: a failing check fails this file.
+case "$1" in start|dry) "${BASH_SOURCE[0]%/*}/../check-parity";; esac

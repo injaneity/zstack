@@ -1,7 +1,7 @@
 // onigiri-mode's Hard rules' mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
 // Pure: the caller passes the repo lookup, so tests run without pi or git. See docs/RULE-GUARD.md.
 import * as path from "node:path";
-import { base, commands, program } from "../tool-guard/shell.ts";
+import { base, commands, program } from "./shell.ts";
 
 /** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger). */
 export const MERGE_OWNED: ReadonlySet<string> = new Set(["trycua/cua"]);
