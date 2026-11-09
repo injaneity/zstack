@@ -21,12 +21,12 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: merge job and patent hook tests
+      - name: merge job, patent hook, wake and pi-run lifecycle tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
-          pipx run ruff==0.17.3 check hosts/vm tests
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push bin/hard-rules tests/hard-rules.sh bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh tests/launch-wake.sh
+          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh bin/hard-rules tests/hard-rules.sh bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,16 +36,14 @@ jobs:
         run: node --test tests/rule-guard.test.ts
       - name: subagent children get their role prompt and no session rules
         run: node --test tests/subagent-prompt.test.ts
-      - name: launchers append onigiri-mode's Hard rules or refuse to start
+      - name: hard-rules prints onigiri-mode's Hard rules or fails
         run: tests/hard-rules.sh
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
-      - name: launchers fast-forward the package to origin/main or refuse to start
+      - name: pi-run fast-forwards the package to origin/main or refuses to start
         run: tests/ensure-package-main.sh
-      - name: launchers install the pinned extensions or refuse to start
+      - name: pi-run installs the pinned extensions or refuses to start
         run: tests/ensure-extensions.sh
-      - name: launchers wake onigiri only when pi fails and keep its exit code
-        run: tests/launch-wake.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0

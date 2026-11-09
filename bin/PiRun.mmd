@@ -1,0 +1,16 @@
+---
+title: "pi-run: one run of an id"
+---
+stateDiagram-v2
+  s0: no run
+  s1: running
+  s2: exited
+  s3: lost
+  s4: collected
+  [*] --> s0
+  s0 --> s1: pi-run #60;id> #60;role> #60;brief>
+  s1 --> s2: pi exits, supervisor writes rc
+  s1 --> s3: KILL or OOM
+  s2 --> s4: pi-run collect #60;id>
+  s3 --> s4: pi-run collect #60;id>
+  s4 --> s1: pi-run #60;id> #60;role> #60;brief>

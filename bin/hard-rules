@@ -1,7 +1,7 @@
 #!/bin/bash
-# hard-rules: prints the "## Hard rules" section of skills/onigiri-mode/SKILL.md, the text both launchers append
-# to every session's system prompt. Exits 1 when the section is missing or holds no text under its heading, so a
-# launcher never starts a session with no rules.
+# hard-rules: prints the "## Hard rules" section of skills/onigiri-mode/SKILL.md, the text bin/pi-run appends
+# to every session's system prompt. Exits 1 when the section is missing or holds no text under its heading, so
+# bin/pi-run never starts a session with no rules.
 set -eu
 skill="$(cd "$(dirname "$0")/.." && pwd)/skills/onigiri-mode/SKILL.md"
 out=$(awk '/^## /{on = ($0 == "## Hard rules")} on' "$skill")
