@@ -119,6 +119,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp /tmp/hold-prs.txt /srv/onigiri/",
 		"mv /tmp/hold-prs.txt /srv/onigiri",
 		"cp /tmp/hold-prs.txt sync",
+		"mv /srv/onigiri/hold-prs.txt /tmp/holds-copy",
+		"rsync --remove-source-files hold-prs.txt /tmp/x",
 	])
 		blocked(c);
 	for (const c of [

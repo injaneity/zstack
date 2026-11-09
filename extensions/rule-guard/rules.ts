@@ -156,7 +156,10 @@ function writesHolds(w: string[], dir: string | undefined, host: Host): boolean 
 			return ops.some(isHolds);
 		case "sed": case "perl":
 			return args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place")) && ops.some(isHolds);
-		case "cp": case "mv": case "install": case "rsync": case "ln": case "ditto":
+		case "mv": case "rsync": // moving it away removes it, wherever it goes
+			if ((p === "mv" || args.includes("--remove-source-files")) && ops.slice(0, -1).some(isHolds)) return true;
+		// falls through
+		case "cp": case "install": case "ln": case "ditto":
 			// with -t DIR every operand is a source copied into DIR under its own name
 			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
 			// the destination is the file itself, or a directory that receives a source named hold-prs.txt
