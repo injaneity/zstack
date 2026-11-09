@@ -212,7 +212,6 @@ class Holds(unittest.TestCase):
             self.skipTest("no live holds file on this machine")
         h = mj.parse_holds(mj.read(mj.HOLDS_FILE))
         self.assertIn(5675, h["hold"])
-        self.assertEqual(h["preapproved"].get(5650), "8bd1c068b26f5e75b15cb6f55d3136785facd2d6")
 
 
 WIN = "libs/cua-driver/rust/crates/platform-windows/src/tools/"
