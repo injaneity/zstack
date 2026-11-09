@@ -8,6 +8,6 @@ This session runs on the relay Mac mini. The onigiri policy below names VM paths
 - The patent pre-push hook is installed in `~/onigiri/cua`; same rules as the policy.
 - macOS crates build and test here. Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: say in the verdict which checks could not run here.
 - There is no `timeout` or `setsid` command; default bash is 3.2 (bash 5 is first on PATH).
-- Wakes and `questions:` work as onigiri-mode's Autonomy section says. A `verified` comment counts only for the head it names.
+- Wakes and `questions:` work as onigiri-mode's Autonomy section says. After a push to an existing PR, rerun the scoped checks on the new head. A `verified` comment counts only for the head it names.
 
 - Pruning is allowed on the mini to stay productive: stale lume worker VMs, finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.
