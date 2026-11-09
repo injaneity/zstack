@@ -262,9 +262,9 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
 export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
 	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
-	// script) would start a child pi that may ready, so any mention but a `$` read is refused, heredoc bodies included.
-	// Quotes and backslashes go first, as the shell joins `ONIGIRI_READY_""ALLOWED` into the name.
-	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/["'\\]/g, "").replace(/\$\{?ONIGIRI_READY_ALLOWED\b/g, "")))
+	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
+	// bodies included. Quotes and backslashes go first, as the shell joins `ONIGIRI_READY_""ALLOWED` into the name.
+	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/["'\\]/g, "").replace(/\$ONIGIRI_READY_ALLOWED(?![A-Za-z0-9_])/g, "")))
 		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
