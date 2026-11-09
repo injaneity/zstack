@@ -26,6 +26,8 @@ const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? fal
 export default function (pi: ExtensionAPI) {
 	const owned = mergeOwned();
 	const ready = readyAllowed();
+	// read once, then gone: the session's bash and any pi it starts inherit no grant
+	delete process.env.ONIGIRI_READY_ALLOWED;
 	pi.on("tool_call", (event, ctx) => {
 		const input = event.input as { command?: unknown; path?: unknown };
 		const reason =

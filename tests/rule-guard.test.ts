@@ -171,6 +171,10 @@ test("a brief that allows merging lets the session ready its draft, and nothing 
 	blocked("printf -v ONIGIRI_READY_ALLOWED %s 1; pi -p go");
 	blocked("read ONIGIRI_READY_ALLOWED <<< 1; pi -p go");
 	blocked("declare -x ONIGIRI_READY_ALLOWED=1; pi -p go");
+	blocked(`export ONIGIRI_READY_""ALLOWED=1; pi -p go`);
+	blocked("export ONIGIRI_READY_'A'LLOWED=1; pi -p go");
+	blocked("export ONIGIRI_READY_\\ALLOWED=1; pi -p go");
+	blocked("ONIGIRI_READY_ALLOWED1=1 true");
 	blocked("python3 - <<'EOF'\nimport os; os.environ['ONIGIRI_READY_ALLOWED'] = '1'; os.execvp('pi', ['pi', '-p', 'go'])\nEOF");
 	allowed("echo $ONIGIRI_READY_ALLOWED ${ONIGIRI_READY_ALLOWED:-unset}");
 });
