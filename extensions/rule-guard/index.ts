@@ -4,9 +4,9 @@ import { execFileSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkBash, checkWrite, mergeOwned } from "./rules.ts";
 
-function originRepo(cwd: string): string | undefined {
+function originRepo(dir: string): string | undefined {
 	try {
-		const url = execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000 }).trim();
+		const url = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000 }).trim();
 		return url.match(/github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/)?.[1].toLowerCase();
 	} catch {
 		return undefined;
@@ -18,7 +18,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", (event, ctx) => {
 		const input = event.input as { command?: unknown; path?: unknown };
 		const reason =
-			event.toolName === "bash" ? checkBash(String(input.command ?? ""), owned, () => originRepo(ctx.cwd)) :
+			event.toolName === "bash" ? checkBash(String(input.command ?? ""), owned, originRepo, ctx.cwd) :
 			event.toolName === "write" || event.toolName === "edit" ? checkWrite(String(input.path ?? "")) : undefined;
 		return reason ? { block: true, reason } : undefined;
 	});
