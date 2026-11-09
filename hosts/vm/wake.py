@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to, on failures only. Best effort.
 
-  wake.py blocked|failed <message> [pr=N]
+  wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]
 
-A session that cannot go on sends blocked or failed; bin/pi-run sends failed when a run exits non-zero. Any other kind
-exits 2: a finished run is collected by the pickup (bin/pi-run list and collect), and a question goes in the report.
+A session that cannot go on sends blocked or failed with pr=. bin/pi-run sends failed when a run exits non-zero, and done
+when it exits 0 and its brief has a `wake: finish` line, both with rc, report and prs. Any other kind exits 2: a finished
+run is collected by the pickup (bin/pi-run list and collect), and a question goes in the report.
 The body keeps the merge job's keys (kind, id, pr, reason, time) with source=pi and host; id is $PI_SESSION_ID.
 ONIGIRI_WAKE_DRY=1 prints the body and sends nothing. Exits 0 whatever happens to the POST and prints one log-safe
 status line on stderr. The key is only in KEY_FILE; a host without it skips with "webhook not configured".
@@ -24,7 +25,8 @@ from zoneinfo import ZoneInfo
 URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
 KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
-KINDS = ("blocked", "failed")
+KINDS = ("blocked", "failed", "done")
+FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r"\S+", "prs": r"\S+"}
 
 
 def now():
@@ -58,12 +60,14 @@ def send(body, attempts=3, timeout=5):
 
 
 def main(argv):
-    pr = argv[2] if len(argv) == 3 else "pr="
-    if len(argv) not in (2, 3) or argv[0] not in KINDS or not argv[1].strip() or not re.fullmatch(r"pr=\d*", pr):
-        print("usage: wake.py blocked|failed <message> [pr=N]", file=sys.stderr)
+    fields = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
+    if (len(argv) < 2 or argv[0] not in KINDS or not argv[1].strip() or len(fields) != len(argv) - 2
+            or not all(k in FIELDS and re.fullmatch(FIELDS[k], v) for k, v in fields.items())):
+        print("usage: wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]", file=sys.stderr)
         return 2
-    body = {"kind": argv[0], "id": os.environ.get("PI_SESSION_ID") or None, "pr": int(pr[3:]) if pr[3:] else None,
-            "reason": argv[1][:1000], "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
+    body = {"kind": argv[0], "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": argv[1][:1000],
+            "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
+    body.update({k: int(v) if k in ("pr", "rc") else v.split(",") if k == "prs" else v for k, v in fields.items()})
     if os.environ.get("ONIGIRI_WAKE_DRY"):
         print(json.dumps(body))
         status = "not sent: dry run"

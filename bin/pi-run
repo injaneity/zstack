@@ -5,10 +5,11 @@
   pi-run collect <id>                             take a finished run's result, exactly once
   pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc>
 
-A run is review/<id>/run.json {state, attempt, pid, start, rc}. step() is the whole lifecycle:
+A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake}. step() is the whole lifecycle:
 
   (no file) or collected --start-->  running     attempt + 1; refused while the last result is not collected
-  running                --exit--->  exited      the supervisor writes pi's rc, then wakes onigiri if rc != 0
+  running                --exit--->  exited      records pi's rc and the wake it sends: failed when rc != 0, done
+                                                 when rc is 0 and the brief has a `wake: finish` line, else none
   exited or lost         --collect-> collected   the pickup's one command; a second collect is refused
 
 lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
@@ -43,9 +44,11 @@ def step(run, event, alive=False, **f):
     if s == "running" and not alive and event != "exit":
         s = "lost"
     if event == "start" and s in ("absent", "collected"):
-        return {"state": "running", "attempt": (run or {}).get("attempt", 0) + 1, "pid": f["pid"], "start": f["start"], "rc": None}
+        return {"state": "running", "attempt": (run or {}).get("attempt", 0) + 1, "pid": f["pid"], "start": f["start"], "rc": None,
+                "wake_finish": f["wake_finish"], "wake": None}
     if event == "exit" and s == "running" and run["pid"] == f["pid"]:
-        return {**run, "state": "exited", "rc": f["rc"]}
+        wake = "failed" if f["rc"] else "done" if run.get("wake_finish") else None
+        return {**run, "state": "exited", "rc": f["rc"], "wake": wake}
     if event == "collect" and s in ("exited", "lost"):
         return {**run, "state": "collected"}
     raise Refused({
@@ -157,18 +160,29 @@ def supervise(d, sid, cmd, env):
     if rc is None:
         rc = 128 + got[0] if proc is None else proc.wait()
     rc = 128 - rc if rc < 0 else rc
-    if rc:   # before the exit is recorded, so an exited run has already sent its wake
-        subprocess.run([sys.executable, WAKE, "failed", f"{sid} exited rc={rc}"], env=env)
-    with Run(d) as r:
-        r.write(step(r.run, "exit", pid=os.getpid(), rc=rc))
+    with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc)
+        if done["wake"]:
+            subprocess.run([sys.executable, WAKE, done["wake"], f"{sid} exited rc={rc}", f"rc={rc}",
+                            *report_fields(d, done["attempt"])], env=env)
+        r.write(done)
     os._exit(rc)
+
+
+def report_fields(d, attempt):
+    """report= the run's log (pi -p prints the final report there) and prs= the PR links this attempt's part of it names."""
+    log = os.path.join(d, "run.log")
+    with open(log, errors="replace") as f:
+        text = f.read().split(f"== attempt {attempt}\n")[-1]
+    prs = dict.fromkeys(re.findall(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", text))
+    return [f"report={log}"] + ([f"prs={','.join(prs)}"] if prs else [])
 
 
 def check_start(d, sid, run=False):
     if run is False:
         run = read_json(os.path.join(d, "run.json"))
     try:
-        step(run, "start", alive(run), pid=0, start="")
+        step(run, "start", alive(run), pid=0, start="", wake_finish=False)
     except Refused as e:
         die(3, f"{sid}: {e}")
 
@@ -215,7 +229,7 @@ def start(sid, role, brief, extra):
                 supervise(d, sid, cmd, env)
             finally:
                 os._exit(1)
-        r.write(step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid)))
+        r.write(step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines()))
     print(f"pi-run: started {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0
 

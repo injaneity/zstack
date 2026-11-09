@@ -114,7 +114,7 @@ Reversible work proceeds without asking. Never block on a question you could ans
 
 A pi run is one-shot. It stops when the task ends and never runs under a supervisor (launchd `KeepAlive`, systemd `Restart=`, a loop). A new provider gets a fresh session id, never another provider's session.
 
-When `$ONIGIRI_WAKE` is set, only failures wake the orchestrator. The launcher wakes it when you exit non-zero, and a periodic pickup collects every finished run with `bin/pi-run collect <id>`. A run that cannot go on runs `"$ONIGIRI_WAKE" blocked "<message>" [pr=N]` (or `failed`) and stops. Any other kind is refused. A question for Zane goes in a `questions:` list in your final report, never in a wake. It is best effort and never fails your run.
+When `$ONIGIRI_WAKE` is set, failures wake the orchestrator. The launcher wakes it when you exit non-zero, and a periodic pickup collects every finished run with `bin/pi-run collect <id>`. A brief with a line exactly `wake: finish` also gets a `done` wake when the run exits 0, carrying the rc, the report path and the PR links in the report. Put your PR URLs in your final report. A run that cannot go on runs `"$ONIGIRI_WAKE" blocked "<message>" [pr=N]` (or `failed`) and stops. Any other kind is refused. A question for Zane goes in a `questions:` list in your final report, never in a wake. It is best effort and never fails your run.
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
@@ -154,7 +154,7 @@ For the chat only. A pi session skips this section.
 
 - **Setup.** `pi install git:github.com/injaneity/zstack`, then `bin/setup.sh` from the checkout. A session warns at start about anything still missing.
 - **Launch.** Write the brief to a file, then run `<zstack>/bin/pi-run <id> <role> <brief-file>`. It detaches pi in `review/<id>/` and returns. The role picks the model from `config/models.json`, never a skill. Export the provider's credentials first, or name a host file with `ONIGIRI_HOST`. Run it on the machine that does the work, never in the chat.
-- **The brief** carries the task, its constraints and the repo path, and points at Hard rules instead of restating them. pi picks its own playbook. Report back what pi did, with the PR URL.
+- **The brief** carries the task, its constraints and the repo path, and points at Hard rules instead of restating them. pi picks its own playbook. For urgent work, or a PR you want to watch, add a line exactly `wake: finish`: the run then wakes you with a `done` event when it exits 0, not only on failure. Report back what pi did, with the PR URL.
 - **After the PR opens**, whatever owns merging under Hard rules takes over. Watch the PR, don't redo the work.
 - `docs/HOST.md` is one reference deployment (a VM, a relay, a cron tick). It is an example, not a requirement.
 - **Don't build process.** No flow engine, gates, or lanes. zstack plus pi is the whole thing.

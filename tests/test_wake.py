@@ -76,6 +76,15 @@ class Wake(unittest.TestCase):
         self.assertEqual(err.strip(), "wake: blocked webhook sent (200)")
         self.assertNotIn("sekrit", out + err)
 
+    def test_done_carries_rc_report_and_pr_links(self):
+        self.key.write_text("k")
+        with self.urlopen(None):
+            run("done", "w exited rc=0", "rc=0", "report=/r/w/run.log", "prs=https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
+                env={"PI_SESSION_ID": "w"})
+        b = self.sent[0][1]
+        self.assertEqual((b["kind"], b["id"], b["rc"], b["report"], b["prs"]),
+                         ("done", "w", 0, "/r/w/run.log", ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]))
+
     def test_retries_network_errors_and_5xx_but_not_4xx_and_always_exits_0(self):
         self.key.write_text("k")
         with self.urlopen(OSError("down"), urllib.error.HTTPError("u", 502, "bad", {}, None), None):
@@ -112,7 +121,8 @@ class Wake(unittest.TestCase):
         self.key.write_text("k")
         with self.urlopen():
             for argv in ([], ["blocked"], ["pr-opened", "x"], ["question", "which branch?"], ["pi-done", "x"], ["Blocked", "x"],
-                         ["blocked", " "], ["blocked", "x", "repo=y"], ["blocked", "x", "pr=x"], ["--exit", "0", "pi-a"]):
+                         ["blocked", " "], ["blocked", "x", "repo=y"], ["blocked", "x", "pr=x"], ["done", "x", "rc=a"], ["done", "x", "pr=1", "pr"],
+                         ["--exit", "0", "pi-a"]):
                 self.assertEqual(run(*argv)[0], 2, argv)
         self.assertEqual(self.sent, [])
 

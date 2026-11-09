@@ -34,6 +34,7 @@ echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
 ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake" 2>/dev/null
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
+[ -e "$T/say" ] && cat "$T/say"
 while [ -e "$T/hang" ]; do sleep 0.05; done
 exit $(cat "$T/rc" 2>/dev/null || echo 0)
 """
@@ -50,24 +51,30 @@ def wait_for(pred, secs=10):
 
 class Step(unittest.TestCase):
     """The transition function, one row per (state, event)."""
-    R = lambda self, s, **k: {"state": s, "attempt": 1, "pid": 10, "start": "t", "rc": None, **k}   # noqa: E731
+    R = lambda self, s, **k: {"state": s, "attempt": 1, "pid": 10, "start": "t", "rc": None, "wake_finish": False, "wake": None, **k}   # noqa: E731
 
     def test_start_from_nothing_or_collected_opens_the_next_attempt(self):
-        self.assertEqual(pr.step(None, "start", pid=5, start="s"), {"state": "running", "attempt": 1, "pid": 5, "start": "s", "rc": None})
-        self.assertEqual(pr.step(self.R("collected", rc=0), "start", pid=6, start="u"),
-                         {"state": "running", "attempt": 2, "pid": 6, "start": "u", "rc": None})
+        self.assertEqual(pr.step(None, "start", pid=5, start="s", wake_finish=True),
+                         {"state": "running", "attempt": 1, "pid": 5, "start": "s", "rc": None, "wake_finish": True, "wake": None})
+        # a relaunch takes the new brief's choice and clears the last attempt's wake
+        self.assertEqual(pr.step(self.R("collected", rc=0, wake_finish=True, wake="done"), "start", pid=6, start="u", wake_finish=False),
+                         {"state": "running", "attempt": 2, "pid": 6, "start": "u", "rc": None, "wake_finish": False, "wake": None})
 
     def test_start_is_refused_until_the_last_result_is_collected(self):
         for run, alive, why in ((self.R("running"), True, "already running"), (self.R("exited", rc=0), False, "not collected"),
                                 (self.R("running"), False, "was lost")):
             with self.assertRaisesRegex(pr.Refused, why):
-                pr.step(run, "start", alive, pid=7, start="v")
+                pr.step(run, "start", alive, pid=7, start="v", wake_finish=False)
 
     def test_exit_records_rc_only_for_the_recorded_supervisor(self):
         self.assertEqual(pr.step(self.R("running"), "exit", pid=10, rc=3)["state"], "exited")
         self.assertEqual(pr.step(self.R("running"), "exit", pid=10, rc=3)["rc"], 3)
         with self.assertRaises(pr.Refused):
             pr.step(self.R("running"), "exit", pid=11, rc=3)
+
+    def test_exit_wakes_on_failure_always_and_on_finish_only_when_asked(self):
+        for wake_finish, rc, want in ((False, 0, None), (False, 3, "failed"), (True, 0, "done"), (True, 3, "failed")):
+            self.assertEqual(pr.step(self.R("running", wake_finish=wake_finish), "exit", pid=10, rc=rc)["wake"], want, (wake_finish, rc))
 
     def test_collect_takes_an_exited_or_lost_run_once(self):
         self.assertEqual(pr.step(self.R("exited", rc=0), "collect")["state"], "collected")
@@ -164,6 +171,22 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIsNone(self.run_json("norules"))
         self.assertFalse((self.t / "args").exists())
+
+    def test_wake_finish_sends_done_with_rc_report_and_prs(self):
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        (self.t / "say").write_text("opened https://github.com/o/r/pull/38 and https://github.com/o/r/pull/38\n")
+        self.start("w", brief="w.md")
+        run = self.finished("w")
+        self.assertEqual((run["wake_finish"], run["wake"]), (True, "done"))
+        body = next(json.loads(line) for line in self.log("w").splitlines() if line.startswith('{"kind": "done"'))
+        self.assertEqual((body["id"], body["rc"], body["prs"], body["report"]),
+                         ("w", 0, ["https://github.com/o/r/pull/38"], str(self.t / "root" / "review" / "w" / "run.log")))
+        # a relaunch without the line is failures-only again, and PR links from attempt 1 are not attempt 2's
+        self.pi_run("collect", "w")
+        (self.t / "say").unlink()
+        self.start("w")
+        self.assertEqual(self.finished("w")["wake"], None)
+        self.assertEqual(self.log("w").count('{"kind": "done"'), 1)
 
     def test_only_a_failed_run_wakes(self):
         self.start("ok", rc=0)
