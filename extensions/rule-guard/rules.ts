@@ -69,7 +69,7 @@ function stripHeredocs(line: string): string {
 	const out: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
 		out.push(lines[i]);
-		for (const m of lines[i].matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+		for (const m of lines[i].matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2(?=$|[\s;&|<>()])/g)) {
 			if (!unquotedEnd(lines[i].slice(0, m.index))) continue;
 			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
 			if (end < 0) continue;
@@ -184,8 +184,11 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, host: Host): 
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
 	if (!act) return undefined;
-	const env = raw.slice(0, raw.length - w.length).map((a) => a.match(/^GH_REPO=(.+)$/)?.[1]).find(Boolean);
-	const named = ghNamedRepo(w) ?? repoName(env ?? host.ghRepo);
+	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one
+	const pre = raw.slice(0, raw.length - w.length);
+	const inline = pre.map((a) => a.match(/^GH_REPO=(.*)$/)?.[1]).filter((v) => v !== undefined).pop();
+	const cleared = pre.some((a, i) => a === "-i" || a === "--ignore-environment" || a === "--unset=GH_REPO" || ((a === "-u" || a === "--unset") && pre[i + 1] === "GH_REPO"));
+	const named = ghNamedRepo(w) ?? repoName(inline !== undefined ? inline || undefined : cleared ? undefined : host.ghRepo);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
 	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;

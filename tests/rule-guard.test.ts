@@ -110,6 +110,11 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	assert.match(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch") ?? "", /^blocked: /);
 	assert.match(checkBash("gh run rerun 9 --failed", OWNED, { ...host, ghRepo: "trycua/cua" }, "/zs") ?? "", /^blocked: /);
 	assert.equal(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "injaneity/zstack" }, "/scratch"), undefined);
+	// clearing the inherited GH_REPO sends gh back to the checkout
+	const zsEnv = { ...host, ghRepo: "injaneity/zstack" };
+	assert.equal(checkBash("gh pr merge 1", OWNED, zsEnv, inCua), undefined);
+	for (const c of ["GH_REPO= gh pr merge 1", "env -u GH_REPO gh pr merge 1", "env --unset=GH_REPO gh pr merge 1", "env -i gh pr merge 1"])
+		assert.match(checkBash(c, OWNED, zsEnv, inCua) ?? "", /^blocked: /, c);
 	allowed("gh pr merge --help", inCua);
 	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
 	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);
@@ -141,6 +146,7 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("cat <<EOF\n$(git push -f)\nEOF"); // an unquoted body's substitutions run
 	blocked("echo hi # <<EOF\ngit push --force\nEOF"); // a << in a comment is text
 	blocked("cat <<'EOF' | bash\ngit push -f\nEOF"); // piped into a shell, the body runs
+	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF"); // the delimiter is the whole word
 	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R trycua/cua\nEOF");
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
 });
