@@ -10,8 +10,8 @@ export function mergeOwned(env = process.env.ONIGIRI_MERGE_OWNED ?? ""): Set<str
 
 /** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
  * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
- * with ~) is an existing file. */
-export interface Host { repoAt(dir: string): string | null | undefined; isFile(p: string): boolean }
+ * with ~) is an existing file. `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
+export interface Host { repoAt(dir: string): string | null | undefined; isFile(p: string): boolean; ghRepo?: string }
 const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
@@ -60,7 +60,7 @@ function unquotedEnd(s: string): boolean {
 
 /**
  * The line with each here-document body removed when it is only data: a `python3 - <<'EOF'` script or a
- * `cat > f <<'EOF'` body. A body stays when a shell reads it (`bash <<EOF`, `ssh host <<EOF`), when its delimiter
+ * `cat > f <<'EOF'` body. A body stays when a shell on its line may read it (`bash <<EOF`, `ssh host <<EOF`, `cat <<EOF | sh`), when its delimiter
  * is unquoted and the body has a `$(` or backtick (the shell runs those), when the `<<` sits inside quotes, or when
  * it has no closing line.
  */
@@ -74,8 +74,8 @@ function stripHeredocs(line: string): string {
 			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
 			if (end < 0) continue;
 			if (!m[2] && lines.slice(i + 1, end).some((l) => /\$\(|`/.test(l))) continue;
-			const before = commands(lines[i].slice(0, m.index)).pop() ?? [];
-			if (SHELLS.has(program(before)[0] ?? "")) continue;
+			// any shell on the line may read it: `bash <<EOF`, `cat <<EOF | sh`
+			if (commands(lines[i]).some((c) => SHELLS.has(program(c)[0] ?? ""))) continue;
 			lines.splice(i + 1, end - i - 1);
 		}
 	}
@@ -171,7 +171,7 @@ function ghApiWrites(w: string[]): boolean {
 // GraphQL mutations that ready, merge or auto-merge a PR. The query names a node id, not a repo, so any owned repo counts.
 const GRAPHQL_MERGE = /\b(markPullRequestReadyForReview|mergePullRequest|enablePullRequestAutoMerge)\b/;
 
-function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: Host["repoAt"]): string | undefined {
+function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, host: Host): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a)))
@@ -185,9 +185,9 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: Host[
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
 	if (!act) return undefined;
 	const env = raw.slice(0, raw.length - w.length).map((a) => a.match(/^GH_REPO=(.+)$/)?.[1]).find(Boolean);
-	const named = ghNamedRepo(w) ?? repoName(env);
+	const named = ghNamedRepo(w) ?? repoName(env ?? host.ghRepo);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
-	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : repoAt(d))).filter((r) => r !== null);
+	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
 	return hit ? `${act} in ${hit}: the merge job is its only merger (policy, Merging)` : undefined;
@@ -246,7 +246,7 @@ export function checkBash(command: string, owned: Set<string>, host: Host = NO_H
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, (d) => host.repoAt(d));
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host);
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
 	}
 	return undefined;

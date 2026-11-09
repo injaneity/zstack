@@ -21,7 +21,7 @@ function originRepo(dir: string): string | null | undefined {
 	}
 }
 
-const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false };
+const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export default function (pi: ExtensionAPI) {
 	const owned = mergeOwned();
