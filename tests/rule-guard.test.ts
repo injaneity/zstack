@@ -133,6 +133,9 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("bash <<'EOF'\ngit push --force\nEOF");
 	blocked("~/onigiri-vm/vm <<'EOF'\necho x >> /srv/onigiri/hold-prs.txt\nEOF");
 	blocked("cat <<EOF\nx"+"\ngit push -f"); // no closing line: nothing is stripped
+	blocked("echo '<<EOF'\ngit push -f\nEOF"); // a quoted << is text, so the next line runs
+	blocked("cat <<EOF\n$(git push -f)\nEOF"); // an unquoted body's substitutions run
+	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
 });
 
 test("writes to the holds file are blocked; reads run", () => {
@@ -158,6 +161,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp /tmp/hold-prs.txt /srv/onigiri/",
 		"cp -p /tmp/hold-prs.txt $ROOT",
 		"ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'",
+		"cp /tmp/hold-prs.txt /srv/$D",
+		"cp /tmp/hold-prs.txt /srv/onig*",
 		"mv /tmp/hold-prs.txt /srv/onigiri",
 		"cp /tmp/hold-prs.txt sync",
 		"mv /srv/onigiri/hold-prs.txt /tmp/holds-copy",
@@ -181,6 +186,9 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp /srv/onigiri/hold-prs.txt /tmp",
 	])
 		allowed(c);
+	// the first cd may succeed, so the session's own directory still counts
+	assert.match(checkBash("cd /srv/onigiri || cd /tmp; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
+	assert.match(checkBash("cd /tmp || true; cp /tmp/hold-prs.txt .", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
 	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);
 	assert.equal(checkWrite("/srv/onigiri/policy.md"), undefined);
 	assert.equal(checkWrite("hold-prs.txt.md"), undefined);

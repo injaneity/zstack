@@ -45,10 +45,23 @@ const isHolds = (w: string) => base(w) === HOLDS;
 interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; remote: boolean }
 const REMOTE = new Set(["ssh", "vm"]);
 
+/** Whether `s` ends outside any quote, so a `<<` after it is an operator and not text. */
+function unquotedEnd(s: string): boolean {
+	let q = "";
+	for (let i = 0; i < s.length; i++) {
+		const c = s[i];
+		if (q) { if (c === q) q = ""; else if (c === "\\" && q === '"') i++; }
+		else if (c === "'" || c === '"') q = c;
+		else if (c === "\\") i++;
+	}
+	return !q;
+}
+
 /**
- * The line with each here-document body removed unless a shell reads it: a `python3 - <<'EOF'` script or a
- * `cat > f <<EOF` body is data, not commands, while `bash <<EOF` and `ssh host <<EOF` run theirs. A body with no
- * closing line is kept, so an unclosed or quoted `<<` hides nothing.
+ * The line with each here-document body removed when it is only data: a `python3 - <<'EOF'` script or a
+ * `cat > f <<'EOF'` body. A body stays when a shell reads it (`bash <<EOF`, `ssh host <<EOF`), when its delimiter
+ * is unquoted and the body has a `$(` or backtick (the shell runs those), when the `<<` sits inside quotes, or when
+ * it has no closing line.
  */
 function stripHeredocs(line: string): string {
 	const lines = line.split("\n");
@@ -56,8 +69,10 @@ function stripHeredocs(line: string): string {
 	for (let i = 0; i < lines.length; i++) {
 		out.push(lines[i]);
 		for (const m of lines[i].matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+			if (!unquotedEnd(lines[i].slice(0, m.index))) continue;
 			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
 			if (end < 0) continue;
+			if (!m[2] && lines.slice(i + 1, end).some((l) => /\$\(|`/.test(l))) continue;
 			const before = commands(lines[i].slice(0, m.index)).pop() ?? [];
 			if (SHELLS.has(program(before)[0] ?? "")) continue;
 			lines.splice(i + 1, end - i - 1);
@@ -215,7 +230,7 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 			const dest = ops[ops.length - 1];
 			if (isHolds(dest)) return true;
 			if (!ops.slice(0, -1).some(isHolds)) return false;
-			const abs = remote || dest.startsWith("$") ? undefined : /^[/~]/.test(dest) ? dest : dir && path.posix.resolve(dir, dest);
+			const abs = remote || /[$`*?[]/.test(dest) ? undefined : /^[/~]/.test(dest) ? dest : dir && path.posix.resolve(dir, dest);
 			return abs === undefined || host.isFile(path.posix.join(abs, HOLDS));
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
@@ -226,7 +241,8 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. */
 export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
-		if (writesHolds(c.words, c.dirs[c.dirs.length - 1], c.remote, host))
+		// a `cd` may fail, so every directory the command might run in counts, as for gh
+		if ([...new Set(c.dirs)].some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, (d) => host.repoAt(d));
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
