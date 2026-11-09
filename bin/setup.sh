@@ -10,11 +10,6 @@ changed=() kept=()
 command -v pi >/dev/null || { echo "pi is not on PATH. Install pi first, then re-run this." >&2; exit 1; }
 echo "pi $(pi --version)"
 
-dest="$agent_dir/onigiri/policy.md"
-if [ -L "$dest" ] && [ ! -e "$dest" ]; then kept+=("policy  $dest is a broken link, not touched; fix or remove it")
-elif [ -e "$dest" ]; then kept+=("policy  $dest (already there, not touched)")
-else mkdir -p "$(dirname "$dest")"; cp "$pkg/policy.md" "$dest"; changed+=("policy  $dest (copied from the package default; edit it to add holds)"); fi
-
 while read -r state file; do
   if [ "$state" = copied ]; then changed+=("agent   $file"); else kept+=("agent   $file (already there)"); fi
 done < <(bash "$pkg/bin/install-agents.sh")
