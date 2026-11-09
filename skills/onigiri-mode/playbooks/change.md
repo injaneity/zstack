@@ -11,7 +11,7 @@
 1. If the change crosses a function boundary, run **architect** for its shape.
 2. Write it at a scope you can state in one sentence: the files, the named data shape, and what done looks like. Migrate every caller in the same change. Check renames against the files, since they miss strings and prose. Past a handful of files, write a codemod.
 3. Build in small units, each verified before the next and, for a refactor, keeping the pin green.
-4. Write the test plan for the real surface: a bug's original repro now passes, a refactor's outputs match the old ones, and the verify-skill lanes the change touches. The verifier runs it in step 7. Inconclusive or wrong-surface is not a pass.
+4. Write the test plan the verifier runs in step 7, for the real surface. A bug's original repro now passes, a refactor's outputs match the old ones, and the verifier runs the verify-skill lanes the change touches. Inconclusive or wrong-surface is not a pass.
 5. If the design is contested, argue hardest against your choice: name where it fails and check whether a rejected shape answers it. Revert a refactor that doesn't lower reader load somewhere.
 6. Commit in small ordered commits. A bug with a cheap local test lands its failing test first. A refactor lands the deletions first. Follow-ups get their own PRs.
 7. Spawn the `verifier` on the diff range (onigiri-mode's Subagents). Fix or dismiss each finding with the reason.

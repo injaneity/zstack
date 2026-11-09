@@ -64,18 +64,39 @@ test("the builder leaves the verify skill, E2E and Lume to the verifier", () => 
 });
 
 // Everything a builder session reads as instructions: the appended Hard rules (inside SKILL.md), the skill and its
-// playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. None of it may tell the builder to run
-// the verify skill, E2E or Lume, so every line naming one also names the verifier that runs it.
+// playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. Each sentence (split at . ; : and line
+// ends) that names the verify skill, E2E or Lume must give it to the verifier or forbid it, and a "yourself" sentence
+// must forbid it, so "the verifier is available; run Lume yourself" fails.
+const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills/i;
+const NEGATED = /\b(do not|don't|never|not)\b/i;
+function builderLeaks(text: string): string[] {
+	return text
+		.split(/\n|(?<=[.;:!?])\s+/)
+		.filter((s) => CHECKS.test(s))
+		.filter((s) => (/\byourself\b/i.test(s) ? !NEGATED.test(s) : !/\bverifier\b/i.test(s) && !NEGATED.test(s)));
+}
+
+test("the leak check catches a builder told to run the checks itself", () => {
+	for (const bad of [
+		"The verifier is available; run Lume yourself.",
+		"Run the verify-cua-driver skill before opening the PR.",
+		"Then run E2E.",
+		"Ask the verifier for a review. Run the Lume lane yourself.",
+	])
+		assert.deepEqual(builderLeaks(bad).length > 0, true, bad);
+	for (const ok of ["You do not run the verify skill, E2E or Lume yourself.", "The `verifier` subagent runs the repo verify skill, with E2E and Lume."])
+		assert.deepEqual(builderLeaks(ok), [], ok);
+});
+
 test("builder prompts leave the verify skill, E2E and Lume to the verifier", () => {
 	const sources = ["skills/onigiri-mode/SKILL.md", "prompts/onigiri-mode.md", "AGENTS.md", "hosts/mini/host-mini.md"];
 	for (const f of fs.readdirSync(`${root}skills/onigiri-mode/playbooks`)) sources.push(`skills/onigiri-mode/playbooks/${f}`);
 	let named = 0;
-	for (const f of sources)
-		for (const line of fs.readFileSync(`${root}${f}`, "utf-8").split("\n")) {
-			if (!/\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills/i.test(line)) continue;
-			named++;
-			assert.match(line, /\bverifier\b/, `${f}: ${line}`);
-		}
+	for (const f of sources) {
+		const text = fs.readFileSync(`${root}${f}`, "utf-8");
+		named += text.split("\n").filter((l) => CHECKS.test(l)).length;
+		assert.deepEqual(builderLeaks(text), [], f);
+	}
 	assert.ok(named >= 4, `expected the hand-off lines, saw ${named}`);
 });
 
