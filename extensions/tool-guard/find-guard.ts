@@ -1,8 +1,8 @@
 // Refuses a bash `find` that walks the whole disk or a whole home directory. One session lost over an hour to
 // `find / -name cmake` and `find /tmp /Users/<user> ...` while looking for a tool. Pure, so tests run it without pi.
 import * as path from "node:path";
+import { commands, program } from "./shell.ts";
 
-const WRAPPERS = new Set(["{", "sudo", "time", "command", "exec", "nohup", "env", "nice", "ionice", "timeout", "gtimeout", "xargs", "stdbuf"]);
 // Directories too big to walk. A top-level directory (/usr, /tmp, /opt, ...) counts too, by depth below.
 const BROAD = new Set(["/usr/local", "/opt/homebrew", "/private/tmp", "/private/var", "/home", "/Users"]);
 const MAX_DEPTH = 2;
@@ -12,85 +12,10 @@ export const FIND_HINT =
 	"directory (/opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin, ~/.local/bin). Scope `find` to the project directory, " +
 	`or bound it with -maxdepth ${MAX_DEPTH} or less.`;
 
-/** Split a command line into words per simple command. Quotes are honoured; expansions are left as text. */
-export function commands(line: string): string[][] {
-	const out: string[][] = [];
-	let words: string[] = [];
-	let word = "";
-	let inWord = false;
-	let quote = "";
-	const resume: string[] = []; // closers of substitutions opened inside double quotes: ")" or "`"
-	const endWord = () => {
-		if (inWord) words.push(word);
-		word = "";
-		inWord = false;
-	};
-	const endCommand = () => {
-		endWord();
-		if (words.length) out.push(words);
-		words = [];
-	};
-	for (let i = 0; i < line.length; i++) {
-		const c = line[i];
-		if (quote === '"' && (c === "`" || (c === "$" && line[i + 1] === "("))) {
-			// a substitution inside double quotes still runs: read it as its own command, then go back into the quotes
-			if (c === "$") i++;
-			resume.push(c === "`" ? "`" : ")");
-			quote = "";
-			endCommand();
-			continue;
-		}
-		if (!quote && resume.length && c === resume[resume.length - 1]) {
-			resume.pop();
-			endCommand();
-			quote = '"';
-			inWord = true;
-			continue;
-		}
-		if (quote) {
-			if (c === quote) quote = "";
-			else if (c === "\\" && quote === '"' && i + 1 < line.length) word += line[++i];
-			else word += c;
-			continue;
-		}
-		if (c === "'" || c === '"') {
-			quote = c;
-			inWord = true;
-		} else if (c === "\\" && i + 1 < line.length) {
-			word += line[++i];
-			inWord = true;
-		} else if (c === " " || c === "\t") endWord();
-		else if (";&|\n()`".includes(c) || (c === "$" && line[i + 1] === "(")) {
-			if (c === "$") i++;
-			endCommand();
-		} else {
-			word += c;
-			inWord = true;
-		}
-	}
-	endCommand();
-	return out;
-}
-
 /** The find arguments of a simple command, or undefined when it does not run find. */
 function findArgs(words: string[]): string[] | undefined {
-	let i = 0;
-	while (i < words.length) {
-		const w = words[i];
-		const base = w.slice(w.lastIndexOf("/") + 1);
-		if (base === "find") return words.slice(i + 1);
-		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || WRAPPERS.has(base)) {
-			i++;
-			// wrapper options and their values: `timeout -k 5 60`, `nice -n 5`, `sudo -u x`
-			while (i < words.length && (/^-/.test(words[i]) || /^\d+[smhd]?$/.test(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) {
-				if (/^-(n|u|g|k|s|[ioe])$/.test(words[i]) && i + 1 < words.length) i++;
-				i++;
-			}
-			continue;
-		}
-		return undefined;
-	}
-	return undefined;
+	const w = program(words);
+	return w[0] === "find" ? w.slice(1) : undefined;
 }
 
 function normalize(p: string, home: string): string {
