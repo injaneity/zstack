@@ -1,4 +1,4 @@
-// The shell reading both guards share: a command line split into simple commands, and a command's program with its
+// rule-guard's shell reading: a command line split into simple commands, and a command's program with its
 // wrappers removed. Pure, so tests run it without pi.
 
 export const base = (w: string) => w.slice(w.lastIndexOf("/") + 1);

@@ -1,7 +1,9 @@
 ---- MODULE PiRun ----
 \* The run lifecycle bin/pi-run implements for one id. Each action is one step() call under the review dir's
 \* flock, so actions are atomic. Two launchers race through Start, the supervisor through Exit, and the pickup
-\* through Collect. Check: skills/statechart/scripts/statechart bin/PiRun.tla --view bin/PiRun.view.ts
+\* through Collect. Check: skills/statechart/scripts/statechart bin/PiRun.tla --view bin/PiRun.view.mts
+\* tests/pirun-model.sh runs that check in CI and fails when bin/PiRun.mmd is not the chart it draws; tests/test_pi_run.py
+\* fails when bin/pi-run's step() is not that chart.
 EXTENDS Naturals
 
 CONSTANT MaxAttempt

@@ -1,0 +1,44 @@
+#!/bin/bash
+# check-parity: is this host merged main and nothing else? Three checks, one "ok" or "FAIL" line each, exit 1 on any FAIL.
+#   package  this checkout is on main, clean, and at origin/main (fetched now)
+#   hook     $ONIGIRI_ROOT/cua's pre-push hook is a symlink to this checkout's hosts/vm/pre-push
+#   agents   <pi agent dir>/agents holds nothing but files equal to this checkout's agents/<same name>: the subagent
+#            tool loads agents/ from this checkout, so anything else there is an old copy or an agent main lacks
+# hosts/*/host.sh run it before a launch, and bin/pi-run starts nothing when it fails. hosts/vm/merge_job.py runs it on
+# every cron run and raises an urgent parity wake. It fetches origin/main and changes nothing else. ONIGIRI_ROOT defaults to /srv/onigiri.
+set -u
+pkg="$(cd "$(dirname "$0")/.." && pwd -P)"
+root=${ONIGIRI_ROOT:-/srv/onigiri}
+agents="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/agents"
+rc=0
+ok() { echo "ok    $1"; }
+fail() { echo "FAIL  $1"; rc=1; }
+g() { git -C "$pkg" "$@"; }
+
+head=$(g rev-parse HEAD 2>/dev/null) || head=
+if [ -z "$head" ]; then fail "package: $pkg is not a git checkout"
+elif ! g fetch --quiet origin refs/heads/main:refs/remotes/origin/main 2>/dev/null; then fail "package: cannot fetch origin main in $pkg"
+else
+  main=$(g rev-parse refs/remotes/origin/main)
+  dirty=$(g status --porcelain | head -3 | tr '\n' ' ')
+  if [ "$(g symbolic-ref --short -q HEAD)" != main ]; then fail "package: $pkg is not on branch main"
+  elif [ "$head" != "$main" ]; then fail "package: $pkg is at $head, origin/main is $main"
+  elif [ -n "$dirty" ]; then fail "package: $pkg has local changes: $dirty"
+  else ok "package: $pkg at origin/main $main"; fi
+fi
+
+hook="$root/cua/.git/hooks/pre-push"
+if [ ! -d "$root/cua/.git" ]; then fail "hook: no cua clone at $root/cua"
+elif [ ! -L "$hook" ]; then fail "hook: $hook is not a symlink to $pkg/hosts/vm/pre-push"
+elif [ "$(cd "$(dirname "$(readlink "$hook")")" 2>/dev/null && pwd -P)/$(basename "$(readlink "$hook")")" != "$pkg/hosts/vm/pre-push" ]; then
+  fail "hook: $hook points at $(readlink "$hook"), not $pkg/hosts/vm/pre-push"
+else ok "hook: $hook -> $pkg/hosts/vm/pre-push"; fi
+
+extra=
+for f in "$agents"/* "$agents"/.[!.]*; do
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  cmp -s "$f" "$pkg/agents/$(basename "$f")" || extra="$extra$(basename "$f") "
+done
+if [ -n "$extra" ]; then fail "agents: $agents holds ${extra% }, not in or not equal to $pkg/agents; agents load only from the package"
+else ok "agents: nothing in $agents differs from $pkg/agents"; fi
+exit $rc

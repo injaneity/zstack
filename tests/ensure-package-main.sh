@@ -7,6 +7,7 @@ fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: got '$2', want '$3'"; fail=1; fi; }
 has() { case "$2" in *"$3"*) echo "ok    $1";; *) echo "FAIL  $1: '$2' lacks '$3'"; fail=1;; esac; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+unset ONIGIRI_HOST   # the copies under test have no hosts/ dir
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 # origin.git is the remote main; seed pushes to it; pkg is the installed checkout under test.

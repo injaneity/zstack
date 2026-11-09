@@ -32,11 +32,11 @@ hold           | 5675          | yes | open PR, never touch
 hands-off-user | someone       | no  | hands-off login
 skip-author    | app/cua-agents | no | bot
 review-only    | f-trycua      | no  | teammate: first review only
-hands-off-path | impl_.rs      | yes | only if it undoes #2886
+hands-off-path | impl_.rs      | yes | mode=split-undone | only if it undoes #2886
+hands-off-path | never.rs      | no  | Zane reviews every change to it
 exception      | impl_.rs      | yes | #5686 follow-up | the MSAA path | Zane 26 Oct
 """
 FIX = mj.parse_holds(HOLDS)
-SPLIT = mj.parse_holds(HOLDS.replace("| yes | only if", "| yes | mode=split-undone | only if"))
 
 
 def cr(name, status="COMPLETED", conclusion="SUCCESS", started="2026-10-25T01:00:00Z", run="111", workflow="CI"):
@@ -51,14 +51,14 @@ def pr(**kw):
     return base
 
 
-def verdict(p, holds=FIX, paused=None, rerun_head=None, hands_off=None):
+def verdict(p, holds=FIX, paused=None, rerun_head=None):
     notes = []
-    reasons = mj.gate(p, holds, hands_off, notes) + mj.blockers(p, paused)
+    reasons = mj.gate(p, holds, notes) + mj.blockers(p, paused)
     return mj.next_action(reasons, notes, p, rerun_head)
 
 
-def codes(p, holds=FIX, paused=None, hands_off=None):
-    return [r.code for r in mj.gate(p, holds, hands_off) + mj.blockers(p, paused)]
+def codes(p, holds=FIX, paused=None):
+    return [r.code for r in mj.gate(p, holds) + mj.blockers(p, paused)]
 
 
 class Gate(unittest.TestCase):
@@ -108,11 +108,17 @@ class Gate(unittest.TestCase):
         self.assertEqual(verdict(pr(), holds=None), ("skip", "holds file unreadable: every PR counts as held"))
 
     def test_hands_off_path(self):
-        self.assertEqual(verdict(pr(), hands_off=lambda: (True, "touches impl_.rs")), ("buffer", "touches impl_.rs"))
-        self.assertEqual(verdict(pr(), hands_off=lambda: (False, "split kept")),
-                         ("merge", "green, ci-gate SUCCESS, split kept, risk light"))
-        self.assertEqual(mj.path_hits(["a/tools/impl_.rs", "b.rs"], FIX), ["impl_.rs"])
-        self.assertEqual(mj.path_hits(["a/impl_.rs.bak", "a/my_impl_.rs"], FIX), [])
+        self.assertEqual(verdict(pr(files=["a/tools/never.rs", "b.rs"])),
+                         ("buffer", "touches never.rs (hands-off path, mode never; see the holds file)"))
+        self.assertEqual(verdict(pr(files=["a/never.rs.bak", "a/my_never.rs"]))[0], "merge")
+
+    def test_a_split_undone_row_holds_nothing_and_a_hold_row_stops_the_pr(self):
+        """split-undone is gone (Zane 10 Nov): the live file's impl_.rs row no longer holds, and a PR Zane wants stopped
+        gets a plain hold row."""
+        p = pr(files=["libs/x/src/tools/impl_.rs"])
+        self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk light"))
+        held = mj.parse_holds(HOLDS + "hold | 5900 | no | Zane reviews this one\n")
+        self.assertEqual(verdict(p, holds=held), ("skip", "hold: #5900 has a hold row in the holds file"))
 
     def test_deep_and_human_need_a_preapprove_row_at_exactly_the_head(self):
         pre = mj.parse_holds(HOLDS + f"preapprove | #5900 | no | {H} | Zane, test\n")
@@ -187,25 +193,21 @@ class NextAction(unittest.TestCase):
 
 class Holds(unittest.TestCase):
     def test_rows_parse(self):
-        self.assertEqual((FIX["hold"], FIX["path_modes"]), ({5675}, {"impl_.rs": "never"}))
-        self.assertEqual(SPLIT["path_modes"], {"impl_.rs": "split-undone"})
-        both = "hands-off-path | x.rs | no | mode=split-undone | a\nhands-off-path | x.rs | no | mode=never | b\n"
-        self.assertEqual(mj.parse_holds(both)["path_modes"], {"x.rs": "never"})
-        self.assertEqual(mj.parse_holds("\n".join(reversed(both.split("\n"))))["path_modes"], {"x.rs": "never"})
+        self.assertEqual(FIX, {"hold": {5675}, "paths": ["never.rs"], "preapproved": {}})
+        self.assertEqual(mj.parse_holds("hands-off-path | x.rs | no | mode=never | b\n")["paths"], ["x.rs"])
         h = mj.parse_holds(f"preapprove | #5650 | no | {H} | Zane\npreapprove | 5690 | no | {H2} | x\n")
         self.assertEqual(h["preapproved"], {5650: H, 5690: H2})
 
-    def test_author_rows_are_checked_but_never_hold_a_pr(self):
-        # review-only and skip-author steer pickup only; the gate keeps nothing for them
-        h = mj.parse_holds("review-only | f-trycua | no | teammate\nskip-author | app/cua-agents | no | bot\n")
-        self.assertEqual(h, {"hold": set(), "path_modes": {}, "preapproved": {}})
-        for bad in ("review-only | | no | x", "review-only | f-trycua | maybe | x", "review-only | f-trycua | no"):
-            with self.assertRaises(ValueError, msg=bad):
-                mj.parse_holds(bad)
+    def test_a_row_that_names_no_pr_is_not_read_and_cannot_hold_every_pr(self):
+        """8 Nov 14:17: one bad row the job had no use for made the file unreadable, and every PR counted as held."""
+        for row in ("review-only | f-trycua | no | teammate", "skip-author | app/cua-agents | no | bot", "review-only | f-trycua | maybe",
+                    "exception | impl_.rs | yes | #5686 follow-up"):
+            self.assertEqual(mj.parse_holds(row), {"hold": set(), "paths": [], "preapproved": {}}, row)
 
     def test_malformed_rows_raise(self):
-        for bad in ("hold 5675", "hodl | 5675 | no | x", "hold | 5675 | maybe | x", "hold | | no | x", "hold | abc | no | x",
-                    "exception | impl_.rs | yes | #5686 follow-up", "hands-off-path | x.rs | no | mode=sometimes | x",
+        for bad in ("hold 5675", "hodl | 5675 | no | x", "hold | | no | x", "hold | abc | no | x", "hold | 5675",
+                    "no-move | 5675 | no | a kind this job does not know, on a PR", "review-only | | no | x", "review-only",
+                    "hands-off-path | x.rs | no | mode=sometimes | x", "hands-off-path | x.rs", "hands-off-path | | no | x",
                     "preapprove | #5650 | no | abc123 | x", f"preapprove | #5650 | no | {H}", f"preapprove | x | no | {H} | x",
                     f"preapprove | #1 | no | {H} | x\npreapprove | #1 | no | {H2} | y"):
             with self.assertRaises(ValueError, msg=bad):
@@ -216,59 +218,6 @@ class Holds(unittest.TestCase):
             self.skipTest("no live holds file on this machine")
         h = mj.parse_holds(mj.read(mj.HOLDS_FILE))
         self.assertIn(5675, h["hold"])
-
-
-WIN = "libs/cua-driver/rust/crates/platform-windows/src/tools/"
-CLICK = ["pub(crate) struct ClickTool {", "    pub(crate) overlays: Arc<CursorRegistry>,", "}", "impl Tool for ClickTool {",
-         "    fn def(&self) -> &ToolDef { &CLICK_DEF }", "        let pid = target_pid(&args)?;",
-         "        click_at(pid, &args, &self.overlays).await", "}"]
-SWAP = "@@ -1,1 +1,1 @@\n-    Arc::new(move |args| state.snapshots.pid_for_token(args))\n+    Arc::new(move |args| state.snapshots.token_owner(args))"
-
-
-def f(name, patch_, status="modified"):
-    return {"filename": WIN + name, "status": status, "patch": patch_}
-
-
-class SplitUndone(unittest.TestCase):
-    """impl_.rs, mode split-undone (Zane 20 Oct): buffer only a PR whose diff undoes the #2886 per-tool split."""
-
-    def test_a_call_site_swap_does_not_undo_the_split(self):
-        files = [f("impl_.rs", SWAP), {"filename": "README.md", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"}]
-        self.assertIsNone(mj.split_undone(files, "impl_.rs"))
-        self.assertEqual(mj.hands_off_verdict(["impl_.rs"], lambda: files, SPLIT),
-                         (False, "touches impl_.rs: does not undo the #2886 per-tool split (hands-off path, mode split-undone)"))
-
-    def test_each_undoing_signal(self):
-        removed = [f("impl_.rs", "@@ -1,0 +1,1 @@\n+// x"), f("click.rs", "", "removed")]
-        self.assertEqual(mj.split_undone(removed, "impl_.rs"), f"deletes split module {WIN}click.rs")
-        self.assertIn("removed", mj.split_undone([f("impl_.rs", "", "removed")], "impl_.rs"))
-        mod = [f("impl_.rs", SWAP), f("mod.rs", "@@ -1,2 +1,0 @@\n-#[cfg(windows)]\n-mod zoom;")]
-        self.assertIn("drops mod zoom", mj.split_undone(mod, "impl_.rs"))
-        self.assertIn("module wiring", mj.split_undone([f("impl_.rs", "@@ -1 +1,2 @@\n+#[path = \"impl_/c.rs\"]\n+mod c;")], "impl_.rs"))
-        imp = [f("impl_.rs", "@@ -1,3 +1,2 @@\n use super::{\n-    click::ClickTool,\n     drag::DragTool,")]
-        self.assertIn("drops the import of ClickTool", mj.split_undone(imp, "impl_.rs"))
-        self.assertIn("re-inlines a tool", mj.split_undone([f("impl_.rs", "@@ -1,0 +1,2 @@\n+impl Tool for ZoomTool {\n+}")], "impl_.rs"))
-        self.assertIsNone(mj.split_undone([f("impl_.rs", "@@ -1,0 +1,2 @@\n+impl Tool for TokenOwnerGuard {\n+}")], "impl_.rs"))
-        body = CLICK[1:3] + CLICK[4:]
-        back = [f("impl_.rs", "@@ -1,0 +1,6 @@\n" + "\n".join("+" + x for x in body)),
-                f("click.rs", "@@ -1,6 +1,0 @@\n" + "\n".join("-" + x for x in body))]
-        self.assertIn("lines removed from its per-tool modules", mj.split_undone(back, "impl_.rs"))
-
-    def test_reordering_is_not_undoing(self):
-        reorder = "@@ -1,3 +1,3 @@\n-    click::ClickTool,\n     drag::DragTool,\n+    click::ClickTool,"
-        files = [f("impl_.rs", reorder), f("mod.rs", "@@ -1,2 +1,2 @@\n-#[cfg(target_os = \"windows\")]\n+#[cfg(windows)]\n mod zoom;")]
-        self.assertIsNone(mj.split_undone(files, "impl_.rs"))
-
-    def test_fails_safe(self):
-        self.assertIn("cannot check", mj.split_undone([f("impl_.rs", None)], "impl_.rs"))
-
-        def boom():
-            raise RuntimeError("gh api: HTTP 502")
-        held, why = mj.hands_off_verdict(["impl_.rs"], boom, SPLIT)
-        self.assertTrue(held)
-        self.assertIn("diff unreadable", why)
-        self.assertEqual(mj.hands_off_verdict(["impl_.rs"], lambda: 1 / 0, FIX),
-                         (True, "touches impl_.rs (hands-off path, mode never; see the holds file)"))
 
 
 class Stage(unittest.TestCase):
@@ -283,11 +232,15 @@ class Stage(unittest.TestCase):
         d = Path(td.name)
         (d / "tick").mkdir()
         (d / "hold-prs.txt").write_text(HOLDS)
+        self.drift, self.unknown, self.sleeps = None, {}, []
         p = patch.multiple(mj, EVENTS=str(d / "events.log"), BUFFER=str(d / "buffer.jsonl"), HOLDS_FILE=str(d / "hold-prs.txt"),
                            STATE=str(d / "tick/state.json"), PAUSED=str(d / "tick/PAUSED"), LAST=str(d / "tick/last-run"),
-                           gh_json=self.gh, sh=self.sh)
+                           gh_json=self.gh, sh=self.sh, parity_problem=lambda: self.drift)
         p.start()
         self.addCleanup(p.stop)
+        z = patch.object(mj.time, "sleep", self.sleeps.append)
+        z.start()
+        self.addCleanup(z.stop)
         k = patch.object(wake, "KEY_FILE", str(d / "no-key"))
         k.start()
         self.addCleanup(k.stop)
@@ -304,7 +257,12 @@ class Stage(unittest.TestCase):
         if args[:2] == ["pr", "list"]:
             return self.merged
         if args[:2] == ["pr", "view"]:
-            return {k: self.prs[int(args[2])][k] for k in args[-1].split(",")}
+            n = int(args[2])
+            out = {k: self.prs[n][k] for k in args[-1].split(",")}
+            if "mergeable" in out and self.unknown.get(n):   # GitHub has not computed it yet: UNKNOWN for this many reads
+                self.unknown[n] -= 1
+                out["mergeable"] = "UNKNOWN"
+            return out
         raise AssertionError(f"unexpected gh {args}")
 
     def sh(self, args, timeout=120):
@@ -350,15 +308,48 @@ class Stage(unittest.TestCase):
 
     def test_holds_hands_off_risk_and_drafts(self):
         self.add(5675)
-        self.add(6306, files=("README.md", "libs/x/src/tools/impl_.rs"))
         self.add(6309, body="risk: deep\n")
         self.add(6312, draft=True)
+        self.add(6306, files=("README.md", "libs/x/src/tools/never.rs"))
         self.run_()
         self.assertEqual(self.calls, [])
         self.assertIn("skipped cua#5675 hold: #5675 has a hold row in the holds file", self.events())
         self.assertEqual(sorted((b["id"], b["reason"]) for b in self.buffered()),
-                         [("cua#6306", "touches impl_.rs (hands-off path, mode never; see the holds file)"),
+                         [("cua#6306", "touches never.rs (hands-off path, mode never; see the holds file)"),
                           ("cua#6309", "declared deep: needs Zane (no preapprove row)")])
+
+    def test_an_unknown_mergeability_is_read_again_in_the_same_run(self):
+        """28 of 87 merges waited one to four ticks on a mergeability GitHub computes on the first ask."""
+        self.add(6330)
+        self.unknown[6330] = 2
+        self.run_()
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6330"])
+        self.assertEqual(len(self.sleeps), 2)
+
+    def test_the_reread_is_bounded_and_only_for_a_pr_that_would_otherwise_merge(self):
+        self.add(6331)
+        self.add(6332, rollup=self.RED)
+        self.add(6333, mergeable="CONFLICTING")
+        self.unknown.update({6331: 99, 6332: 99})
+        self.run_()
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertEqual(len(self.sleeps), mj.MERGEABLE_REREADS)   # all for 6331: 6332 is red, 6333 has an answer
+        self.assertIn("skipped cua#6331 mergeable UNKNOWN", self.events())
+
+    def test_a_host_that_is_not_merged_main_wakes_a_person_once_and_keeps_merging(self):
+        self.add(6340)
+        self.drift = "FAIL  package: at 535b300, origin/main is e9ec151"
+        with patch.object(mj, "now", lambda: "2026-11-10T05:00:00+08:00"):
+            self.run_()
+            self.add(6341)
+            self.run_()
+        self.assertEqual([(b["kind"], b["id"], b.get("urgent")) for b in self.buffered()], [("parity", "host", True)])
+        self.assertIn("535b300", self.buffered()[0]["reason"])
+        self.assertEqual({c[3] for c in self.of(["gh", "pr", "merge"])}, {"6340", "6341"})
+        self.assertIn("error(s)", (self.d / "tick/last-run").read_text())
+        self.drift = None
+        self.run_()
+        self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
     def test_an_unchanged_decision_is_logged_once(self):
         self.add(6302, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
@@ -483,6 +474,31 @@ class Stage(unittest.TestCase):
             self.run_()
         self.assertEqual([b["kind"] for b in self.buffered()], ["unexpected-merge"])
         self.assertIn("urgent cua#10 not sent: paused", self.events())
+
+
+class RunOnMain(unittest.TestCase):
+    """Cron runs the checkout as it is, so a bare run moves it to origin/main first and restarts on the new code."""
+
+    def test_a_bare_run_updates_the_package_then_restarts_once(self):
+        with patch.object(mj.subprocess, "run", return_value=Mock(returncode=0)) as run, patch.object(mj.os, "execve") as ex, \
+                patch.dict(os.environ, clear=False) as env:
+            env.pop("ZSTACK_ENSURED", None)
+            mj.run_on_main()
+            self.assertTrue(run.call_args[0][0][0].endswith("/bin/ensure-package-main"))
+            self.assertEqual(ex.call_args[0][1][1:], [str(VM / "merge_job.py")])
+            self.assertEqual(ex.call_args[0][2]["ZSTACK_ENSURED"], "1")
+            run.reset_mock(), ex.reset_mock()
+            env["ZSTACK_ENSURED"] = "1"   # the restarted run: no second update, and the mark does not reach its children
+            mj.run_on_main()
+            run.assert_not_called(), ex.assert_not_called()
+            self.assertNotIn("ZSTACK_ENSURED", os.environ)
+
+    def test_a_checkout_that_cannot_move_still_runs(self):
+        with patch.object(mj.subprocess, "run", return_value=Mock(returncode=1)), patch.object(mj.os, "execve") as ex, \
+                patch.dict(os.environ, clear=False) as env:
+            env.pop("ZSTACK_ENSURED", None)
+            mj.run_on_main()
+            ex.assert_not_called()
 
 
 class CronEnv(unittest.TestCase):
@@ -638,6 +654,35 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(remote, "")
             items = [json.loads(x) for x in mj.read(f"{root}/buffer.jsonl").splitlines()]
             self.assertEqual([(i["kind"], i["id"]) for i in items], [("patent-held-publish", "cua:onigiri/x")])
+
+    def test_the_installed_hook_is_a_symlink_and_buffers_beside_the_clone(self):
+        """Both hosts install hosts/vm/pre-push as a symlink. With no $ONIGIRI_ROOT (a push from any shell) the hold is
+        buffered in the directory the clone is in, also for a push from one of its worktrees."""
+        with tempfile.TemporaryDirectory() as tmp:
+            g, pub, work, _ = self.repo(tmp)
+            hook = Path(work, ".git/hooks/pre-push")
+            hook.unlink()
+            hook.symlink_to(VM / "pre-push")
+            Path(tmp, "bin").mkdir()
+            Path(tmp, "bin/gh").write_text("#!/bin/sh\nexit 1\n")   # no staging access, and no network
+            Path(tmp, "bin/gh").chmod(0o755)
+            env = {"PATH": f"{tmp}/bin:/usr/bin:/bin", "HOME": tmp, "GH_CONFIG_DIR": f"{tmp}/gh"}
+            g("worktree", "add", "-qb", "onigiri/w", f"{tmp}/wt", cwd=work)
+            Path(tmp, "wt/pairing.rs").write_text("fn pair() {}\n")
+            g("add", ".", cwd=f"{tmp}/wt")
+            g("commit", "-qm", "x", cwd=f"{tmp}/wt")
+            r = subprocess.run(["git", "push", "origin", "onigiri/w"], cwd=f"{tmp}/wt", capture_output=True, text=True, env=env)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("patent hold", r.stderr)
+            self.assertEqual(g("ls-remote", pub, "refs/heads/onigiri/w"), "")
+            items = [json.loads(x) for x in mj.read(f"{tmp}/buffer.jsonl").splitlines()]
+            self.assertEqual([(i["kind"], i["id"]) for i in items], [("patent-held-publish", "cua:onigiri/w")])
+            g("checkout", "-qb", "onigiri/ok", cwd=work)
+            Path(work, "relay.rs").write_text("fn relay() {}\n")
+            g("add", ".", cwd=work)
+            g("commit", "-qm", "y", cwd=work)
+            r = subprocess.run(["git", "push", "origin", "onigiri/ok"], cwd=work, capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
     def commits(self, tmp, branch, steps):
         """Commit each step (a dict of path -> text, None deletes, ("mv", a, b) renames), then push branch."""

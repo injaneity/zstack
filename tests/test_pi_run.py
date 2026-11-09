@@ -5,6 +5,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -20,14 +21,10 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
-EXT = next(line.split('"')[1] for line in (PKG / "bin" / "ensure-extensions").read_text().splitlines() if line.startswith("packages=("))
-# fake pi: `list` shows the pinned extension; a run records its args and env, then hangs while $T/hang exists
-# and exits with $T/rc. It traps TERM like pi does, so a forwarded signal is visible.
-FAKE_PI = f"""#!/bin/bash
-case "$1" in
-  list) echo "User packages:"; echo "  {EXT}"; echo >> "$T/lists"
-        [ -e "$T/vanish" ] && [ "$(wc -l < "$T/lists")" -ge 2 ] && rm "$0"; exit 0;;
-esac
+RULES = PKG / "skills" / "onigiri-mode" / "hard-rules.md"
+# fake pi: a run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
+# pi does, so a forwarded signal is visible.
+FAKE_PI = """#!/bin/bash
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
 printf '%s\\n' "$@" > "$T/args"
 echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
@@ -82,6 +79,53 @@ class Step(unittest.TestCase):
         for run, alive in ((self.R("running"), True), (self.R("collected", rc=0), False), (None, False)):
             with self.assertRaises(pr.Refused):
                 pr.step(run, "collect", alive)
+
+
+def chart():
+    """bin/PiRun.mmd as {(from, to, label)}: the chart TLC draws from bin/PiRun.tla (tests/pirun-model.sh keeps them equal)."""
+    names, edges = {}, set()
+    for line in (PKG / "bin" / "PiRun.mmd").read_text().replace("#60;", "<").splitlines():
+        if m := re.fullmatch(r"\s*(s\d+): (.+)", line):
+            names[m.group(1)] = m.group(2)
+        elif m := re.fullmatch(r"\s*(s\d+) --> (s\d+): (.+)", line):
+            edges.add((names[m.group(1)], names[m.group(2)], m.group(3)))
+    return edges
+
+
+class Model(unittest.TestCase):
+    """step() against the model: every transition the chart has, and no other."""
+
+    def test_step_makes_exactly_the_charts_transitions(self):
+        def name(run, alive):
+            if run is None:
+                return "no run"
+            if run["state"] == "running":
+                return "running" if alive else "lost"
+            return {"exited": f"exited, {run['wake'] or 'no'} wake", "collected": "collected"}[run["state"]]
+        start, collect = "pi-run <id> <role> <brief>", "pi-run collect <id>"
+        edges, seen, todo = set(), set(), [(None, False)]
+        while todo:
+            run, alive = todo.pop()
+            key = (name(run, alive), bool(run and run["wake_finish"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            asked = "brief has wake: finish" if key[1] else "no wake: finish"
+            moves = [(start, "start", dict(pid=1, start="t", wake_finish=wf), True) for wf in (False, True)]
+            moves += [(collect, "collect", {}, False)]
+            if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
+                moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3), False),
+                          (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0), False)]
+                edges.add((key[0], "lost", "KILL or OOM"))
+                todo.append((run, False))
+            for label, event, fields, alive_after in moves:
+                try:
+                    after = pr.step(run, event, alive, **fields)
+                except pr.Refused:
+                    continue
+                edges.add((key[0], name(after, alive_after), label))
+                todo.append((after, alive_after))
+        self.assertEqual(edges, chart())
 
 
 class Launcher(unittest.TestCase):
@@ -144,7 +188,7 @@ class Launcher(unittest.TestCase):
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args[args.index("--session-id") + 1], "cua-1")
         self.assertEqual(args[args.index("--name") + 1], "role:coding")
-        self.assertEqual(args[args.index("--append-system-prompt") + 1:][0], "## Hard rules")
+        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))
         wakes = [json.loads(line) for line in self.log("cua-1").splitlines() if line.startswith("{")]
         self.assertEqual([(w["kind"], w["id"]) for w in wakes], [("failed", "cua-1")])
         mid = json.loads((self.t / "session-wake").read_text())
@@ -153,22 +197,34 @@ class Launcher(unittest.TestCase):
     def test_pi_gets_exactly_the_hard_rules_and_a_working_ctrl_c(self):
         self.start("rules")
         self.finished("rules")
-        args = (self.t / "args").read_text()
-        rules = subprocess.run([PKG / "bin" / "hard-rules"], capture_output=True, text=True, check=True).stdout.rstrip("\n")
-        self.assertIn(f"--append-system-prompt\n{rules}\n", args)
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual(args.count("--append-system-prompt"), 1)
+        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))   # the file, so pi reads main's text
         self.assertEqual((self.t / "int-ignored").read_text().strip(), "False")
 
-    def test_no_hard_rules_section_starts_nothing(self):
+    def test_the_hard_rules_are_one_file_and_the_skill_holds_no_second_copy(self):
+        rules, skill = RULES.read_text(), (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text()
+        self.assertTrue(rules.startswith("## Hard rules\n"))
+        self.assertEqual([x for x in rules.splitlines() if x.startswith("## ")], ["## Hard rules"])
+        heads = [x for x in rules.splitlines() if x.startswith("### ")]
+        self.assertEqual(heads, ["### Work", "### Patent hold", "### Commits and PR text", "### Size", "### Checks", "### Scope",
+                                 "### Merging", "### Changing these rules"])
+        self.assertEqual([h for h in heads if h in skill], [])
+        self.assertIn("(hard-rules.md)", skill)
+
+    def test_no_hard_rules_file_starts_nothing(self):
         pkg = self.t / "pkg"
         for sub in ("bin", "config", "hosts/vm", "skills/onigiri-mode"):
             (pkg / sub).mkdir(parents=True)
-        for f in ("bin/pi-run", "bin/hard-rules", "bin/model-for", "bin/ensure-extensions", "config/models.json", "hosts/vm/wake.py"):
+        for f in ("bin/pi-run", "bin/model-for", "config/models.json", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
-        (pkg / "skills/onigiri-mode/SKILL.md").write_text("# onigiri mode\n\n## Principles\n\n- x\n")
-        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "norules", "coding", str(self.t / "brief.md")],
-                           capture_output=True, text=True, env=self.env, timeout=30)
-        self.assertEqual(r.returncode, 2, r.stderr)
+        for text in (None, "  \n"):
+            if text is not None:
+                (pkg / "skills/onigiri-mode/hard-rules.md").write_text(text)
+            r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "norules", "coding", str(self.t / "brief.md")],
+                               capture_output=True, text=True, env=self.env, timeout=30)
+            self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIsNone(self.run_json("norules"))
         self.assertFalse((self.t / "args").exists())
 
@@ -263,8 +319,7 @@ class Launcher(unittest.TestCase):
         self.assertIn("wake: failed", self.log("term"))
 
     def test_a_pi_that_cannot_start_is_a_failed_exit_not_a_loss(self):
-        (self.t / "vanish").touch()   # the fake pi passes ensure-extensions' two `pi list` calls, then removes itself
-        self.start("nopi")
+        self.start("nopi", PATH="/usr/bin:/bin")   # no pi on PATH
         run = self.finished("nopi")
         self.assertEqual(run["rc"], 127)
         self.assertIn("cannot start pi", self.log("nopi"))

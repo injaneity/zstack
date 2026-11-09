@@ -26,24 +26,29 @@ jobs:
       - name: lint the VM host scripts
         run: |
           pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh bin/hard-rules tests/hard-rules.sh bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main tests/ensure-package-main.sh tests/pirun-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: find guard refuses whole-disk and whole-home finds
-        run: node --test tests/find-guard.test.ts
       - name: rule guard blocks force-push, hook skips, merge-job merges and holds-file writes
         run: node --test tests/rule-guard.test.ts
       - name: subagent children get their role prompt and no session rules
         run: node --test tests/subagent-prompt.test.ts
-      - name: hard-rules prints onigiri-mode's Hard rules or fails
-        run: tests/hard-rules.sh
-      - name: model config resolves and check-models flags a mismatch
+      - name: model config resolves
         run: tests/models.sh
       - name: pi-run fast-forwards the package to origin/main or refuses to start
         run: tests/ensure-package-main.sh
-      - name: pi-run installs the pinned extensions or refuses to start
-        run: tests/ensure-extensions.sh
+      - name: check-parity fails a host whose package, hook or agents differ from main
+        run: tests/check-parity.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: TLC passes bin/PiRun.tla and bin/PiRun.mmd is its chart (bin/pi-run is held to the chart by test_pi_run.py)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0

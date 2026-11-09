@@ -3,11 +3,11 @@
 // zstack changes, and only these: (a) the child's system prompt is its role prompt from agents/<name>.md plus a
 // line placing it in the pipeline, and never the session's Hard rules;
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
-// are told not to sleep or poll; (d) only the user's agents load, never a project's; (e) children get an environment without forge or git credentials; (f) a session_start
-// check reports a missing or stale agent file or a missing gh login, and offers the fix only with a UI; (g) a child's
+// are told not to sleep or poll; (d) only the package's own agents/ load, never a user's or a project's, so every host
+// runs the agents on main; (e) children get an environment without forge or git credentials; (f) a child's
 // provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
-// parent model with a warning, except for the verifier, which refuses; (h) children save a session named role:<agent>, under sessions/subagents/, so
-// bin/check-models can read what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
+// parent model with a warning, except for the verifier, which refuses; (g) children save a session named role:<agent>, under sessions/subagents/.
+// Upstream's parallel and chain modes and its custom renderers are removed; pi's default
 // tool renderer shows the result.
 // See docs/SUBAGENT.md.
 
@@ -32,7 +32,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
-import { buildChildPrompt, onSeatProblem, VERIFIER } from "./prompt.ts";
+import { buildChildPrompt, onSeatProblem } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
@@ -101,38 +101,6 @@ async function seatProblem(ctx: ExtensionContext, seat: Seat): Promise<string | 
 	} catch (error) {
 		return (error as Error).message ?? String(error);
 	}
-}
-
-// Session-start check. A gap with fix=true is closed by bin/setup.sh, which never overwrites a file and
-// never prompts without a terminal. gh is only a warning, and runs in this process, never a child's env.
-async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
-	// Only the TUI prompts. In RPC mode hasUI is true, but pi has not started reading replies during
-	// session_start, so a confirm there would never settle.
-	const tui = ctx.hasUI && ctx.mode === "tui";
-	const say = (line: string, level: "info" | "warning" = "warning") =>
-		tui ? ctx.ui.notify(line, level) : console.error(line);
-	const agentsDir = path.join(getAgentDir(), "agents");
-	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
-	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
-	const shipped = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md"));
-	const absent = shipped.filter((f) => f !== `${VERIFIER}.md` && !fs.existsSync(path.join(agentsDir, f)));
-	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
-	// install-agents.sh never overwrites, so an installed role prompt can lag the package's. Only a warning: the copy may be edited on purpose.
-	const read = (f: string) => fs.readFileSync(f, "utf-8");
-	const stale = shipped.filter((f) => f !== `${VERIFIER}.md` && !absent.includes(f) && read(path.join(agentsDir, f)) !== read(path.join(PACKAGE_DIR, "agents", f)));
-	if (stale.length) gaps.push({ message: `agent files in ${agentsDir} differ from the package's: ${stale.join(", ")}`, remedy: `bash ${path.join(PACKAGE_DIR, "bin", "install-agents.sh")} --force (overwrites them)` });
-	const remotes = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
-	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
-		const gh = await pi.exec("gh", ["auth", "status"], { timeout: 10000 }).catch(() => undefined);
-		if (gh?.code !== 0) gaps.push({ message: "gh is not installed or not logged in; PR steps will fail", remedy: "gh auth login" });
-	}
-	// No UI means nobody can answer: never prompt, never block, print the remedy and go on.
-	if (!tui || !gaps.some((g) => g.fix)) return gaps.forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
-	gaps.filter((g) => !g.fix).forEach((g) => say(`zstack: ${g.message}. Fix: ${g.remedy}`));
-	const fixable = gaps.filter((g) => g.fix).map((g) => g.message);
-	if (!(await ctx.ui.confirm("Run zstack's bin/setup.sh?", `${fixable.join(".\n")}.\nIt copies what is absent and overwrites nothing.`))) return;
-	const r = await pi.exec("bash", [setup], { timeout: 30000, cwd: ctx.cwd });
-	ctx.ui.notify(r.code === 0 ? `zstack: setup.sh ran.\n${r.stdout.trim()}` : `zstack: setup.sh failed: ${r.stderr.trim()}`, r.code === 0 ? "info" : "error");
 }
 
 interface SingleResult {
@@ -374,16 +342,15 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	if (SUBAGENT_DEPTH >= 1) return;
-	pi.on("session_start", (event, ctx) => (event.reason === "startup" ? checkDependencies(pi, ctx) : undefined));
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
-		description: `Delegate a task to a specialized subagent with isolated context. Agents are in ${path.join(getAgentDir(), "agents")}.`,
+		description: `Delegate a task to a specialized subagent with isolated context. Agents are in ${path.join(PACKAGE_DIR, "agents")}.`,
 		parameters: SubagentParams,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const parent: Seat | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
-			const agents = discoverAgents(path.join(PACKAGE_DIR, "agents"), [VERIFIER]);
+			const agents = discoverAgents(path.join(PACKAGE_DIR, "agents"));
 			const makeDetails = (results: SingleResult[]): SubagentDetails => ({ results });
 
 			const { seat: configured, label, error: seatError } = seatFor(params.agent, params.variant);

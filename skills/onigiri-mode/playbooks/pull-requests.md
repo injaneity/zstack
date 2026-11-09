@@ -10,7 +10,7 @@ Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Har
 
 **Clean the diff.** Remove narrating comments, guards for impossible states, dead compatibility paths, and edits outside the stated scope.
 
-**Verify it cold.** Spawn a `verifier` (onigiri-mode's Subagents rules) with the diff range, the stated scope and the worktree. Check each finding against the code. A check result you cite comes from the verifier's run at the current head. Fix the real ones, and note dismissals with the reason in the description.
+**Verify it cold.** Spawn the `verifier` (onigiri-mode's Subagents). Fix the real findings, and note dismissals with the reason in the description.
 
 **Title.** `type(scope): subject`, short and imperative, naming a real symbol when one carries the change.
 
