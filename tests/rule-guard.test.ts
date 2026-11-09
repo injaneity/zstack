@@ -44,6 +44,8 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 		"if true; then git push -f; fi",
 		"while false; do git push -f; done",
 		"! git push --force",
+		"env -i git push -f",
+		"env -i PATH=/usr/bin git push -f",
 	])
 		blocked(c);
 });
@@ -89,6 +91,8 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	blocked("cd /zs/wt && gh pr merge 33", inCua); // a cd can fail, so the starting checkout still counts
 	blocked("GH_REPO=trycua/cua gh pr merge 1");
 	blocked("{ gh pr merge 1 -R trycua/cua; }");
+	blocked("{ cd /cua; gh pr merge 1; }");
+	blocked("if cd /cua; then gh pr merge 1; fi");
 	blocked("if true; then echo x >> hold-prs.txt; fi");
 	blocked("gh pr merge 1 -R github.com/trycua/cua");
 	blocked("gh pr merge 1 --repo=https://github.com/trycua/cua.git");
@@ -140,6 +144,7 @@ test("writes to the holds file are blocked; reads run", () => {
 		"tee hold-prs.txt.bak < hold-prs.txt",
 		"sed -n 1,5p hold-prs.txt",
 		"cp hold-prs.txt /tmp/x.txt",
+		'echo "x >hold-prs.txt"',
 		"cp /srv/onigiri/hold-prs.txt ~/scratch/holds.bak-1108",
 	])
 		allowed(c);

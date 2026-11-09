@@ -18,10 +18,17 @@ const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 // Shell keywords that can start a simple command's words: `{ git push -f; }`, `if x; then git push -f; fi`, `! cmd`.
 const KEYWORDS = new Set(["{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until"]);
 const WRAPPERS = new Set(["sudo", "env", "nohup", "nice", "time", "command", "exec", "timeout", "gtimeout", "xargs", "stdbuf"]);
-// Wrapper options that take the next word as their value (`sudo -u bob`, `env --unset X`, `nice -n 5`, `timeout -k 5`).
-const VALUE_OPTS = new Set(["-u", "-g", "-n", "-k", "-s", "-C", "-S", "-p", "-h", "-D", "-i", "-o", "-e", "-r", "-t", "-U", "-T",
-	"--user", "--group", "--unset", "--chdir", "--adjustment", "--signal", "--kill-after", "--prompt", "--host", "--role", "--type",
-	"--split-string", "--close-from", "--other-user", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--input", "--output", "--error"]);
+// Per wrapper, the options that take the next word as their value (`sudo -u bob`, `env --unset X`, `nice -n 5`).
+// A wrapper's other options take none, so `env -i git push -f` still reaches git.
+const VALUE_OPTS: Record<string, Set<string>> = {
+	sudo: new Set(["-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-T", "-D", "--user", "--group", "--close-from", "--host", "--prompt", "--role", "--type", "--other-user", "--chdir", "--command-timeout"]),
+	env: new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
+	nice: new Set(["-n", "--adjustment"]),
+	timeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
+	gtimeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
+	xargs: new Set(["-n", "-P", "-L", "-s", "-d", "-a", "-E", "-I", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--max-lines", "--max-chars"]),
+	stdbuf: new Set(["-i", "-o", "-e", "--input", "--output", "--error"]),
+};
 // git global options that take the next word as their value.
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
@@ -39,13 +46,13 @@ interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[] }
 function simpleCommands(line: string, dirs: (string | undefined)[], depth = 0): Cmd[] {
 	const out: Cmd[] = [];
 	for (const words of commands(line)) {
-		if (words[0] === "cd") {
-			const to = words[1] ?? "~";
+		const w = program(words);
+		if (w[0] === "cd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
+			const to = w[1] ?? "~";
 			const last = dirs[dirs.length - 1];
 			dirs = [...dirs, /^[~$]/.test(to) ? undefined : to.startsWith("/") ? path.posix.resolve(to) : last && path.posix.resolve(last, to)];
 			continue;
 		}
-		const w = program(words);
 		out.push({ words: w, raw: words, dirs });
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
 			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], depth + 1));
@@ -60,9 +67,10 @@ function program(words: string[]): string[] {
 		const w = words[i];
 		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || KEYWORDS.has(w)) { i++; continue; }
 		if (!WRAPPERS.has(base(w))) break;
+		const valued = VALUE_OPTS[base(w)] ?? new Set<string>();
 		i++;
 		while (i < words.length && (/^-/.test(words[i]) || /^\d+(\.\d+)?[smhd]?$/.test(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) {
-			if (VALUE_OPTS.has(words[i]) && i + 1 < words.length) i++;
+			if (valued.has(words[i]) && i + 1 < words.length) i++;
 			i++;
 		}
 	}
@@ -144,9 +152,10 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 }
 
 function writesHolds(w: string[], dir: string | undefined, host: Host): boolean {
-	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word)
+	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word). A word with
+	// whitespace in it was quoted, so its `>` is text: `echo "x >hold-prs.txt"` writes nothing.
 	for (let i = 0; i < w.length; i++) {
-		const m = w[i].match(/>>?\|?(.*)$/);
+		const m = /\s/.test(w[i]) ? null : w[i].match(/>>?\|?(.*)$/);
 		if (m && isHolds(m[1] || w[i + 1] || "")) return true;
 	}
 	const [p, ...all] = w;
