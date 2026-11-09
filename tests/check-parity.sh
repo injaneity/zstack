@@ -54,6 +54,10 @@ rm "$hook"; ln -s "$tmp/seed/hosts/vm/pre-push" "$hook"
 run; check "a hook linked into another checkout fails" "$rc" 1
 rm "$hook"
 run; check "no hook fails" "$rc" 1
+ln -s "../../../../pkg/hosts/vm/pre-push" "$hook"
+out=$(cd / && ONIGIRI_ROOT="$tmp/root" PI_CODING_AGENT_DIR="$tmp/agent" "$tmp/pkg/hosts/check-parity" 2>&1); rc=$?
+check "a relative symlink to the package's hook passes from any directory" "$rc" 0
+rm "$hook"
 ln -s "$tmp/pkg/hosts/vm/pre-push" "$hook"
 
 echo old > "$tmp/agent/agents/verifier.md"; echo x > "$tmp/agent/agents/onigiri-reviewer.md"; echo x > "$tmp/agent/agents/.verifier.md.bak-1105"

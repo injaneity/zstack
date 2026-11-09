@@ -30,7 +30,7 @@ fi
 hook="$root/cua/.git/hooks/pre-push"
 if [ ! -d "$root/cua/.git" ]; then fail "hook: no cua clone at $root/cua"
 elif [ ! -L "$hook" ]; then fail "hook: $hook is not a symlink to $pkg/hosts/vm/pre-push"
-elif [ "$(cd "$(dirname "$(readlink "$hook")")" 2>/dev/null && pwd -P)/$(basename "$(readlink "$hook")")" != "$pkg/hosts/vm/pre-push" ]; then
+elif [ "$(cd "$(dirname "$hook")" && cd "$(dirname "$(readlink "$hook")")" 2>/dev/null && pwd -P)/$(basename "$(readlink "$hook")")" != "$pkg/hosts/vm/pre-push" ]; then
   fail "hook: $hook points at $(readlink "$hook"), not $pkg/hosts/vm/pre-push"
 else ok "hook: $hook -> $pkg/hosts/vm/pre-push"; fi
 

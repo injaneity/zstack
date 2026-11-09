@@ -89,6 +89,8 @@ def chart():
             names[m.group(1)] = m.group(2)
         elif m := re.fullmatch(r"\s*(s\d+) --> (s\d+): (.+)", line):
             edges.add((names[m.group(1)], names[m.group(2)], m.group(3)))
+        elif m := re.fullmatch(r"\s*\[\*\] --> (s\d+)", line):
+            edges.add(("[*]", names[m.group(1)], ""))
     return edges
 
 
@@ -103,7 +105,7 @@ class Model(unittest.TestCase):
                 return "running" if alive else "lost"
             return {"exited": f"exited, {run['wake'] or 'no'} wake", "collected": "collected"}[run["state"]]
         start, collect = "pi-run <id> <role> <brief>", "pi-run collect <id>"
-        edges, seen, todo = set(), set(), [(None, False)]
+        edges, seen, todo = {("[*]", name(None, False), "")}, set(), [(None, False)]
         while todo:
             run, alive = todo.pop()
             key = (name(run, alive), bool(run and run["wake_finish"]))
