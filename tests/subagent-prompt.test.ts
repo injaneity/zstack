@@ -68,7 +68,7 @@ test("the builder leaves the verify skill, E2E and Lume to the verifier", () => 
 // skill, E2E or Lume, says "yourself", or runs "them", "it" or "those" (a pronoun can point back at the checks) must be
 // one of HANDOFF. Each listed sentence gives the checks to the verifier, forbids the builder to run them, or tells the
 // builder to do something else itself. Any other such sentence fails, so a new or edited one is reviewed here.
-const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills|\byourself\b|\brun (them|those)\b|\brun it\b(?! well)/i;
+const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills|\byourself\b|\b(re)?run (the |its |every |any )?(\w+ )?(checks?|tests?)\b|\brun (them|those)\b|\brun it\b(?! well)/i;
 const HANDOFF = new Set([
 	"The `verifier` subagent runs the repo verify skill, with E2E and Lume where that skill calls for them (`agents/verifier.md`).",
 	"You do not run the verify skill, E2E or Lume yourself.",
@@ -87,6 +87,8 @@ const HANDOFF = new Set([
 	"- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value.",
 	"Run it on the machine that does the work, never in the chat.",
 	"Run it through **unslop**.",
+	"For a conflict, update the branch the way Hard rules' Merging section says and have the verifier rerun the checks.",
+	"After a push to an existing PR, the verifier reruns the scoped checks on the new head.",
 ]);
 const builderLeaks = (text: string) =>
 	text
@@ -102,6 +104,8 @@ test("the leak check catches a builder told to run the checks itself", () => {
 		"Run the verify-cua-driver skill before opening the PR.",
 		"You do not run the verify skill, E2E or Lume yourself. Run them yourself instead.",
 		"You do not run the verify skill, E2E or Lume yourself. Then run those.",
+		"Run the checks before opening the PR.",
+		"Rerun the scoped checks on the new head.",
 	])
 		assert.notDeepEqual(builderLeaks(bad), [], bad);
 });
