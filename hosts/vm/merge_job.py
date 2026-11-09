@@ -43,7 +43,7 @@ NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
 TIERS = ["light", "standard", "deep", "human"]
-HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
+HOLD_KINDS = ("hold", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
 PATH_MODES = ("never", "split-undone")
 SPLIT_PR = 2886
 SGT = ZoneInfo("Asia/Singapore")
@@ -70,7 +70,7 @@ def parse_holds(text):
     """The rows the gate reads. Every row is validated: a malformed one raises ValueError, because a hold must never
     be dropped silently. Rows only pickup reads (hands-off-user, skip-author, review-only, exception) are checked,
     not kept."""
-    h = {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}}
+    h = {"hold": set(), "path_modes": {}, "preapproved": {}}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -88,10 +88,10 @@ def parse_holds(text):
             if h["preapproved"].get(n, f[3]) != f[3]:
                 raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
             h["preapproved"][n] = f[3]
-        elif kind in ("hold", "no-move"):
+        elif kind == "hold":
             if not re.fullmatch(r"#?\d+", target):
-                raise ValueError(f"holds file line {ln}: {kind} needs a PR number")
-            h["hold" if kind == "hold" else "no_move"].add(int(target.lstrip("#")))
+                raise ValueError(f"holds file line {ln}: hold needs a PR number")
+            h["hold"].add(int(target.lstrip("#")))
         elif kind == "hands-off-path":
             mode = f[3][len("mode="):].strip() if f[3].startswith("mode=") else "never"
             if mode not in PATH_MODES:
@@ -182,8 +182,8 @@ def hands_off_verdict(paths, patches, holds):
 # ---------------- checks ----------------
 
 def norm_tier(t):
-    return {"low": "light", "light": "light", "standard": "standard", "high": "deep", "deep": "deep",
-            "human": "human"}.get((t or "").strip().lower())
+    t = (t or "").strip().lower()
+    return t if t in TIERS else None
 
 
 def declared_risk(labels, body):
@@ -245,7 +245,7 @@ def check_state(rollup):
 def gate(pr, holds, hands_off=None, notes=None):
     """The merge gate: exactly three checks at the PR head, every one run, returning [Reason] (empty = pass).
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
-    2. No hold row: hold, no-move, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
+    2. No hold row: hold, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
        holds None (the file is unreadable) holds every PR.
     3. A declared deep/human tier has a preapprove row at exactly this head. An undeclared tier does not block."""
     notes = [] if notes is None else notes
@@ -257,8 +257,8 @@ def gate(pr, holds, hands_off=None, notes=None):
         R.append(Reason("ci", f"{GATE_CHECK} {'/'.join(sorted(set(ci))) or 'missing'}"))
     if holds is None:
         R.append(Reason("holds-unreadable", "holds file unreadable: every PR counts as held"))
-    elif n in holds["hold"] or n in holds["no_move"]:
-        R.append(Reason("hold", f"hold: #{n} has a {'hold' if n in holds['hold'] else 'no-move'} row in the holds file"))
+    elif n in holds["hold"]:
+        R.append(Reason("hold", f"hold: #{n} has a hold row in the holds file"))
     elif hands_off and (hit := hands_off()):
         if hit[0]:
             R.append(Reason("hands-off", hit[1]))

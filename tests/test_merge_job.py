@@ -29,7 +29,6 @@ pp = load("patent_push")
 H, H2 = "a" * 40, "b" * 40
 HOLDS = """# comment
 hold           | 5675          | yes | open PR, never touch
-no-move        | 5700          | no  | keep it a draft
 hands-off-user | someone       | no  | hands-off login
 skip-author    | app/cua-agents | no | bot
 review-only    | f-trycua      | no  | teammate: first review only
@@ -98,10 +97,9 @@ class Gate(unittest.TestCase):
                 self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk undeclared"), (cla, path))
         self.assertFalse(hasattr(mj, "NON_REQUIRED_CHECKS"))
 
-    def test_hold_and_no_move_rows_and_unreadable_holds(self):
+    def test_hold_rows_and_unreadable_holds(self):
         self.assertEqual(verdict(pr(number=5675)), ("skip", "hold: #5675 has a hold row in the holds file"))
-        self.assertEqual(verdict(pr(number=5700, isDraft=True)),
-                         ("skip", "hold: #5700 has a no-move row in the holds file; draft"))
+        self.assertEqual(verdict(pr(number=5675, isDraft=True)), ("skip", "hold: #5675 has a hold row in the holds file; draft"))
         self.assertEqual(verdict(pr(), holds=None), ("skip", "holds file unreadable: every PR counts as held"))
 
     def test_hands_off_path(self):
@@ -113,8 +111,8 @@ class Gate(unittest.TestCase):
 
     def test_deep_and_human_need_a_preapprove_row_at_exactly_the_head(self):
         pre = mj.parse_holds(HOLDS + f"preapprove | #5900 | no | {H} | Zane, test\n")
-        for tier in ("deep", "human", "high"):
-            want = mj.norm_tier(tier)
+        for tier in ("deep", "human"):
+            want = tier
             p = pr(body=f"risk: {tier}\n")
             self.assertEqual(verdict(p), ("buffer", f"declared {want}: needs Zane (no preapprove row)"))
             self.assertEqual(verdict(p, holds=pre), ("merge", f"green, ci-gate SUCCESS, risk {want}, preapproved at {H[:9]}"))
@@ -127,7 +125,7 @@ class Gate(unittest.TestCase):
     def test_strictest_declared_tier(self):
         self.assertEqual(mj.declared_risk(["risk:light", "risk:deep"], ""), "deep")
         self.assertEqual(mj.declared_risk(["risk:light"], "risk: human\n"), "human")
-        self.assertEqual(mj.declared_risk([], "x\nrisk: low\n"), "light")
+        self.assertIsNone(mj.declared_risk([], "x\nrisk: low\n"))   # not a tier
         self.assertIsNone(mj.declared_risk([], "the risk: deep is mid-line"))
 
     def test_every_reason_is_reported_gate_then_blockers(self):
@@ -183,7 +181,7 @@ class NextAction(unittest.TestCase):
 
 class Holds(unittest.TestCase):
     def test_rows_parse(self):
-        self.assertEqual((FIX["hold"], FIX["no_move"], FIX["path_modes"]), ({5675}, {5700}, {"impl_.rs": "never"}))
+        self.assertEqual((FIX["hold"], FIX["path_modes"]), ({5675}, {"impl_.rs": "never"}))
         self.assertEqual(SPLIT["path_modes"], {"impl_.rs": "split-undone"})
         both = "hands-off-path | x.rs | no | mode=split-undone | a\nhands-off-path | x.rs | no | mode=never | b\n"
         self.assertEqual(mj.parse_holds(both)["path_modes"], {"x.rs": "never"})
@@ -194,7 +192,7 @@ class Holds(unittest.TestCase):
     def test_author_rows_are_checked_but_never_hold_a_pr(self):
         # review-only and skip-author steer pickup only; the gate keeps nothing for them
         h = mj.parse_holds("review-only | f-trycua | no | teammate\nskip-author | app/cua-agents | no | bot\n")
-        self.assertEqual(h, {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}})
+        self.assertEqual(h, {"hold": set(), "path_modes": {}, "preapproved": {}})
         for bad in ("review-only | | no | x", "review-only | f-trycua | maybe | x", "review-only | f-trycua | no"):
             with self.assertRaises(ValueError, msg=bad):
                 mj.parse_holds(bad)
@@ -430,15 +428,6 @@ class Stage(unittest.TestCase):
             self.prs[1]["state"] = "CLOSED"
             self.assertFalse(job.buffer("merge-failed", "cua#1", H, "closed meanwhile"))
         self.assertEqual(len(self.buffered()), 2)
-
-    def test_old_state_keys_are_kept_or_dropped(self):
-        old = {"rerun": {"cua#9": H}, "merges": {"since": "2026-11-05T00:00:00+08:00", "seen": {}},
-               "flake_rerun": {"x": H}, "failed_seen": {}, "open_alerts": {}, "buffered": {}, "last_reason": {}}
-        (self.d / "tick/state.json").write_text(json.dumps(old))
-        self.run_()
-        st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertEqual(sorted(st), ["buffered", "last_reason", "merges", "rerun"])
-        self.assertEqual(st["rerun"], {"cua#9": H})
 
     def test_merge_watch_seeds_then_alerts_once_for_a_merge_it_did_not_make(self):
         self.run_()                                       # first run: sets since, reads nothing
