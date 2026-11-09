@@ -4,8 +4,9 @@ hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge s
 
 For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a
 preapprove row pinned to the head for a declared deep/human tier) and blockers() (what stops any merge: draft,
-conflict, mergeability not MERGEABLE, PAUSED). next_action() turns both into one action: merge, ready a draft,
-rerun a red ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. Then the merge watch raises an
+conflict, mergeability not MERGEABLE, PAUSED). next_action() turns both into one action: merge, rerun a red
+ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. A draft is a skip: draft means not ready, and
+only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
 urgent unexpected-merge wake for a merge as ME that this job did not make.
 
   merge_job.py             one real run (cron, under flock)
@@ -13,7 +14,7 @@ urgent unexpected-merge wake for a merge as ME that this job did not make.
   merge_job.py --explain N every reason for trycua/cua#N and the action a run would take; read-only
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
-PAUSED (first line = reason) stops merge, ready and rerun, and holds back webhook POSTs (the buffer item is still
+PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs (the buffer item is still
 written, so the hourly routine sees it; nothing re-sends it after the pause). Outputs: $ROOT/events.log (one line per decision, only
 when it changes), $ROOT/buffer.jsonl (needs onigiri; urgent ones also POST the webhook), $ROOT/tick/state.json and
 $ROOT/tick/last-run. ROOT is $ONIGIRI_ROOT, default /srv/onigiri.
@@ -273,8 +274,8 @@ def gate(pr, holds, hands_off=None, notes=None):
 
 
 def blockers(pr, paused):
-    """What stops this job acting at all, outside the gate: GitHub cannot merge a draft, a conflict or an unknown
-    mergeability, and PAUSED stops every action."""
+    """What stops this job acting at all, outside the gate: a draft is not ready, GitHub cannot merge a conflict or
+    an unknown mergeability, and PAUSED stops every action."""
     R = [Reason("draft", "draft")] if pr.get("isDraft") else []
     if pr.get("mergeable") == "CONFLICTING":
         R.append(Reason("conflict", "merge conflict"))
@@ -285,12 +286,12 @@ def blockers(pr, paused):
     return R
 
 
-SKIP_CODES = {"holds-unreadable", "hold", "paused"}   # logged, nobody woken
+SKIP_CODES = {"holds-unreadable", "hold", "draft", "paused"}   # logged, nobody woken
 BUFFER_CODES = {"hands-off", "risk", "conflict"}      # needs onigiri or Zane, buffered once per head
 
 
 def next_action(reasons, notes, pr, rerun_head=None):
-    """(action, why): merge | ready | rerun | buffer | wait | skip. why names every blocking reason."""
+    """(action, why): merge | rerun | buffer | wait | skip. why names every blocking reason."""
     codes = {r.code for r in reasons}
     why = "; ".join(r.text for r in reasons) or ", ".join(notes)
     if not reasons:
@@ -299,8 +300,6 @@ def next_action(reasons, notes, pr, rerun_head=None):
         return "skip", why
     if codes & BUFFER_CODES:
         return "buffer", why
-    if "draft" in codes:   # only CI and mergeability are left: ready it so CI runs
-        return "ready", f"{why}; readied: " + ", ".join(notes)
     if "ci" not in codes:
         return "wait", why
     state, names, runs = check_state(pr.get("statusCheckRollup"))
@@ -358,7 +357,7 @@ class Job:
     def __init__(self, dry):
         self.dry = dry
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
-        self.can_act = not dry and not self.paused   # merge, ready, rerun
+        self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
         self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges")}
         self.errors = 0
@@ -450,9 +449,6 @@ class Job:
             return self.buffer("merge-blocked", ident, head, why)
         if not self.can_act:
             return self.decide("would-" + act, ident, head, why)
-        if act == "ready":
-            rc, _, err = sh(["gh", "pr", "ready", str(n), "-R", REPO])
-            return self.event("readied" if rc == 0 else "error", ident, why if rc == 0 else f"ready failed: {err.strip()[:150]}")
         if act == "rerun":
             _, _, runs = check_state(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "statusCheckRollup"])["statusCheckRollup"])
             for rid in sorted(runs):
