@@ -20,7 +20,7 @@ license: MIT
 - **Restate the goal first.** Name the problem and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
 - **Name the principle that changed a decision**, and the decision it changed.
 - **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. Never hand over a check you could run.
-- **A cold verifier checks every diff.** Your own checks do not replace it. Spawn the `verifier` (Subagents) on the diff range before you call a diff done or open a PR. After that first verification, a later rebase or minor fix gets one verifier at the new head and a wording-only change gets none. Only a read-only answer with no diff and no PR skips it, and says so.
+- **A cold verifier checks every diff**, when and how the policy's Checks section says. Subagents names the agent.
 - **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
 - **Clean up your scratch.** Remove only what you created, after saving the evidence.
 
@@ -90,7 +90,7 @@ Editing a skill is a Change. Match the neighbouring SKILL.md files (frontmatter 
 
 The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this section. Read it before the first change. Where it says nothing:
 
-- No force-push to a shared branch without an explicit yes. No admin bypass.
+- No admin bypass. Force-pushes follow the policy's Scope and Merging sections.
 - Never print secrets or tokens. Never commit local agent config.
 - Don't change hold, merge-rule, or policy wording without Zane's explicit ok.
 

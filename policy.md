@@ -53,3 +53,5 @@ Some paths must never be pushed to the public remote. A change whose diff touche
 ## Changing these rules
 
 A session never edits this file or rewords a hold or merge rule unless its owner explicitly agrees.
+
+No invented limits: a restriction must trace to the owner's words or this policy. If you think one is needed, put it under questions: instead of applying it.
