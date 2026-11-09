@@ -64,40 +64,48 @@ test("the builder leaves the verify skill, E2E and Lume to the verifier", () => 
 });
 
 // Everything a builder session reads as instructions: the appended Hard rules (inside SKILL.md), the skill and its
-// playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. Each sentence (split at . ; : and line
-// ends) that names the verify skill, E2E or Lume must give it to the verifier or forbid it, and a "yourself" sentence
-// must forbid it, so "the verifier is available; run Lume yourself" fails.
+// playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. A sentence there that names the verify
+// skill, E2E or Lume must be one of HANDOFF, each of which gives them to the verifier or forbids the builder to run
+// them. Any other such sentence fails, so a new or edited mention is reviewed here instead of trusted to a word match.
 const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills/i;
-const NEGATED = /\b(do not|don't|never|not)\b/i;
-function builderLeaks(text: string): string[] {
-	return text
-		.split(/\n|(?<=[.;:!?])\s+/)
-		.filter((s) => CHECKS.test(s))
-		.filter((s) => (/\byourself\b/i.test(s) ? !NEGATED.test(s) : !/\bverifier\b/i.test(s) && !NEGATED.test(s)));
-}
+const HANDOFF = new Set([
+	"The `verifier` subagent runs the repo verify skill, with E2E and Lume where that skill calls for them (`agents/verifier.md`).",
+	"You do not run the verify skill, E2E or Lume yourself.",
+	"The verifier runs the repo verify skill, E2E and Lume.",
+	"The verifier is the only place the repo verify skill, E2E and Lume run.",
+	"- verify: the `verifier` subagent runs the repo verify skill (Hard rules, Checks).",
+	"Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: the verifier says in its verdict which checks could not run here.",
+	"- Pruning is allowed on the mini to stay productive: stale lume worker VMs (verifier runs stop them, never delete them), finished sessions' build output and caches.",
+	"Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.",
+	"A bug's original repro now passes, a refactor's outputs match the old ones, and the verifier runs the verify-skill lanes the change touches.",
+]);
+const builderLeaks = (text: string) =>
+	text
+		.split(/\n|(?<=[.;!?])\s+/)
+		.map((s) => s.trim())
+		.filter((s) => CHECKS.test(s) && !HANDOFF.has(s));
 
 test("the leak check catches a builder told to run the checks itself", () => {
 	for (const bad of [
 		"The verifier is available; run Lume yourself.",
+		"Ask the verifier for review and run Lume.",
+		"If the verifier is not available, run E2E yourself.",
 		"Run the verify-cua-driver skill before opening the PR.",
-		"Then run E2E.",
-		"Ask the verifier for a review. Run the Lume lane yourself.",
 	])
-		assert.deepEqual(builderLeaks(bad).length > 0, true, bad);
-	for (const ok of ["You do not run the verify skill, E2E or Lume yourself.", "The `verifier` subagent runs the repo verify skill, with E2E and Lume."])
-		assert.deepEqual(builderLeaks(ok), [], ok);
+		assert.notDeepEqual(builderLeaks(bad), [], bad);
 });
 
 test("builder prompts leave the verify skill, E2E and Lume to the verifier", () => {
 	const sources = ["skills/onigiri-mode/SKILL.md", "prompts/onigiri-mode.md", "AGENTS.md", "hosts/mini/host-mini.md"];
 	for (const f of fs.readdirSync(`${root}skills/onigiri-mode/playbooks`)) sources.push(`skills/onigiri-mode/playbooks/${f}`);
-	let named = 0;
+	const seen = new Set<string>();
 	for (const f of sources) {
 		const text = fs.readFileSync(`${root}${f}`, "utf-8");
-		named += text.split("\n").filter((l) => CHECKS.test(l)).length;
 		assert.deepEqual(builderLeaks(text), [], f);
+		for (const s of text.split(/\n|(?<=[.;!?])\s+/)) if (HANDOFF.has(s.trim())) seen.add(s.trim());
 	}
-	assert.ok(named >= 4, `expected the hand-off lines, saw ${named}`);
+	// the Checks hand-off and its ban must stay in the builder's prompt, not just be allowed
+	for (const s of ["You do not run the verify skill, E2E or Lume yourself.", [...HANDOFF][0]]) assert.ok(seen.has(s), s);
 });
 
 test("the verifier runs on terra, from config/models.json by agent name", () => {
