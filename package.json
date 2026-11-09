@@ -5,7 +5,7 @@
   "license": "MIT",
   "keywords": ["pi-package", "skills", "workflow", "principles"],
   "pi": {
-    "extensions": ["./extensions/subagent/index.ts", "./extensions/tool-guard/index.ts"],
+    "extensions": ["./extensions/subagent/index.ts", "./extensions/tool-guard/index.ts", "./extensions/rule-guard/index.ts"],
     "skills": ["./skills"],
     "prompts": ["./prompts"]
   }

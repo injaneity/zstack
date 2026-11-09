@@ -32,6 +32,8 @@ jobs:
           node-version: 22
       - name: find guard refuses whole-disk and whole-home finds
         run: node --test tests/find-guard.test.ts
+      - name: rule guard blocks force-push, hook skips, merge-job merges and holds-file writes
+        run: node --test tests/rule-guard.test.ts
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
       - name: launchers fast-forward the package to origin/main or refuse to start
