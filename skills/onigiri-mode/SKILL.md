@@ -92,7 +92,7 @@ No invented limits: a restriction must trace to Zane's words or these rules. If 
 
 ## Subagents
 
-zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agent dir>/agents/` by `bin/install-agents.sh`. Each child's provider and model come from the package's `config/models.json` by agent name. If that provider's login fails, the child runs on your model, and the tool's result starts with a warning line.
+zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agent dir>/agents/` by `bin/install-agents.sh`. Each child's provider and model come from the package's `config/models.json` by agent name. If that provider's login fails, the child runs on your model, and the tool's result starts with a warning line. The `verifier` never does: without its own seat it returns an error and nothing runs.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|

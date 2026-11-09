@@ -5,6 +5,14 @@ export const NO_POLLING_LINE =
 export const ROLE_FRAMING =
 	"You are a subagent the builder session spawned for one step. Your agent prompt above is your whole role: where you sit in the pipeline, the skill you load, and the session rules you could break. Where it limits your tools, that limit wins.";
 
+/** The agent that owns verification. Its seat never falls back to the parent's model: a run that cannot reach it fails. */
+export const VERIFIER = "verifier";
+
+/** What to do when an agent's configured seat cannot be used: the verifier refuses, any other agent runs on the parent's model. */
+export function onSeatProblem(agent: string): "refuse" | "fallback" {
+	return agent === VERIFIER ? "refuse" : "fallback";
+}
+
 // The role prompt from agents/<name>.md, then the two fixed lines, and nothing of the session's Hard rules: each
 // agent file carries the rules its role could break, so a read-only scout is not handed merge rules it cannot act on.
 export function buildChildPrompt(agentPrompt: string): string {

@@ -6,7 +6,7 @@
 // are told not to sleep or poll; (d) only the user's agents load, never a project's; (e) children get an environment without forge or git credentials; (f) a session_start
 // check reports a missing or stale agent file or a missing gh login, and offers the fix only with a UI; (g) a child's
 // provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
-// parent model with a warning; (h) children save a session named role:<agent>, under sessions/subagents/, so
+// parent model with a warning, except for the verifier, which refuses; (h) children save a session named role:<agent>, under sessions/subagents/, so
 // bin/check-models can read what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
 // tool renderer shows the result.
 // See docs/SUBAGENT.md.
@@ -32,7 +32,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
-import { buildChildPrompt } from "./prompt.ts";
+import { buildChildPrompt, onSeatProblem, VERIFIER } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
@@ -115,11 +115,11 @@ async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
 	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
 	const shipped = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md"));
-	const absent = shipped.filter((f) => !fs.existsSync(path.join(agentsDir, f)));
+	const absent = shipped.filter((f) => f !== `${VERIFIER}.md` && !fs.existsSync(path.join(agentsDir, f)));
 	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
 	// install-agents.sh never overwrites, so an installed role prompt can lag the package's. Only a warning: the copy may be edited on purpose.
 	const read = (f: string) => fs.readFileSync(f, "utf-8");
-	const stale = shipped.filter((f) => !absent.includes(f) && read(path.join(agentsDir, f)) !== read(path.join(PACKAGE_DIR, "agents", f)));
+	const stale = shipped.filter((f) => f !== `${VERIFIER}.md` && !absent.includes(f) && read(path.join(agentsDir, f)) !== read(path.join(PACKAGE_DIR, "agents", f)));
 	if (stale.length) gaps.push({ message: `agent files in ${agentsDir} differ from the package's: ${stale.join(", ")}`, remedy: `bash ${path.join(PACKAGE_DIR, "bin", "install-agents.sh")} --force (overwrites them)` });
 	const remotes = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
 	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
@@ -383,7 +383,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const parent: Seat | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
-			const agents = discoverAgents();
+			const agents = discoverAgents(path.join(PACKAGE_DIR, "agents"), [VERIFIER]);
 			const makeDetails = (results: SingleResult[]): SubagentDetails => ({ results });
 
 			const { seat: configured, label, error: seatError } = seatFor(params.agent, params.variant);
@@ -392,6 +392,10 @@ export default function (pi: ExtensionAPI) {
 			let warning = "";
 			const sameAsParent = seat && parent && seat.provider === parent.provider && seat.model === parent.model;
 			const problem = seat && !sameAsParent ? await seatProblem(ctx, seat) : undefined;
+			if (seat && problem && onSeatProblem(params.agent) === "refuse") {
+				const text = `subagent: ${label} cannot use ${seat.provider}/${seat.model} (${problem}); verification runs only on its own seat, so nothing ran`;
+				return { content: [{ type: "text", text }], details: makeDetails([]), isError: true };
+			}
 			if (seat && problem) {
 				const to = parent ? `${parent.provider}/${parent.model}` : "pi's default model";
 				warning = `subagent: WARNING ${label} cannot use ${seat.provider}/${seat.model} (${problem}); falling back to the parent model ${to}`;

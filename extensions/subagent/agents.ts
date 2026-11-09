@@ -1,7 +1,7 @@
 // Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/agents.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// zstack loads only the user's agents (<agent dir>/agents/): project-local agents, their scope and trust are removed,
-// with the unused formatAgentList export. The other zstack changes are in index.ts.
+// zstack loads only the user's agents (<agent dir>/agents/), and the verifier from the package itself: project-local
+// agents, their scope and trust are removed, with the unused formatAgentList export. The other zstack changes are in index.ts.
 
 /**
  * Agent discovery and configuration
@@ -101,7 +101,9 @@ function loadAgentsFromDir(dir: string): AgentConfig[] {
 	return agents;
 }
 
-/** The agents installed in <agent dir>/agents/. */
-export function discoverAgents(): AgentConfig[] {
-	return loadAgentsFromDir(path.join(getAgentDir(), "agents"));
+/** The agents installed in <agent dir>/agents/, except that `pinned` names always load from `packageDir`, so an old
+ * installed copy of the verifier's prompt can never stand in for the package's. */
+export function discoverAgents(packageDir: string, pinned: string[]): AgentConfig[] {
+	const own = loadAgentsFromDir(packageDir).filter((a) => pinned.includes(a.name));
+	return [...loadAgentsFromDir(path.join(getAgentDir(), "agents")).filter((a) => !pinned.includes(a.name)), ...own];
 }
