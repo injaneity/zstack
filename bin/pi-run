@@ -1,6 +1,6 @@
 #!/bin/bash
 # pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
-# Starts one print-mode pi session with the onigiri policy appended to its system prompt.
+# Starts one print-mode pi session with onigiri-mode's Hard rules appended to its system prompt.
 set -eu
 usage() {
   cat <<'USAGE'
@@ -10,11 +10,8 @@ A first word that is a file with a / or . in its name is the prompt file.
 Model: <provider> <model> when given, otherwise pi's own default (defaultProvider and
 defaultModel in <agent dir>/settings.json, or what `pi` picks with none set).
 
-Policy appended to the system prompt, first hit wins:
-  1. $ONIGIRI_POLICY when set
-  2. <agent dir>/onigiri/policy.md when it exists (bin/setup.sh writes it)
-  3. the package's policy.md
-<agent dir> is ${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}.
+The "## Hard rules" section of skills/onigiri-mode/SKILL.md (bin/hard-rules) is appended to the
+system prompt. Without it pi-run exits 2 and starts nothing.
 
 pi-run sources no profile. Export your provider's credentials before calling it.
 USAGE
@@ -22,7 +19,6 @@ USAGE
 case "${1:-}" in -h|--help) usage; exit 0;; '') usage >&2; exit 2;; esac
 [ $# -ge 2 ] || { usage >&2; exit 2; }
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
-agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 session=$1; shift
 args=(--session-id "$session")
 # The first word is the brief when it is a file and either looks like a path (has a / or .), which no
@@ -34,9 +30,6 @@ if ! { [ -f "$1" ] && { [ $pathlike = 1 ] || [ $# -lt 3 ] || [ ! -f "$3" ]; }; }
 fi
 prompt=$1; shift
 [ -r "$prompt" ] || { echo "pi-run: cannot read prompt file $prompt" >&2; exit 2; }
-if [ -n "${ONIGIRI_POLICY:-}" ]; then policy=$ONIGIRI_POLICY
-elif [ -e "$agent_dir/onigiri/policy.md" ] || [ -L "$agent_dir/onigiri/policy.md" ]; then policy="$agent_dir/onigiri/policy.md"
-else policy="$pkg/policy.md"; fi
-if [ -r "$policy" ]; then args+=(--append-system-prompt "$policy")
-else echo "pi-run: onigiri policy $policy is not readable; session runs without it" >&2; fi
+rules=$("$pkg/bin/hard-rules") || exit 2
+args+=(--append-system-prompt "$rules")
 exec pi "${args[@]}" "$@" -p -- "$(cat "$prompt")"

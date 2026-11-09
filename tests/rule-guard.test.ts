@@ -258,6 +258,6 @@ test("writes to the holds file are blocked; reads run", () => {
 	assert.match(checkBash("cd /tmp/x extra || cd sync; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/cua") ?? "", /^blocked: /);
 	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);
-	assert.equal(checkWrite("/srv/onigiri/policy.md"), undefined);
+	assert.equal(checkWrite("/srv/onigiri/notes.md"), undefined);
 	assert.equal(checkWrite("hold-prs.txt.md"), undefined);
 });

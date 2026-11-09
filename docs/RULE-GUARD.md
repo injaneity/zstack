@@ -1,6 +1,6 @@
 # rule-guard extension
 
-`extensions/rule-guard/` turns the onigiri policy's outright bans into code. Before, the policy text was the only thing standing between a session and a ban, and a session either remembered it or broke it. Now a `tool_call` handler blocks the call and returns the reason, so the model sees a refusal it can act on.
+`extensions/rule-guard/` turns the outright bans in onigiri-mode's Hard rules into code. Before, the rule text was the only thing standing between a session and a ban, and a session either remembered it or broke it. Now a `tool_call` handler blocks the call and returns the reason, so the model sees a refusal it can act on.
 
 ## What it blocks
 

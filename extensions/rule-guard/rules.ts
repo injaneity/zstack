@@ -1,4 +1,4 @@
-// The onigiri policy's mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
+// onigiri-mode's Hard rules' mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
 // Pure: the caller passes the repo lookup, so tests run without pi or git. See docs/RULE-GUARD.md.
 import * as path from "node:path";
 import { commands } from "../tool-guard/find-guard.ts";
@@ -209,7 +209,7 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Set<string>, host:
 	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
-	return hit ? `${act} in ${hit}: the merge job is its only merger (policy, Merging)` : undefined;
+	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
 }
 
 /** The words that are not options. `valued` lists options that take the next word. */
@@ -270,14 +270,14 @@ export function checkBash(command: string, owned: Set<string>, host: Host = NO_H
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
-			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
+			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
-		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
+		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 	}
 	return undefined;
 }
 
 /** The reason to refuse a write or edit to `file`, or undefined. */
 export function checkWrite(file: string): string | undefined {
-	return isHolds(file) ? "blocked: only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:." : undefined;
+	return isHolds(file) ? "blocked: only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:." : undefined;
 }

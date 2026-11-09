@@ -26,7 +26,7 @@ jobs:
       - name: lint the VM host scripts
         run: |
           pipx run ruff==0.17.3 check hosts/vm tests
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh tests/launch-wake.sh
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push bin/hard-rules tests/hard-rules.sh bin/ensure-package-main tests/ensure-package-main.sh bin/ensure-extensions tests/ensure-extensions.sh tests/launch-wake.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,6 +34,10 @@ jobs:
         run: node --test tests/find-guard.test.ts
       - name: rule guard blocks force-push, hook skips, merge-job merges and holds-file writes
         run: node --test tests/rule-guard.test.ts
+      - name: subagent children get their role prompt and no session rules
+        run: node --test tests/subagent-prompt.test.ts
+      - name: launchers append onigiri-mode's Hard rules or refuse to start
+        run: tests/hard-rules.sh
       - name: model config resolves and check-models flags a mismatch
         run: tests/models.sh
       - name: launchers fast-forward the package to origin/main or refuse to start
@@ -63,6 +67,7 @@ jobs:
       - name: every skill and playbook the docs name exists
         run: |
           # A skill reference is /skill:x, ../x/SKILL.md, skills/x/, or a lowercase **x** / **`x`**.
+          # A target repo's .cursor/skills/x/ or .pi/skills/x/ is that repo's skill, not ours, so it is skipped.
           # Lowercase bold in these docs is reserved for skill and agent names, so a stray one fails here.
           # The skills vendored verbatim from pstack (docs/PROVENANCE.md) use bold as emphasis, so only their links are checked.
           verbatim='^skills/(statechart|create-formal-verification-skill|maintain-formal-verification-skill)/'
@@ -70,10 +75,11 @@ jobs:
           fail=0
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^\*\*`?##; s#`?\*\*$##; s#^/skill:##; s#^\.\./##; s#^skills/##; s#/SKILL\.md$##; s#/$##')
+            [[ $ref == .cursor/* || $ref == .pi/* ]] && continue
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
             [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
-          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
+          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
             [ -f "skills/onigiri-mode/playbooks/$name.md" ] || { echo "$file names playbook \`$name\` but skills/onigiri-mode/playbooks/$name.md does not exist"; fail=1; }
