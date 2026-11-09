@@ -45,7 +45,7 @@ const isHolds = (w: string) => base(w) === HOLDS;
 interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; remote: boolean }
 const REMOTE = new Set(["ssh", "vm"]);
 
-/** Whether `s` ends outside any quote, so a `<<` after it is an operator and not text. */
+/** Whether `s` ends outside any quote or comment, so a `<<` after it is an operator and not text. */
 function unquotedEnd(s: string): boolean {
 	let q = "";
 	for (let i = 0; i < s.length; i++) {
@@ -53,6 +53,7 @@ function unquotedEnd(s: string): boolean {
 		if (q) { if (c === q) q = ""; else if (c === "\\" && q === '"') i++; }
 		else if (c === "'" || c === '"') q = c;
 		else if (c === "\\") i++;
+		else if (c === "#" && (i === 0 || /[\s;&|()]/.test(s[i - 1]))) return false;
 	}
 	return !q;
 }
@@ -87,8 +88,9 @@ function simpleCommands(line: string, dirs: (string | undefined)[], remote = fal
 		const w = program(words);
 		if (w[0] === "cd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
 			const to = w[1] ?? "~";
-			const last = dirs[dirs.length - 1];
-			dirs = [...dirs, /^[~$]/.test(to) ? undefined : to.startsWith("/") ? path.posix.resolve(to) : last && path.posix.resolve(last, to)];
+			// relative to every directory it might start in, since an earlier cd may have failed
+			const next = /^[~$]/.test(to) ? [undefined] : to.startsWith("/") ? [path.posix.resolve(to)] : dirs.map((d) => d && path.posix.resolve(d, to));
+			dirs = [...new Set([...dirs, ...next])];
 			continue;
 		}
 		out.push({ words: w, raw: words, dirs, remote });
@@ -242,7 +244,7 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
-		if ([...new Set(c.dirs)].some((d) => writesHolds(c.words, d, c.remote, host)))
+		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, (d) => host.repoAt(d));
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
