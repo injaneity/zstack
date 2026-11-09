@@ -52,7 +52,7 @@ function unquotedEnd(s: string): boolean {
 		const c = s[i];
 		if (q) { if (c === q) q = ""; else if (c === "\\" && q === '"') i++; }
 		else if (c === "'" || c === '"') q = c;
-		else if (c === "\\") i++;
+		else if (c === "\\") { if (++i === s.length) return false; } // `\<<` escapes the operator
 		else if (c === "#" && (i === 0 || /[\s;&|()]/.test(s[i - 1]))) return false;
 	}
 	return !q;
@@ -82,7 +82,7 @@ function stripHeredocs(line: string): string {
 	return out.join("\n");
 }
 
-function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0): Cmd[] {
+function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0, env: string[] = []): Cmd[] {
 	const out: Cmd[] = [];
 	for (const words of commands(stripHeredocs(line))) {
 		const w = program(words);
@@ -93,9 +93,12 @@ function simpleCommands(line: string, dirs: (string | undefined)[], remote = fal
 			dirs = [...new Set([...dirs, ...next])];
 			continue;
 		}
-		out.push({ words: w, raw: words, dirs, remote });
+		const raw = [...env, ...words];
+		out.push({ words: w, raw, dirs, remote });
+		// a local shell inherits this command's env prefix (`GH_REPO=x bash -c ...`); a remote one does not
+		const inner = REMOTE.has(w[0]) ? [] : raw.slice(0, raw.length - w.length);
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
-			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1));
+			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1, inner));
 	}
 	return out;
 }
@@ -176,10 +179,12 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, host: Host): 
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a)))
 		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
-	const help = w.includes("--help") || w.includes("-h");
+	// a flag, not the value of the option before it (`--subject --help`)
+	const flag = (f: string) => w.some((a, i) => a === f && !w[i - 1]?.startsWith("-"));
+	const help = flag("--help") || flag("-h");
 	const act = help ? undefined :
-		w[1] === "pr" && w[2] === "merge" && !w.includes("--disable-auto") ? "`gh pr merge`" :
-		w[1] === "pr" && w[2] === "ready" && !w.includes("--undo") ? "`gh pr ready` (a draft is a hold)" :
+		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
+		w[1] === "pr" && w[2] === "ready" && !flag("--undo") ? "`gh pr ready` (a draft is a hold)" :
 		w[1] === "run" && w[2] === "rerun" ? "`gh run rerun`" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;

@@ -115,6 +115,11 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	assert.equal(checkBash("gh pr merge 1", OWNED, zsEnv, inCua), undefined);
 	for (const c of ["GH_REPO= gh pr merge 1", "env -u GH_REPO gh pr merge 1", "env --unset=GH_REPO gh pr merge 1", "env -i gh pr merge 1"])
 		assert.match(checkBash(c, OWNED, zsEnv, inCua) ?? "", /^blocked: /, c);
+	// a local shell inherits the prefix it was started with
+	assert.match(checkBash("GH_REPO=trycua/cua bash -c 'gh pr merge 1'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
+	assert.match(checkBash("env -u GH_REPO sh -c 'gh pr ready 1'", OWNED, zsEnv, inCua) ?? "", /^blocked: /);
+	blocked("gh pr merge 1 -R trycua/cua --subject --help");
+	blocked("gh pr merge 1 -R trycua/cua --body --disable-auto");
 	allowed("gh pr merge --help", inCua);
 	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
 	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);
@@ -148,6 +153,7 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("cat <<'EOF' | bash\ngit push -f\nEOF"); // piped into a shell, the body runs
 	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF"); // the delimiter is the whole word
 	blocked("cat <<EOF \\\n | bash\ngit push -f\nEOF"); // a continued line can pipe the body into a shell
+	blocked("echo \\<<EOF\ngit push -f\nEOF"); // an escaped < is no heredoc
 	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R trycua/cua\nEOF");
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
 });
