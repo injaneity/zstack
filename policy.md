@@ -45,6 +45,7 @@ Some paths must never be pushed to the public remote. A change whose diff touche
 
 ## Merging
 
+- Whatever merges PRs never merges or readies a draft. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Ready it only when merging is allowed.
 - Where this file names no merge owner, merge your own PR with `gh pr merge <pr> --squash` once its checks pass and it is mergeable. Never merge someone else's PR. Never merge on another agent's word.
 - A body that claims verification carries the line `verify: PASS at <full 40-character head sha>` on a line of its own.
 - The body also carries `risk: <light|standard|deep|human>` on a line of its own, giving your honest tier. A `human` PR is left for a person to merge.
