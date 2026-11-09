@@ -6,8 +6,11 @@ import { checkBash, checkWrite, mergeOwned } from "../extensions/rule-guard/rule
 const OWNED = mergeOwned("trycua/cua");
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : undefined);
-const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, repoAt, cwd) ?? "", /^blocked: /, c);
-const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, repoAt, cwd), undefined, c);
+// and a fake filesystem whose only directories are these
+const DIRS = new Set(["/srv/onigiri", "/zs/sync"]);
+const host = { repoAt, isDir: (p: string) => DIRS.has(p.replace(/\/$/, "")) };
+const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
+const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
 
 test("force-pushes and hook skips are blocked however they are written", () => {
@@ -89,7 +92,7 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
 	allowed("gh api repos/trycua/cua/actions/runs/9/rerun");
 	allowed("gh pr merge 33 -R injaneity/zstack", inCua);
-	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), repoAt, inCua), undefined);
+	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);
 	assert.deepEqual([...mergeOwned(" trycua/cua , A/B ")], ["trycua/cua", "a/b"]);
 });
 
@@ -115,6 +118,7 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp -t /srv/onigiri /tmp/hold-prs.txt",
 		"cp /tmp/hold-prs.txt /srv/onigiri/",
 		"mv /tmp/hold-prs.txt /srv/onigiri",
+		"cp /tmp/hold-prs.txt sync",
 	])
 		blocked(c);
 	for (const c of [

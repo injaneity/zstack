@@ -8,8 +8,10 @@ export function mergeOwned(env = process.env.ONIGIRI_MERGE_OWNED ?? ""): Set<str
 	return new Set(env.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean));
 }
 
-/** owner/name of the GitHub repo checked out at a directory, or undefined. */
-export type RepoAt = (dir: string) => string | undefined;
+/** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory, and whether a path
+ * (absolute, or starting with ~) is an existing directory. */
+export interface Host { repoAt(dir: string): string | undefined; isDir(p: string): boolean }
+const NO_HOST: Host = { repoAt: () => undefined, isDir: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
@@ -110,7 +112,7 @@ function ghApiWrites(w: string[]): boolean {
 	return method ? method !== "GET" : fields;
 }
 
-function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: RepoAt): string | undefined {
+function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: Host["repoAt"]): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
 	const act =
@@ -139,7 +141,7 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	return out;
 }
 
-function writesHolds(w: string[]): boolean {
+function writesHolds(w: string[], dir: string | undefined, host: Host): boolean {
 	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word)
 	for (let i = 0; i < w.length; i++) {
 		const m = w[i].match(/>>?\|?(.*)$/);
@@ -157,11 +159,13 @@ function writesHolds(w: string[]): boolean {
 		case "cp": case "mv": case "install": case "rsync": case "ln": case "ditto":
 			// with -t DIR every operand is a source copied into DIR under its own name
 			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
-			// the destination is the file itself, or a directory (a trailing / or a name with no dot) that receives
-			// a source named hold-prs.txt
+			// the destination is the file itself, or a directory that receives a source named hold-prs.txt
 			if (ops.length < 2) return false;
 			const dest = ops[ops.length - 1];
-			return isHolds(dest) || (ops.slice(0, -1).some(isHolds) && (dest.endsWith("/") || !base(dest).includes(".")));
+			if (isHolds(dest)) return true;
+			if (!ops.slice(0, -1).some(isHolds)) return false;
+			const abs = /^[/~]/.test(dest) ? dest : dir === undefined || dest.startsWith("$") ? undefined : path.posix.resolve(dir, dest);
+			return dest.endsWith("/") || abs === undefined || host.isDir(abs);
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
 	}
@@ -169,11 +173,11 @@ function writesHolds(w: string[]): boolean {
 }
 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. */
-export function checkBash(command: string, owned: Set<string>, repoAt: RepoAt = () => undefined, cwd?: string): string | undefined {
+export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
-		if (writesHolds(c.words))
+		if (writesHolds(c.words, c.dirs[c.dirs.length - 1], host))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, repoAt);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, (d) => host.repoAt(d));
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
 	}
 	return undefined;
