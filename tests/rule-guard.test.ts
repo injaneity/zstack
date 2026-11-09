@@ -81,6 +81,9 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	blocked("cd /zs/wt || gh pr merge 1", inCua);
 	blocked("cd /zs/wt && gh pr merge 33", inCua); // a cd can fail, so the starting checkout still counts
 	blocked("GH_REPO=trycua/cua gh pr merge 1");
+	blocked("gh pr merge 1 -R github.com/trycua/cua");
+	blocked("gh pr merge 1 --repo=https://github.com/trycua/cua.git");
+	blocked("gh run rerun 5 -R github.com/TryCua/cua");
 	blocked("gh api repos/trycua/cua/pulls/1/merge -f x=y -X PUT");
 	allowed("cd /zs/wt && gh pr merge 33 -R injaneity/zstack", inCua);
 	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
@@ -110,6 +113,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"echo x>hold-prs.txt",
 		"echo x>>/srv/onigiri/hold-prs.txt",
 		"cp -t /srv/onigiri /tmp/hold-prs.txt",
+		"cp /tmp/hold-prs.txt /srv/onigiri/",
+		"mv /tmp/hold-prs.txt /srv/onigiri",
 	])
 		blocked(c);
 	for (const c of [
@@ -123,6 +128,7 @@ test("writes to the holds file are blocked; reads run", () => {
 		"tee hold-prs.txt.bak < hold-prs.txt",
 		"sed -n 1,5p hold-prs.txt",
 		"cp hold-prs.txt /tmp/x.txt",
+		"cp /srv/onigiri/hold-prs.txt ~/scratch/holds.bak-1108",
 	])
 		allowed(c);
 	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);

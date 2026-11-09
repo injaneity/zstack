@@ -86,11 +86,16 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 function ghNamedRepo(w: string[]): string | undefined {
 	for (let i = 0; i < w.length; i++) {
 		const a = w[i];
-		if (a === "-R" || a === "--repo") return w[i + 1]?.toLowerCase();
+		if (a === "-R" || a === "--repo") return repoName(w[i + 1]);
 		const m = a.match(/^(?:-R|--repo=)(.+)$/) ?? a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//) ?? a.match(/(?:^|\/)repos\/([^/]+\/[^/]+)\//);
-		if (m && !m[1].includes("{")) return m[1].toLowerCase();
+		if (m && !m[1].includes("{")) return repoName(m[1]);
 	}
 	return undefined;
+}
+
+/** `[HOST/]OWNER/REPO` or a URL, as gh accepts it, reduced to lower-case owner/repo. */
+function repoName(r: string | undefined): string | undefined {
+	return r?.toLowerCase().replace(/^(https?:\/\/)?/, "").replace(/\.git$/, "").split("/").filter(Boolean).slice(-2).join("/");
 }
 
 function ghApiWrites(w: string[]): boolean {
@@ -115,7 +120,7 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: RepoA
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
 	if (!act) return undefined;
 	const env = raw.slice(0, raw.length - w.length).map((a) => a.match(/^GH_REPO=(.+)$/)?.[1]).find(Boolean);
-	const named = ghNamedRepo(w) ?? env?.toLowerCase().replace(/^(https?:\/\/)?github\.com\//, "");
+	const named = ghNamedRepo(w) ?? repoName(env);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
 	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : repoAt(d)));
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
@@ -152,7 +157,11 @@ function writesHolds(w: string[]): boolean {
 		case "cp": case "mv": case "install": case "rsync": case "ln": case "ditto":
 			// with -t DIR every operand is a source copied into DIR under its own name
 			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
-			return ops.length >= 2 && isHolds(ops[ops.length - 1]);
+			// the destination is the file itself, or a directory (a trailing / or a name with no dot) that receives
+			// a source named hold-prs.txt
+			if (ops.length < 2) return false;
+			const dest = ops[ops.length - 1];
+			return isHolds(dest) || (ops.slice(0, -1).some(isHolds) && (dest.endsWith("/") || !base(dest).includes(".")));
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
 	}
