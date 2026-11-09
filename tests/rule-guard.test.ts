@@ -168,7 +168,11 @@ test("a brief that allows merging lets the session ready its draft, and nothing 
 	blocked("export ONIGIRI_READY_ALLOWED=1; pi -p go");
 	blocked("ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED");
 	blocked("bash -c 'env ONIGIRI_READY_ALLOWED=1 pi -p go'");
-	allowed("echo $ONIGIRI_READY_ALLOWED");
+	blocked("printf -v ONIGIRI_READY_ALLOWED %s 1; pi -p go");
+	blocked("read ONIGIRI_READY_ALLOWED <<< 1; pi -p go");
+	blocked("declare -x ONIGIRI_READY_ALLOWED=1; pi -p go");
+	blocked("python3 - <<'EOF'\nimport os; os.environ['ONIGIRI_READY_ALLOWED'] = '1'; os.execvp('pi', ['pi', '-p', 'go'])\nEOF");
+	allowed("echo $ONIGIRI_READY_ALLOWED ${ONIGIRI_READY_ALLOWED:-unset}");
 });
 
 test("here-document bodies are data unless a shell reads them", () => {

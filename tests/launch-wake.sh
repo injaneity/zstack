@@ -118,6 +118,11 @@ for c in "brief-merge.md:1:" "brief.md:0:" "brief.md:0:ONIGIRI_READY_ALLOWED=1" 
   for _ in $(seq 50); do [ -e "$tmp/onigiri/review/mini-ready$k/run.rc" ] && break; sleep 0.1; done   # bounded: 5s
   check "mini: $b ${pre:+($pre) }gives ONIGIRI_READY_ALLOWED=$want" "$(cat "$tmp/seen-ready" 2>/dev/null)" "$want"
 done
+# a relative brief path is read where the caller named it, not in the review dir the launcher moves to
+mkdir -p "$tmp/onigiri/review/mini-rel"; cp "$tmp/brief-merge.md" "$tmp/onigiri/review/mini-rel/brief.md"; rm -f "$tmp/seen-ready"
+(cd "$tmp" && env_run "$src/hosts/mini/pi-run-mini" mini-rel brief.md > /dev/null 2>&1)
+for _ in $(seq 50); do [ -e "$tmp/onigiri/review/mini-rel/run.rc" ] && break; sleep 0.1; done   # bounded: 5s
+check "mini: a relative brief.md is the caller's, not the review dir's" "$(cat "$tmp/seen-ready" 2>/dev/null)" 0
 # pi keeps a working Ctrl-C though it now runs as a background job, which bash starts with INT ignored.
 # The subshell's trap - INT restores it on bash 4 and later (the VM and CI); macOS /bin/bash 3.2 does not.
 # LAUNCH_BASH picks the bash that runs the launcher (default its #!/bin/bash).

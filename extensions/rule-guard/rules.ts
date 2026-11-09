@@ -261,13 +261,14 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
 export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
+	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
+	// script) would start a child pi that may ready, so any mention but a `$` read is refused, heredoc bodies included.
+	if (/\bONIGIRI_READY_ALLOWED\b/.test(command.replace(/\$\{?ONIGIRI_READY_ALLOWED\b/g, "")))
+		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
-		// the launcher sets it from the brief; a session that set it would start a child that may ready (`X=1 pi ...`)
-		if (c.raw.some((a) => /^ONIGIRI_READY_ALLOWED=/.test(a)))
-			return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
 	}
