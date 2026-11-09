@@ -90,8 +90,9 @@ Editing a skill is a Change. Match the neighbouring SKILL.md files (frontmatter 
 
 The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this section. Read it before the first change. Where it says nothing:
 
-- No admin bypass. Never print secrets or tokens.
-- Force-pushes, committed config and rule wording follow the policy's Scope and Changing these rules sections.
+- No admin bypass. Force-pushes follow the policy's Scope and Merging sections.
+- Never print secrets or tokens. Never commit local agent config.
+- Don't change hold, merge-rule, or policy wording without Zane's explicit ok.
 
 ## Chat orchestrator
 
