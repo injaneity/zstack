@@ -163,8 +163,11 @@ def supervise(d, sid, cmd, env):
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
         done = step(r.run, "exit", pid=os.getpid(), rc=rc)
         if done["wake"]:
-            subprocess.run([sys.executable, WAKE, done["wake"], f"{sid} exited rc={rc}", f"rc={rc}",
-                            *report_fields(d, done["attempt"])], env=env)
+            try:   # best effort: a wake that cannot even start must not cost the exit record
+                subprocess.run([sys.executable, WAKE, done["wake"], f"{sid} exited rc={rc}", f"rc={rc}",
+                                *report_fields(d, done["attempt"])], env=env)
+            except OSError as e:
+                print(f"pi-run: wake not sent: {e}", flush=True)
         r.write(done)
     os._exit(rc)
 

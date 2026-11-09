@@ -188,6 +188,13 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.finished("w")["wake"], None)
         self.assertEqual(self.log("w").count('{"kind": "done"'), 1)
 
+    def test_a_wake_that_cannot_start_still_records_the_exit(self):
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        (self.t / "say").write_text(" ".join(f"https://github.com/o/r/pull/{n}" for n in range(60000)) + "\n")   # over ARG_MAX
+        self.start("big", brief="w.md")
+        self.assertEqual(self.finished("big")["rc"], 0)
+        self.assertIn("pi-run: wake not sent", self.log("big"))
+
     def test_only_a_failed_run_wakes(self):
         self.start("ok", rc=0)
         self.finished("ok")

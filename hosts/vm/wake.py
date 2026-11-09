@@ -26,7 +26,7 @@ URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6a
 KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
 KINDS = ("blocked", "failed", "done")
-FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r"\S+", "prs": r"\S+"}
+FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r".+", "prs": r"\S+"}
 
 
 def now():

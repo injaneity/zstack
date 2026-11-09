@@ -79,11 +79,11 @@ class Wake(unittest.TestCase):
     def test_done_carries_rc_report_and_pr_links(self):
         self.key.write_text("k")
         with self.urlopen(None):
-            run("done", "w exited rc=0", "rc=0", "report=/r/w/run.log", "prs=https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
+            run("done", "w exited rc=0", "rc=0", "report=/r/a b/run.log", "prs=https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
                 env={"PI_SESSION_ID": "w"})
         b = self.sent[0][1]
         self.assertEqual((b["kind"], b["id"], b["rc"], b["report"], b["prs"]),
-                         ("done", "w", 0, "/r/w/run.log", ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]))
+                         ("done", "w", 0, "/r/a b/run.log", ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]))
 
     def test_retries_network_errors_and_5xx_but_not_4xx_and_always_exits_0(self):
         self.key.write_text("k")
