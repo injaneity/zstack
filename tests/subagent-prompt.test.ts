@@ -65,9 +65,10 @@ test("the builder leaves the verify skill, E2E and Lume to the verifier", () => 
 
 // Everything a builder session reads as instructions: the appended Hard rules (inside SKILL.md), the skill and its
 // playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. A sentence there that names the verify
-// skill, E2E or Lume must be one of HANDOFF, each of which gives them to the verifier or forbids the builder to run
-// them. Any other such sentence fails, so a new or edited mention is reviewed here instead of trusted to a word match.
-const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills/i;
+// skill, E2E or Lume, says "yourself", or runs "them", "it" or "those" (a pronoun can point back at the checks) must be
+// one of HANDOFF. Each listed sentence gives the checks to the verifier, forbids the builder to run them, or tells the
+// builder to do something else itself. Any other such sentence fails, so a new or edited one is reviewed here.
+const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills|\byourself\b|\brun (them|those)\b|\brun it\b(?! well)/i;
 const HANDOFF = new Set([
 	"The `verifier` subagent runs the repo verify skill, with E2E and Lume where that skill calls for them (`agents/verifier.md`).",
 	"You do not run the verify skill, E2E or Lume yourself.",
@@ -78,6 +79,14 @@ const HANDOFF = new Set([
 	"- Pruning is allowed on the mini to stay productive: stale lume worker VMs (verifier runs stop them, never delete them), finished sessions' build output and caches.",
 	"Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.",
 	"A bug's original repro now passes, a refactor's outputs match the old ones, and the verifier runs the verify-skill lanes the change touches.",
+	"Install a missing tool yourself.",
+	"Then synthesize yourself.",
+	"- **Nowhere else.** Do everything else yourself.",
+	"Without the tool or the agent, do that step yourself and say so.",
+	"- **Bug.** Reproduce it yourself on the real surface, synthesizing the trigger or instrumenting until it fires.",
+	"- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value.",
+	"Run it on the machine that does the work, never in the chat.",
+	"Run it through **unslop**.",
 ]);
 const builderLeaks = (text: string) =>
 	text
@@ -91,6 +100,8 @@ test("the leak check catches a builder told to run the checks itself", () => {
 		"Ask the verifier for review and run Lume.",
 		"If the verifier is not available, run E2E yourself.",
 		"Run the verify-cua-driver skill before opening the PR.",
+		"You do not run the verify skill, E2E or Lume yourself. Run them yourself instead.",
+		"You do not run the verify skill, E2E or Lume yourself. Then run those.",
 	])
 		assert.notDeepEqual(builderLeaks(bad), [], bad);
 });
