@@ -66,8 +66,8 @@ class Gate(unittest.TestCase):
 
     def test_green_light_merges_and_nothing_else_is_read(self):
         self.assertEqual(verdict(pr()), ("merge", "green, ci-gate SUCCESS, risk light"))
-        self.assertEqual(verdict(pr(statusCheckRollup=[cr("ci-gate")], body="")),
-                         ("merge", "green, ci-gate SUCCESS, risk undeclared"))
+        self.assertEqual(verdict(pr(statusCheckRollup=[cr("ci-gate")], body="risk: standard\n")),
+                         ("merge", "green, ci-gate SUCCESS, risk standard"))
 
     def test_ci_gate_must_be_success_at_head(self):
         for c, word in ((cr("ci-gate", conclusion="SKIPPED"), "SKIPPED"), (cr("ci-gate", conclusion="NEUTRAL"), "NEUTRAL"),
@@ -88,14 +88,19 @@ class Gate(unittest.TestCase):
                        [cr("ci-gate"), cr("e2e", status="IN_PROGRESS", conclusion=None)]):
             self.assertEqual(verdict(pr(files=[win], statusCheckRollup=rollup))[0], "merge", rollup)
 
-    def test_cla_and_undeclared_risk_never_block(self):
-        """CUA-3481: the risk-unknown and CLA rules are gone."""
+    def test_cla_never_blocks(self):
+        """CUA-3481: the CLA rule is gone."""
         for cla in (cr("cla", conclusion="FAILURE"), cr("cla", status="IN_PROGRESS", conclusion=None),
                     {"__typename": "StatusContext", "context": "cla", "state": "FAILURE"}):
             for path in ("libs/cua-spacesd/src/x.rs", "libs/cua-driver/src/x.rs"):
-                p = pr(files=[path], body="no tier here\n", statusCheckRollup=[cr("ci-gate"), cla])
-                self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk undeclared"), (cla, path))
+                p = pr(files=[path], statusCheckRollup=[cr("ci-gate"), cla])
+                self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk light"), (cla, path))
         self.assertFalse(hasattr(mj, "NON_REQUIRED_CHECKS"))
+
+    def test_a_pr_without_a_tier_from_the_enum_is_skipped_never_merged(self):
+        for body, labels in (("no tier here\n", []), ("risk: high\n", []), ("risk: low\n", []), ("x risk: deep\n", []),
+                             ("", ["risk:high"]), ("risk: lightly\n", [])):
+            self.assertEqual(verdict(pr(body=body, labels=labels)), ("skip", "no risk tier (light|standard|deep|human)"), body)
 
     def test_hold_rows_and_unreadable_holds(self):
         self.assertEqual(verdict(pr(number=5675)), ("skip", "hold: #5675 has a hold row in the holds file"))
@@ -121,12 +126,12 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(dict(p, number=5901), holds=pre)[0], "buffer")
             self.assertEqual(verdict(dict(p, isDraft=True))[0], "skip")   # a deep draft is never readied
         self.assertEqual(verdict(pr(labels=["risk:deep"]))[0], "buffer")    # the strictest of label and body wins
-        self.assertEqual(verdict(pr(body="risk: high\n")), ("buffer", "declared human: needs Zane (no preapprove row)"))
 
     def test_strictest_declared_tier(self):
         self.assertEqual(mj.declared_risk(["risk:light", "risk:deep"], ""), "deep")
         self.assertEqual(mj.declared_risk(["risk:light"], "risk: human\n"), "human")
-        self.assertEqual(mj.declared_risk([], "x\nrisk: high\n"), "human")   # not a tier: held for Zane
+        self.assertIsNone(mj.declared_risk([], "x\nrisk: high\n"))   # not in TIERS
+        self.assertEqual(mj.declared_risk([], "risk: high\nrisk: light\n"), "light")
         self.assertIsNone(mj.declared_risk([], "the risk: deep is mid-line"))
 
     def test_every_reason_is_reported_gate_then_blockers(self):
