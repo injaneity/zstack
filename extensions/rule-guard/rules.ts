@@ -15,6 +15,8 @@ const NO_HOST: Host = { repoAt: () => undefined, isDir: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
+// Shell keywords that can start a simple command's words: `{ git push -f; }`, `if x; then git push -f; fi`, `! cmd`.
+const KEYWORDS = new Set(["{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until"]);
 const WRAPPERS = new Set(["sudo", "env", "nohup", "nice", "time", "command", "exec", "timeout", "gtimeout", "xargs", "stdbuf"]);
 // Wrapper options that take the next word as their value (`sudo -u bob`, `env --unset X`, `nice -n 5`, `timeout -k 5`).
 const VALUE_OPTS = new Set(["-u", "-g", "-n", "-k", "-s", "-C", "-S", "-p", "-h", "-D", "-i", "-o", "-e", "-r", "-t", "-U", "-T",
@@ -56,7 +58,7 @@ function program(words: string[]): string[] {
 	let i = 0;
 	while (i < words.length) {
 		const w = words[i];
-		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) { i++; continue; }
+		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || KEYWORDS.has(w)) { i++; continue; }
 		if (!WRAPPERS.has(base(w))) break;
 		i++;
 		while (i < words.length && (/^-/.test(words[i]) || /^\d+(\.\d+)?[smhd]?$/.test(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) {

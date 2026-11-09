@@ -40,6 +40,10 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 		"git --config-env=core.hooksPath=HP push",
 		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push",
 		"git --git-dir /tmp/repo push -f",
+		"{ git push -f; }",
+		"if true; then git push -f; fi",
+		"while false; do git push -f; done",
+		"! git push --force",
 	])
 		blocked(c);
 });
@@ -84,6 +88,8 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	blocked("cd /zs/wt || gh pr merge 1", inCua);
 	blocked("cd /zs/wt && gh pr merge 33", inCua); // a cd can fail, so the starting checkout still counts
 	blocked("GH_REPO=trycua/cua gh pr merge 1");
+	blocked("{ gh pr merge 1 -R trycua/cua; }");
+	blocked("if true; then echo x >> hold-prs.txt; fi");
 	blocked("gh pr merge 1 -R github.com/trycua/cua");
 	blocked("gh pr merge 1 --repo=https://github.com/trycua/cua.git");
 	blocked("gh run rerun 5 -R github.com/TryCua/cua");
