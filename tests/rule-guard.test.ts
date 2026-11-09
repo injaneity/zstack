@@ -147,6 +147,7 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("echo hi # <<EOF\ngit push --force\nEOF"); // a << in a comment is text
 	blocked("cat <<'EOF' | bash\ngit push -f\nEOF"); // piped into a shell, the body runs
 	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF"); // the delimiter is the whole word
+	blocked("cat <<EOF \\\n | bash\ngit push -f\nEOF"); // a continued line can pipe the body into a shell
 	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R trycua/cua\nEOF");
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
 });

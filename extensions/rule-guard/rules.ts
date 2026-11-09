@@ -61,8 +61,8 @@ function unquotedEnd(s: string): boolean {
 /**
  * The line with each here-document body removed when it is only data: a `python3 - <<'EOF'` script or a
  * `cat > f <<'EOF'` body. A body stays when a shell on its line may read it (`bash <<EOF`, `ssh host <<EOF`, `cat <<EOF | sh`), when its delimiter
- * is unquoted and the body has a `$(` or backtick (the shell runs those), when the `<<` sits inside quotes, or when
- * it has no closing line.
+ * is unquoted and the body has a `$(` or backtick (the shell runs those), when the `<<` sits inside quotes, when its
+ * line ends in a `\\` continuation, or when it has no closing line.
  */
 function stripHeredocs(line: string): string {
 	const lines = line.split("\n");
@@ -74,8 +74,8 @@ function stripHeredocs(line: string): string {
 			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
 			if (end < 0) continue;
 			if (!m[2] && lines.slice(i + 1, end).some((l) => /\$\(|`/.test(l))) continue;
-			// any shell on the line may read it: `bash <<EOF`, `cat <<EOF | sh`
-			if (commands(lines[i]).some((c) => SHELLS.has(program(c)[0] ?? ""))) continue;
+			// any shell on the line may read it: `bash <<EOF`, `cat <<EOF | sh`; a continued line may add one
+			if (/\\$/.test(lines[i]) || commands(lines[i]).some((c) => SHELLS.has(program(c)[0] ?? ""))) continue;
 			lines.splice(i + 1, end - i - 1);
 		}
 	}
