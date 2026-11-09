@@ -28,7 +28,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, with safety changes, a per-role model from `config/models.json`, and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 - **`tool-guard` extension** (`extensions/tool-guard/`): refuses a bash `find` over the whole disk or a whole home directory, and adds rules against that and `sleep`-and-`tail` polling to every session's system prompt. `docs/TOOL-GUARD.md` has the details.
-- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls the onigiri policy bans outright: force-push, skipping the pre-push hook, `gh pr merge`, `gh pr ready` or a CI rerun in a repo listed in `$ONIGIRI_MERGE_OWNED`, and writes to `hold-prs.txt`. `docs/RULE-GUARD.md` has the details.
+- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls the onigiri policy bans outright: force-push, skipping the pre-push hook, `gh pr merge`, `gh pr ready` (unless the brief says `merge: allowed`) or a CI rerun in a repo listed in `$ONIGIRI_MERGE_OWNED`, and writes to `hold-prs.txt`. `docs/RULE-GUARD.md` has the details.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 

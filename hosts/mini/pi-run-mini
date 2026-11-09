@@ -48,6 +48,8 @@ export PATH="$HOME/onigiri/mamba/envs/bash/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_
 cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
 cd "$d"; rm -f run.rc run.pid   # a stale run.pid would end the wait below before the new wrapper writes its own
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py" ONIGIRI_MERGE_OWNED=${ONIGIRI_MERGE_OWNED:-trycua/cua}
+# a `merge: allowed` line in the brief lets rule-guard pass `gh pr ready`; only the brief decides, never the caller's env
+ONIGIRI_READY_ALLOWED=0; grep -qx 'merge: allowed' "$brief" && ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED
 nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
   /bin/bash -c 'sid=$1; fin() { "$ONIGIRI_WAKE" --exit "$1" "$sid"; echo "$1" > run.rc; rm -f run.pid; exit "$1"; }
     fwd() { if [ -n "$!" ]; then kill -TERM "$!" 2>/dev/null; else fin 143; fi; }

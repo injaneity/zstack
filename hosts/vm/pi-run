@@ -64,6 +64,8 @@ args=("--session-id" "$sid" "--provider" "$provider" "--model" "$model" "--name"
 if [ -r "$POLICY" ]; then args+=("--append-system-prompt" "$POLICY"); fi
 shift 2
 export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py" ONIGIRI_MERGE_OWNED=${ONIGIRI_MERGE_OWNED:-trycua/cua}
+# a `merge: allowed` line in the brief lets rule-guard pass `gh pr ready`; only the brief decides, never the caller's env
+ONIGIRI_READY_ALLOWED=0; grep -qx 'merge: allowed' "$1" && ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED
 # Background pi so a trap can forward signals; an async job starts with INT ignored, so the subshell restores it
 # (bash 5) and <&0 keeps stdin, as the old exec did. A terminal's Ctrl-C reaches pi through the process group.
 pre=x$!
