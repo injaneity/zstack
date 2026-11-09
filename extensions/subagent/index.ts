@@ -3,11 +3,10 @@
 // zstack changes, and only these: (a) the child's system prompt is its role prompt from agents/<name>.md plus a
 // line placing it in the pipeline, and never the session's Hard rules;
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
-// are told not to sleep or poll; (d) with no UI in an untrusted project, project agents are
-// refused; (e) children get an environment without forge or git credentials; (f) a session_start
+// are told not to sleep or poll; (d) only the user's agents load, never a project's; (e) children get an environment without forge or git credentials; (f) a session_start
 // check reports a missing or stale agent file or a missing gh login, and offers the fix only with a UI; (g) a child's
 // provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
-// parent model with a warning; (h) children save a session named role:<agent>, under sessions/subagents/, so
+// parent model with a warning, except for the verifier, which refuses; (h) children save a session named role:<agent>, under sessions/subagents/, so
 // bin/check-models can read what they ran on. Upstream's parallel and chain modes and its custom renderers are removed; pi's default
 // tool renderer shows the result.
 // See docs/SUBAGENT.md.
@@ -30,19 +29,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import { StringEnum } from "@earendil-works/pi-ai";
-import {
-	CONFIG_DIR_NAME,
-	type ExtensionAPI,
-	type ExtensionContext,
-	getAgentDir,
-	hasTrustRequiringProjectResources,
-	ProjectTrustStore,
-	withFileMutationQueue,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
-import { buildChildPrompt } from "./prompt.ts";
+import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { buildChildPrompt, onSeatProblem, VERIFIER } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
@@ -65,14 +55,6 @@ function childEnv(ghConfigDir: string): NodeJS.ProcessEnv {
 	}
 	// gh keeps its token in its config dir, and git's credential helper asks gh, so an empty dir logs both out.
 	return { ...env, GH_CONFIG_DIR: ghConfigDir, GIT_TERMINAL_PROMPT: "0", PI_SUBAGENT_DEPTH: String(SUBAGENT_DEPTH + 1) };
-}
-
-// pi reports a folder with no protected resources as trusted, and `.pi/agents/` is not a protected
-// resource. So project agents count as trusted only after a real decision: pi resolved trust over
-// protected resources, or the user saved one for this folder.
-function projectAgentsTrusted(cwd: string, piTrusted: boolean): boolean {
-	if (hasTrustRequiringProjectResources(cwd)) return piTrusted;
-	return new ProjectTrustStore(getAgentDir()).get(cwd) === true;
 }
 
 interface Seat {
@@ -133,11 +115,11 @@ async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 	const setup = path.join(PACKAGE_DIR, "bin", "setup.sh");
 	const gaps: { message: string; remedy: string; fix?: boolean }[] = [];
 	const shipped = fs.readdirSync(path.join(PACKAGE_DIR, "agents")).filter((f) => f.endsWith(".md"));
-	const absent = shipped.filter((f) => !fs.existsSync(path.join(agentsDir, f)));
+	const absent = shipped.filter((f) => f !== `${VERIFIER}.md` && !fs.existsSync(path.join(agentsDir, f)));
 	if (absent.length) gaps.push({ message: `agent files missing from ${agentsDir}: ${absent.join(", ")}`, remedy: `bash ${setup}`, fix: true });
 	// install-agents.sh never overwrites, so an installed role prompt can lag the package's. Only a warning: the copy may be edited on purpose.
 	const read = (f: string) => fs.readFileSync(f, "utf-8");
-	const stale = shipped.filter((f) => !absent.includes(f) && read(path.join(agentsDir, f)) !== read(path.join(PACKAGE_DIR, "agents", f)));
+	const stale = shipped.filter((f) => f !== `${VERIFIER}.md` && !absent.includes(f) && read(path.join(agentsDir, f)) !== read(path.join(PACKAGE_DIR, "agents", f)));
 	if (stale.length) gaps.push({ message: `agent files in ${agentsDir} differ from the package's: ${stale.join(", ")}`, remedy: `bash ${path.join(PACKAGE_DIR, "bin", "install-agents.sh")} --force (overwrites them)` });
 	const remotes = await pi.exec("git", ["-C", ctx.cwd, "remote", "-v"], { timeout: 5000 }).catch(() => undefined);
 	if (remotes?.code === 0 && remotes.stdout.includes("github.com")) {
@@ -155,7 +137,6 @@ async function checkDependencies(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 
 interface SingleResult {
 	agent: string;
-	agentSource: "user" | "project" | "unknown";
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -166,8 +147,6 @@ interface SingleResult {
 }
 
 interface SubagentDetails {
-	agentScope: AgentScope;
-	projectAgentsDir: string | null;
 	results: SingleResult[];
 }
 
@@ -250,7 +229,6 @@ async function runSingleAgent(
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
 		return {
 			agent: agentName,
-			agentSource: "unknown",
 			task,
 			exitCode: 1,
 			messages: [],
@@ -277,7 +255,6 @@ async function runSingleAgent(
 
 	const currentResult: SingleResult = {
 		agent: agentName,
-		agentSource: agent.source,
 		task,
 		exitCode: 0,
 		messages: [],
@@ -386,18 +363,9 @@ async function runSingleAgent(
 	}
 }
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
-	default: "user",
-});
-
 const SubagentParams = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
-	agentScope: Type.Optional(AgentScopeSchema),
-	confirmProjectAgents: Type.Optional(
-		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
-	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	variant: Type.Optional(
 		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from config/models.json" }),
@@ -410,60 +378,13 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
-		description: [
-			"Delegate a task to a specialized subagent with isolated context.",
-			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
-			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
-		].join(" "),
+		description: `Delegate a task to a specialized subagent with isolated context. Agents are in ${path.join(getAgentDir(), "agents")}.`,
 		parameters: SubagentParams,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const agentScope: AgentScope = params.agentScope ?? "user";
 			const parent: Seat | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
-			const discovery = discoverAgents(ctx.cwd, agentScope);
-			const agents = discovery.agents;
-			const confirmProjectAgents = params.confirmProjectAgents ?? true;
-
-			const makeDetails = (results: SingleResult[]): SubagentDetails => ({
-				agentScope,
-				projectAgentsDir: discovery.projectAgentsDir,
-				results,
-			});
-
-			const projectTrusted = projectAgentsTrusted(ctx.cwd, ctx.isProjectTrusted());
-			if ((agentScope === "project" || agentScope === "both") && !ctx.hasUI && !projectTrusted) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Refused: project agents need a trusted project or an interactive session. With no UI there is nobody to confirm them. Use agentScope \"user\".",
-						},
-					],
-					details: makeDetails([]),
-					isError: true,
-				};
-			}
-
-			if (
-				(agentScope === "project" || agentScope === "both") &&
-				confirmProjectAgents &&
-				ctx.hasUI &&
-				!projectTrusted
-			) {
-				const requested = agents.find((a) => a.name === params.agent);
-				if (requested?.source === "project") {
-					const dir = discovery.projectAgentsDir ?? "(unknown)";
-					const ok = await ctx.ui.confirm(
-						"Run project-local agents?",
-						`Agents: ${requested.name}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-					);
-					if (!ok)
-						return {
-							content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-							details: makeDetails([]),
-						};
-				}
-			}
+			const agents = discoverAgents(path.join(PACKAGE_DIR, "agents"), [VERIFIER]);
+			const makeDetails = (results: SingleResult[]): SubagentDetails => ({ results });
 
 			const { seat: configured, label, error: seatError } = seatFor(params.agent, params.variant);
 			if (seatError) return { content: [{ type: "text", text: `subagent: ${seatError}` }], details: makeDetails([]), isError: true };
@@ -471,6 +392,10 @@ export default function (pi: ExtensionAPI) {
 			let warning = "";
 			const sameAsParent = seat && parent && seat.provider === parent.provider && seat.model === parent.model;
 			const problem = seat && !sameAsParent ? await seatProblem(ctx, seat) : undefined;
+			if (seat && problem && onSeatProblem(params.agent) === "refuse") {
+				const text = `subagent: ${label} cannot use ${seat.provider}/${seat.model} (${problem}); verification runs only on its own seat, so nothing ran`;
+				return { content: [{ type: "text", text }], details: makeDetails([]), isError: true };
+			}
 			if (seat && problem) {
 				const to = parent ? `${parent.provider}/${parent.model}` : "pi's default model";
 				warning = `subagent: WARNING ${label} cannot use ${seat.provider}/${seat.model} (${problem}); falling back to the parent model ${to}`;

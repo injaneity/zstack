@@ -1,9 +1,9 @@
 // Tests for extensions/rule-guard/rules.ts. Run: node --test tests/rule-guard.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkBash, checkWrite, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, MERGE_OWNED, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
-const OWNED = mergeOwned("trycua/cua");
+const OWNED = MERGE_OWNED;
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
 // and /scratch is a directory outside any checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
@@ -126,8 +126,7 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh pr merge 1 -R trycua/cua --squash --disable-auto");
 	allowed("gh pr merge --help", inCua);
 	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
-	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);
-	assert.deepEqual([...mergeOwned(" trycua/cua , A/B ")], ["trycua/cua", "a/b"]);
+	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", new Set(), host, inCua), undefined);
 });
 
 test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", () => {

@@ -2,7 +2,7 @@
 
 [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan, trimmed for pi.
 
-pstack splits work across agents: one model designs, a subagent implements, more subagents review and race. zstack keeps the same engineering standard with one main session doing the work. The main session builds. A **`verifier`** reviews every diff cold and runs its checks, an optional **`explorer`** answers narrow reading questions, and two competing **`designer`**s plan deep or new work. Each role's model is in `config/models.json`.
+pstack splits work across agents: one model designs, a subagent implements, more subagents review and race. zstack keeps the same engineering standard with one main session doing the work. The main session builds. A **`verifier`** owns verification (`agents/verifier.md`), an optional **`explorer`** answers narrow reading questions, and two competing **`designer`**s plan deep or new work. Each role's model is in `config/models.json`.
 
 ## install
 
@@ -11,7 +11,7 @@ pi install git:github.com/injaneity/zstack
 ~/.pi/agent/git/github.com/injaneity/zstack/bin/setup.sh
 ```
 
-`setup.sh` is safe to re-run. It runs `bin/install-agents.sh`, and checks `gh` only for a GitHub repo. It changes nothing you already have. You still log in to each provider yourself. `config/models.json` maps each role (`builder`, `explorer`, `designer`, `verifier`, `research`) to a provider and model, with the launchers' older names (`coding`, `reads`, `review`) as aliases, and `bin/model-for <role>` prints the pair. Start a print-mode session with onigiri-mode's Hard rules appended with `bin/pi-run <session-id> [<provider> <model>] <brief-file>`, for example `bin/pi-run s1 $(bin/model-for coding) brief.md --name role:coding` (the name is how `bin/check-models` knows the role). Without a provider and model pi uses its own default. `bin/check-models` compares what each session under a review directory actually ran on with the config. `docs/HOST.md` and `hosts/` are one example deployment.
+`setup.sh` is safe to re-run. It runs `bin/install-agents.sh`, and checks `gh` only for a GitHub repo. It changes nothing you already have. You still log in to each provider yourself. `config/models.json` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model, and `bin/model-for <role>` prints the pair. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended, in `$ONIGIRI_ROOT/review/<id>/` (default `~/onigiri`). `bin/pi-run list` shows each run's state, and `bin/pi-run collect <id>` takes a finished run's result once. The lifecycle is one state machine, `bin/PiRun.tla`. `bin/check-models` compares what each session under a review directory actually ran on with the config. `docs/HOST.md` and `hosts/` are one example deployment.
 
 The package brings the `subagent` tool (`extensions/subagent/`, vendored from pi's example, see `docs/SUBAGENT.md`). The tool only finds agents in `~/.pi/agent/agents/` and a project's `.pi/agents/`, and a package can't add its own `agents/` to that list, so `bin/install-agents.sh` copies them into `~/.pi/agent/agents/`. It never overwrites a file you already have. An agent runs on the provider and model `config/models.json` gives its name, or on your main model when the config has no entry for it.
 
@@ -28,7 +28,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, each child getting only its role prompt (its place in the pipeline, the skill it loads, the rules it could break), with safety changes, a per-role model from `config/models.json`, and a session-start dependency check. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 - **`tool-guard` extension** (`extensions/tool-guard/`): refuses a bash `find` over the whole disk or a whole home directory, and adds rules against that and `sleep`-and-`tail` polling to every session's system prompt. `docs/TOOL-GUARD.md` has the details.
-- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls onigiri-mode's Hard rules ban outright: force-push, skipping the pre-push hook, `gh pr merge`, `gh pr ready` (unless the brief says `merge: allowed`) or a CI rerun in a repo listed in `$ONIGIRI_MERGE_OWNED`, and writes to `hold-prs.txt`. `docs/RULE-GUARD.md` has the details.
+- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls onigiri-mode's Hard rules ban outright: force-push, skipping the pre-push hook, `gh pr merge`, `gh pr ready` (unless the brief says `merge: allowed`) or a CI rerun in `trycua/cua`, where the merge job is the only merger, and writes to `hold-prs.txt`. `docs/RULE-GUARD.md` has the details.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 

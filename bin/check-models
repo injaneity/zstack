@@ -2,15 +2,12 @@
 """check-models [<review root>...]: compare the model each session actually used with config/models.json.
 
 Each directory under a review root (default ~/onigiri/review and /srv/onigiri/review, whichever exist)
-is one session. Its pi session file is the one in the pi agent dir's sessions/ whose id is <slug> or
-pi-<slug>, or whose cwd is inside the directory. The role is the session name role:<role> that the
-launchers set. A session without one predates them: it is listed as unchecked, since its intended role
-is unknown, and still counts in the per-model tally. "used" lists every provider/model that answered
+is one session. Its pi session file is the one in the pi agent dir's sessions/ whose id is <slug>, or whose cwd is inside
+the directory. The role is the session name role:<role> that bin/pi-run sets; a session without one is a mismatch. "used" lists every provider/model that answered
 (assistant messages), falling back to the session's model_change records. Prints one row per session,
 then the tally, and exits 1 when any row is a mismatch.
 
-Role names resolve like bin/model-for: an alias maps to its role, and a role with several seats is
-<role>:<n>. A subagent child is saved under sessions/subagents/ with an id that starts with its parent's id and a name role:<agent>
+Role names resolve like bin/model-for: a role with several seats is <role>:<n>. A subagent child is saved under sessions/subagents/ with an id that starts with its parent's id and a name role:<agent>
 (the extension adds " fallback" when the configured seat failed its auth check and the child ran on the
 parent's model). A child is checked against its seat, or against its parent's model when its agent has
 no seat or it fell back. A fallback that ran on the parent's model is reported, not counted as a mismatch.
@@ -55,8 +52,6 @@ def seats():
     for name, v in data.get("roles", {}).items():
         for i, seat in (enumerate(v, 1) if isinstance(v, list) else [(None, v)]):
             out[name if i is None else "%s:%d" % (name, i)] = "%s/%s" % (seat["provider"], seat["model"])
-    for a, target in data.get("aliases", {}).items():
-        out.update({a + k[len(target):]: v for k, v in list(out.items()) if k == target or k.startswith(target + ":")})
     return out
 
 
@@ -71,7 +66,7 @@ def main(argv):
     for root in roots:
         for d in sorted(p for p in glob.glob(os.path.join(os.path.realpath(root), "*")) if os.path.isdir(p)):
             slug = os.path.basename(d)
-            mine = [s for s in sessions if s["id"] in (slug, "pi-" + slug)
+            mine = [s for s in sessions if s["id"] == slug
                     or (s["cwd"] and (os.path.realpath(s["cwd"]) + os.sep).startswith(d + os.sep))]
             if not mine:
                 print("%-34s %-11s %-30s %-40s %s" % (slug, "-", "-", "-", "no session file"))
@@ -89,9 +84,7 @@ def main(argv):
                     exp = parent_used[0]
                 used = s["used"] or s["set"]
                 tally.update(used)
-                if not s["role"]:
-                    status = "unchecked (no role recorded)"
-                elif exp is None:
+                if exp is None:
                     status = "MISMATCH: role %s is not in config" % role
                 elif not used:
                     status = "no model recorded"
@@ -106,7 +99,7 @@ def main(argv):
                 if s["errors"]:
                     status += " (%d error replies)" % s["errors"]
                 bad += status.startswith("MISMATCH")
-                name = slug if s["id"] in (slug, "pi-" + slug) else "%s:%s" % (slug, s["id"])
+                name = slug if s["id"] == slug else "%s:%s" % (slug, s["id"])
                 print("%-34s %-11s %-30s %-40s %s" % (name[:34], role, exp or "-", ",".join(used) or "-", status))
     print("sessions per model used: " + (", ".join("%s %d" % kv for kv in tally.most_common()) or "none"))
     print("%d mismatch(es)" % bad)

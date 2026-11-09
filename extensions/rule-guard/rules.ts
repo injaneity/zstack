@@ -1,12 +1,10 @@
 // onigiri-mode's Hard rules' mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
 // Pure: the caller passes the repo lookup, so tests run without pi or git. See docs/RULE-GUARD.md.
 import * as path from "node:path";
-import { commands } from "../tool-guard/find-guard.ts";
+import { base, commands, program } from "../tool-guard/shell.ts";
 
-/** Repos whose merges belong to someone else (the merge job), from $ONIGIRI_MERGE_OWNED, comma-separated. */
-export function mergeOwned(env = process.env.ONIGIRI_MERGE_OWNED ?? ""): Set<string> {
-	return new Set(env.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean));
-}
+/** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger). */
+export const MERGE_OWNED: ReadonlySet<string> = new Set(["trycua/cua"]);
 
 /** Whether the session's brief allows merging, so it may ready its own draft. The launcher sets $ONIGIRI_READY_ALLOWED
  * from the brief's `merge: allowed` header; the extension reads it once at load, so the session can't set it later. */
@@ -22,25 +20,10 @@ const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
-// Shell keywords that can start a simple command's words: `{ git push -f; }`, `if x; then git push -f; fi`, `! cmd`.
-const KEYWORDS = new Set(["{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done", "while", "until"]);
-const WRAPPERS = new Set(["sudo", "env", "nohup", "nice", "time", "command", "exec", "timeout", "gtimeout", "xargs", "stdbuf"]);
-// Per wrapper, the options that take the next word as their value (`sudo -u bob`, `env --unset X`, `nice -n 5`).
-// A wrapper's other options take none, so `env -i git push -f` still reaches git.
-const VALUE_OPTS: Record<string, Set<string>> = {
-	sudo: new Set(["-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-T", "-D", "--user", "--group", "--close-from", "--host", "--prompt", "--role", "--type", "--other-user", "--chdir", "--command-timeout"]),
-	env: new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
-	nice: new Set(["-n", "--adjustment"]),
-	timeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
-	gtimeout: new Set(["-k", "-s", "--kill-after", "--signal"]),
-	xargs: new Set(["-n", "-P", "-L", "-s", "-d", "-a", "-E", "-I", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--max-lines", "--max-chars"]),
-	stdbuf: new Set(["-i", "-o", "-e", "--input", "--output", "--error"]),
-};
 // git global options that take the next word as their value.
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
 
-const base = (w: string) => w.slice(w.lastIndexOf("/") + 1);
 const isHolds = (w: string) => base(w) === HOLDS;
 
 /**
@@ -109,31 +92,6 @@ function simpleCommands(line: string, dirs: (string | undefined)[], remote = fal
 	return out;
 }
 
-/** The command with wrappers, their options and VAR=value prefixes removed, and the program name reduced to its base. */
-function program(words: string[]): string[] {
-	let i = 0;
-	while (i < words.length) {
-		const w = words[i];
-		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || KEYWORDS.has(w)) { i++; continue; }
-		// `perl -e '...exec @ARGV' [n] cmd...` is the timeout wrapper on hosts without timeout(1)
-		if (base(w) === "perl" && words[i + 1] === "-e" && /\bexec\s+@ARGV\b/.test(words[i + 2] ?? "")) {
-			i += 3;
-			if (/^\d+$/.test(words[i] ?? "")) i++;
-			continue;
-		}
-		if (!WRAPPERS.has(base(w))) break;
-		const valued = VALUE_OPTS[base(w)] ?? new Set<string>();
-		i++;
-		while (i < words.length && (/^-/.test(words[i]) || /^\d+(\.\d+)?[smhd]?$/.test(words[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) {
-			if (valued.has(words[i]) && i + 1 < words.length) i++;
-			i++;
-		}
-	}
-	const w = words.slice(i);
-	if (w[0]) w[0] = base(w[0]);
-	return w;
-}
-
 function gitPush(w: string[], raw: string[]): string | undefined {
 	let i = 1;
 	while (i < w.length && w[i].startsWith("-")) i += GIT_VALUE_OPTS.has(w[i]) ? 2 : 1;
@@ -184,7 +142,7 @@ const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 // gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
 
-function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Set<string>, host: Host, ready: boolean): string | undefined {
+function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string>, host: Host, ready: boolean): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
@@ -260,7 +218,7 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 }
 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
-export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
+export function checkBash(command: string, owned: ReadonlySet<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
 	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
 	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
 	// bodies included. The bare reads go first, then quotes and backslashes, as the shell joins `ONIGIRI_READY_""ALLOWED`

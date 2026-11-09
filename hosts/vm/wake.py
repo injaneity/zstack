@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to, on failures only. Best effort.
 
-  wake.py <kind> <message> [field=value ...]   a pi session mid-run that reports itself blocked or failed
-  wake.py --exit <rc> <session-id>             a launcher after pi exits: pi-failed with rc when rc is not 0
+  wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]
 
-Only pi-failed from --exit and a mid-run kind in WAKES POST. Everything else (pi-done, pr-opened, question) logs "not sent" and
-exits 0: the periodic pickup run collects finished runs from their run.rc and report, and a session puts a question
-for Zane in its report's questions: list.
-
-<kind> is a lowercase slug the sender picks. The body keeps the merge job's keys (kind, id, pr, reason,
-time) so the routine reads it the same way: <message> goes in reason, id defaults to $PI_SESSION_ID (pi sets it in
-a session's shell), pr=N fills pr, and every other field rides alongside with source=pi and host. ONIGIRI_WAKE_DRY=1 prints the body and sends
-nothing. Exits 0 whatever happens to the POST (2 on bad usage) and prints one log-safe status line on stderr.
-The key is only in KEY_FILE; a host without it skips with "webhook not configured".
+A session that cannot go on sends blocked or failed with pr=. bin/pi-run sends failed when a run exits non-zero, and done
+when it exits 0 and its brief has a `wake: finish` line, both with rc, report and prs. Any other kind exits 2: a finished
+run is collected by the pickup (bin/pi-run list and collect), and a question goes in the report.
+The body keeps the merge job's keys (kind, id, pr, reason, time) with source=pi and host; id is $PI_SESSION_ID.
+ONIGIRI_WAKE_DRY=1 prints the body and sends nothing. Exits 0 whatever happens to the POST and prints one log-safe
+status line on stderr. The key is only in KEY_FILE; a host without it skips with "webhook not configured".
 """
 import json
 import os
@@ -29,10 +25,8 @@ from zoneinfo import ZoneInfo
 URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
 KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
-KIND = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
-FIELD = re.compile(r"([a-z][a-z0-9_]{0,31})=(.{0,500})", re.S)
-RESERVED = {"kind", "reason", "time", "source"}
-WAKES = {"blocked", "failed"}   # mid-run kinds that POST; pi-failed is the launcher's, from --exit only
+KINDS = ("blocked", "failed", "done")
+FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r".+", "prs": r"\S+"}
 
 
 def now():
@@ -65,37 +59,16 @@ def send(body, attempts=3, timeout=5):
     return status
 
 
-def event(kind, message, fields):
-    """The body for one pi event. fields are already parsed (name -> str)."""
-    body = {"kind": kind, "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": message,
-            "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
-    for k, v in fields.items():
-        body[k] = int(v) if k == "pr" and v.isdigit() else v
-    return body
-
-
 def main(argv):
-    usage = "usage: wake.py <kind> <message> [field=value ...] | wake.py --exit <rc> <session-id>"
-    wakes = bool(argv) and argv[0] in WAKES
-    if len(argv) == 3 and argv[0] == "--exit" and argv[1].isdigit() and argv[2]:
-        rc, sid = argv[1:]
-        wakes = rc != "0"
-        argv = ["pi-done" if rc == "0" else "pi-failed", f"{sid} exited rc={rc}", f"rc={rc}", f"id={sid}"]
-    if len(argv) < 2 or not KIND.fullmatch(argv[0]) or not argv[1].strip():
-        print(f"{usage}\n<kind> is a lowercase slug like blocked or pi-done; <message> is not empty", file=sys.stderr)
+    fields = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
+    if (len(argv) < 2 or argv[0] not in KINDS or not argv[1].strip() or len(fields) != len(argv) - 2
+            or not all(k in FIELDS and re.fullmatch(FIELDS[k], v) for k, v in fields.items())):
+        print("usage: wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]", file=sys.stderr)
         return 2
-    fields = {}
-    for a in argv[2:]:
-        m = FIELD.fullmatch(a)
-        if not m or m.group(1) in RESERVED:
-            print(f"{usage}\nbad field {a[:40]!r}: lowercase name=value, value up to 500 chars, not {sorted(RESERVED)}",
-                  file=sys.stderr)
-            return 2
-        fields[m.group(1)] = m.group(2)
-    body = event(argv[0], argv[1][:1000], fields)
-    if not wakes:
-        status = "not sent: only failures wake"
-    elif os.environ.get("ONIGIRI_WAKE_DRY"):
+    body = {"kind": argv[0], "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": argv[1][:1000],
+            "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
+    body.update({k: int(v) if k in ("pr", "rc") else v.split(",") if k == "prs" else v for k, v in fields.items()})
+    if os.environ.get("ONIGIRI_WAKE_DRY"):
         print(json.dumps(body))
         status = "not sent: dry run"
     else:

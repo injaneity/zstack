@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { checkBash, checkWrite, type Host, mergeOwned, readyAllowed } from "./rules.ts";
+import { checkBash, checkWrite, type Host, MERGE_OWNED, readyAllowed } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -24,14 +24,13 @@ function originRepo(dir: string): string | null | undefined {
 const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export default function (pi: ExtensionAPI) {
-	const owned = mergeOwned();
 	const ready = readyAllowed();
 	// read once, then gone: the session's bash and any pi it starts inherit no grant
 	delete process.env.ONIGIRI_READY_ALLOWED;
 	pi.on("tool_call", (event, ctx) => {
 		const input = event.input as { command?: unknown; path?: unknown };
 		const reason =
-			event.toolName === "bash" ? checkBash(String(input.command ?? ""), owned, host, ctx.cwd, ready) :
+			event.toolName === "bash" ? checkBash(String(input.command ?? ""), MERGE_OWNED, host, ctx.cwd, ready) :
 			event.toolName === "write" || event.toolName === "edit" ? checkWrite(String(input.path ?? "")) : undefined;
 		return reason ? { block: true, reason } : undefined;
 	});

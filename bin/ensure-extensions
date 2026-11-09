@@ -1,8 +1,8 @@
 #!/bin/bash
 # ensure-extensions: make sure the third-party pi packages every zstack session loads are installed for this
-# agent dir, at the pinned version. The launchers run it after ensure-package-main, so every role gets them.
+# agent dir, at the pinned version. bin/pi-run runs it after ensure-package-main, so every role gets them.
 # Prints "extensions: <source> present" or "extensions: installed <source>". Exit 1 with the reason on stderr
-# when pi is missing or an install fails; the launcher then refuses to start.
+# when pi is missing or an install fails; bin/pi-run then refuses to start.
 # Today the list is one package, FFF's file and content search tools (fffind, ffgrep, fff-multi-grep).
 set -u
 packages=("npm:@ff-labs/pi-fff@0.11.0")

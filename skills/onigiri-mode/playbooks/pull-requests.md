@@ -1,6 +1,6 @@
 ### Pull requests
 
-Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Hard rules decides who merges it. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR, and is Land's verify step for them.
+Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Hard rules decides who merges it. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR (a review), and is Land's verify step for them. A review launch runs as role `coding`, and the `verifier` does all of its verification.
 
 ## Open
 

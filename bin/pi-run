@@ -1,35 +1,285 @@
-#!/bin/bash
-# pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
-# Starts one print-mode pi session with onigiri-mode's Hard rules appended to its system prompt.
-set -eu
-usage() {
-  cat <<'USAGE'
-usage: pi-run <session-id> [<provider> <model>] <promptfile> [extra pi args...]
+#!/usr/bin/env python3
+"""pi-run: the one launcher, and the only writer of a run's state. The model is bin/PiRun.tla (chart: bin/PiRun.mmd).
 
-A first word that is a file with a / or . in its name is the prompt file.
-Model: <provider> <model> when given, otherwise pi's own default (defaultProvider and
-defaultModel in <agent dir>/settings.json, or what `pi` picks with none set).
+  pi-run <id> <role> <brief> [extra pi args...]   start a detached pi session in $ONIGIRI_ROOT/review/<id>
+  pi-run collect <id>                             take a finished run's result, exactly once
+  pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc>
 
-The "## Hard rules" section of skills/onigiri-mode/SKILL.md (bin/hard-rules) is appended to the
-system prompt. Without it pi-run exits 2 and starts nothing.
+A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake}. step() is the whole lifecycle:
 
-pi-run sources no profile. Export your provider's credentials before calling it.
-USAGE
-}
-case "${1:-}" in -h|--help) usage; exit 0;; '') usage >&2; exit 2;; esac
-[ $# -ge 2 ] || { usage >&2; exit 2; }
-pkg="$(cd "$(dirname "$0")/.." && pwd)"
-session=$1; shift
-args=(--session-id "$session")
-# The first word is the brief when it is a file and either looks like a path (has a / or .), which no
-# provider name does, or no file follows it as a third word. Otherwise it and the next are provider and model.
-case "$1" in */*|*.*) pathlike=1;; *) pathlike=0;; esac
-if ! { [ -f "$1" ] && { [ $pathlike = 1 ] || [ $# -lt 3 ] || [ ! -f "$3" ]; }; }; then
-  [ $# -ge 3 ] && [ "${1#-}" = "$1" ] && [ "${2#-}" = "$2" ] || { usage >&2; exit 2; }
-  args+=(--provider "$1" --model "$2"); shift 2
-fi
-prompt=$1; shift
-[ -r "$prompt" ] || { echo "pi-run: cannot read prompt file $prompt" >&2; exit 2; }
-rules=$("$pkg/bin/hard-rules") || exit 2
-args+=(--append-system-prompt "$rules")
-exec pi "${args[@]}" "$@" -p -- "$(cat "$prompt")"
+  (no file) or collected --start-->  running     attempt + 1; refused while the last result is not collected
+  running                --exit--->  exited      records pi's rc and the wake it sends: failed when rc != 0, done
+                                                 when rc is 0 and the brief has a `wake: finish` line, else none
+  exited or lost         --collect-> collected   the pickup's one command; a second collect is refused
+
+lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
+transition holds flock on the review dir, so two launchers or a launcher and a collect never interleave.
+Exit codes: 0 done, 2 usage, 3 refused by the state, 4 setup failed. PI_RUN_DRY=1 checks a start and changes nothing.
+
+$ONIGIRI_HOST names hosts/<name>/host.sh, sourced with the subcommand as $1 for the host's paths and env
+(ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief). The role picks provider and
+model through bin/model-for. onigiri-mode's Hard rules (bin/hard-rules) are appended to the system prompt.
+"""
+import fcntl
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
+ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+USAGE = "usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect <id> | pi-run list [<state>...]"
+
+
+class Refused(Exception):
+    pass
+
+
+def step(run, event, alive=False, **f):
+    """The transition function: the run after `event`, or Refused. run is None before the first start."""
+    s = run["state"] if run else "absent"
+    if s == "running" and not alive and event != "exit":
+        s = "lost"
+    if event == "start" and s in ("absent", "collected"):
+        return {"state": "running", "attempt": (run or {}).get("attempt", 0) + 1, "pid": f["pid"], "start": f["start"], "rc": None,
+                "wake_finish": f["wake_finish"], "wake": None}
+    if event == "exit" and s == "running" and run["pid"] == f["pid"]:
+        wake = "failed" if f["rc"] else "done" if run.get("wake_finish") else None
+        return {**run, "state": "exited", "rc": f["rc"], "wake": wake}
+    if event == "collect" and s in ("exited", "lost"):
+        return {**run, "state": "collected"}
+    raise Refused({
+        ("start", "running"): f"already running (pid {run and run['pid']})",
+        ("start", "exited"): f"attempt {run and run['attempt']} exited rc={run and run['rc']} and is not collected",
+        ("start", "lost"): f"attempt {run and run['attempt']} was lost and is not collected",
+        ("collect", "running"): "still running",
+    }.get((event, s), f"no {event} from {s}"))
+
+
+def starttime(pid):
+    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                       env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"})
+    return r.stdout.strip()
+
+
+def alive(run):
+    """The run's supervisor is the pid it recorded, or its process group still has members (pi outlived a KILL).
+    A pid is never reused while a group with that id exists, so a reused pid (another start time) means both are gone."""
+    if not run or run["state"] != "running":
+        return False
+    now = starttime(run["pid"])
+    if now:
+        return now == run["start"]
+    try:
+        os.killpg(run["pid"], 0)
+        return True
+    except OSError:
+        return False
+
+
+def read_json(p):
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        return json.load(f)
+
+
+class Run:
+    """One review dir under flock. `with Run(d) as r:` reads r.run; r.write() replaces run.json atomically."""
+    def __init__(self, d):
+        self.d, self.path = d, os.path.join(d, "run.json")
+
+    def __enter__(self):
+        self.fd = os.open(self.d, os.O_RDONLY)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        self.run = read_json(self.path)
+        return self
+
+    def write(self, run):
+        with open(self.path + ".tmp", "w") as f:
+            json.dump(run, f)
+        os.replace(self.path + ".tmp", self.path)
+        self.run = run
+
+    def __exit__(self, *a):
+        os.close(self.fd)
+
+
+def die(code, msg):
+    print(f"pi-run: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def host_env(cmd):
+    env = dict(os.environ)
+    host = env.get("ONIGIRI_HOST")
+    if host:
+        f = os.path.join(PKG, "hosts", host, "host.sh")
+        if not os.path.isfile(f):
+            die(2, f"no host file {f}")
+        dump = "import json, os; print(json.dumps(dict(os.environ)))"
+        r = subprocess.run(["bash", "-c", '. "$1" "$2" >&2 && exec "$3" -c "$4"', "_", f, cmd, sys.executable, dump],
+                           stdout=subprocess.PIPE, text=True)
+        if r.returncode:
+            die(4, f"{f} failed (exit {r.returncode})")
+        env = json.loads(r.stdout)
+    return env, os.path.join(env.get("ONIGIRI_ROOT") or os.path.expanduser("~/onigiri"), "review")
+
+
+def supervise(d, sid, cmd, env):
+    """The forked child: owns the run until pi exits, then writes exited. Never returns."""
+    os.setsid()
+    log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    os.dup2(log, 1)
+    os.dup2(log, 2)
+    proc, got = None, []
+
+    def fwd(sig, _):
+        got.append(sig)
+        if proc:
+            proc.send_signal(sig)
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, fwd)
+    with Run(d) as r:   # blocks until the launcher has recorded this pid
+        if not r.run or r.run["pid"] != os.getpid():
+            os._exit(1)
+        print(f"== attempt {r.run['attempt']}", flush=True)
+    rc = None
+    if not got:
+        try:
+            proc = subprocess.Popen(cmd, cwd=d, env=env)
+        except OSError as e:
+            print(f"pi-run: cannot start pi: {e}", flush=True)
+            rc = 127
+        if got and proc:
+            proc.send_signal(got[0])
+    if rc is None:
+        rc = 128 + got[0] if proc is None else proc.wait()
+    rc = 128 - rc if rc < 0 else rc
+    with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc)
+        if done["wake"]:
+            try:   # best effort: a wake that cannot even start must not cost the exit record
+                subprocess.run([sys.executable, WAKE, done["wake"], f"{sid} exited rc={rc}", f"rc={rc}",
+                                *report_fields(d, done["attempt"])], env=env)
+            except OSError as e:
+                print(f"pi-run: wake not sent: {e}", flush=True)
+        r.write(done)
+    os._exit(rc)
+
+
+def report_fields(d, attempt):
+    """report= the run's log (pi -p prints the final report there) and prs= the PR links this attempt's part of it names."""
+    log = os.path.join(d, "run.log")
+    try:
+        with open(log, errors="replace") as f:
+            text = f.read().split(f"== attempt {attempt}\n")[-1]
+    except OSError:   # a missing log must not cost the exit record
+        text = ""
+    prs = dict.fromkeys(re.findall(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", text))
+    return [f"report={log}"] + ([f"prs={','.join(prs)}"] if prs else [])
+
+
+def check_start(d, sid, run=False):
+    if run is False:
+        run = read_json(os.path.join(d, "run.json"))
+    try:
+        step(run, "start", alive(run), pid=0, start="", wake_finish=False)
+    except Refused as e:
+        die(3, f"{sid}: {e}")
+
+
+def start(sid, role, brief, extra):
+    if not os.environ.get("ZSTACK_ENSURED"):
+        if subprocess.run([os.path.join(PKG, "bin", "ensure-package-main")], stdout=sys.stderr).returncode:
+            sys.exit(4)
+        os.execve(sys.executable, [sys.executable, os.path.realpath(__file__), sid, role, brief, *extra], {**os.environ, "ZSTACK_ENSURED": "1"})
+    os.environ.pop("ZSTACK_ENSURED")
+    pm = subprocess.run([os.path.join(PKG, "bin", "model-for"), role], capture_output=True, text=True)
+    if pm.returncode:
+        die(2, pm.stderr.strip())
+    provider, model = pm.stdout.split()
+    if not os.path.isfile(brief) or not os.access(brief, os.R_OK):
+        die(2, f"cannot read brief {brief}")
+    env, root = host_env("dry" if os.environ.get("PI_RUN_DRY") else "start")
+    prefix = env.get("ONIGIRI_BRIEF_PREFIX")
+    text = "".join(open(f).read() for f in (prefix, brief) if f)
+    d = os.path.join(root, sid)
+    check_start(d, sid)   # refuse before setup; checked again under the lock below
+    if os.environ.get("PI_RUN_DRY"):
+        print(f"pi-run: dry run, would start {sid} in {d} as role {role}: {provider} {model}")
+        return 0
+    if subprocess.run([os.path.join(PKG, "bin", "ensure-extensions")], stdout=sys.stderr, env=env).returncode:
+        sys.exit(4)
+    rules = subprocess.run([os.path.join(PKG, "bin", "hard-rules")], capture_output=True, text=True)
+    if rules.returncode:
+        die(2, rules.stderr.strip())
+    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in text.splitlines() else "0")
+    cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
+           "--append-system-prompt", rules.stdout.rstrip("\n"), *extra, "-p", "--", text]
+    os.makedirs(d, exist_ok=True)
+    with Run(d) as r:
+        check_start(d, sid, r.run)
+        with open(os.path.join(d, "brief.full.md"), "w") as f:
+            f.write(text)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        pid = os.fork()
+        if pid == 0:
+            os.close(r.fd)   # the lock stays the launcher's until run.json names this child
+            try:
+                supervise(d, sid, cmd, env)
+            finally:
+                os._exit(1)
+        r.write(step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines()))
+    print(f"pi-run: started {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
+    return 0
+
+
+def collect(sid):
+    _, root = host_env("collect")
+    d = os.path.join(root, sid)
+    if not os.path.exists(os.path.join(d, "run.json")):
+        die(3, f"{sid}: nothing to collect")
+    with Run(d) as r:
+        try:
+            r.write(step(r.run, "collect", alive(r.run)))
+        except Refused as e:
+            die(3, f"{sid}: {e}")
+    rc = r.run["rc"]
+    print(f"{sid} attempt={r.run['attempt']} " + (f"rc={rc}" if rc is not None else "lost"))
+    return 0
+
+
+def list_runs(states):
+    _, root = host_env("list")
+    for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        p = os.path.join(root, sid, "run.json")
+        if not os.path.exists(p):
+            continue
+        run = read_json(p)
+        s = "lost" if run["state"] == "running" and not alive(run) else run["state"]
+        if not states or s in states:
+            print(f"{sid} {s} attempt={run['attempt']} rc={run['rc']}")
+    return 0
+
+
+def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__)
+        return 0
+    if len(argv) == 2 and argv[0] == "collect" and ID.fullmatch(argv[1]):
+        return collect(argv[1])
+    if argv[:1] == ["list"]:
+        return list_runs(argv[1:])
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "list"):
+        return start(argv[0], argv[1], argv[2], argv[3:])
+    die(2, USAGE)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

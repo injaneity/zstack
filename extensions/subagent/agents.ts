@@ -1,6 +1,7 @@
 // Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/agents.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// Unchanged except that the unused formatAgentList export is removed. The zstack changes are in index.ts.
+// zstack loads only the user's agents (<agent dir>/agents/), and the verifier from the package itself: project-local
+// agents, their scope and trust are removed, with the unused formatAgentList export. The other zstack changes are in index.ts.
 
 /**
  * Agent discovery and configuration
@@ -8,9 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-
-export type AgentScope = "user" | "project" | "both";
+import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export interface AgentConfig {
 	name: string;
@@ -18,13 +17,7 @@ export interface AgentConfig {
 	tools?: string[];
 	model?: string;
 	systemPrompt: string;
-	source: "user" | "project";
 	filePath: string;
-}
-
-export interface AgentDiscoveryResult {
-	agents: AgentConfig[];
-	projectAgentsDir: string | null;
 }
 
 /**
@@ -63,7 +56,7 @@ function parseToolList(value: unknown): string[] | undefined {
 	return tools.length > 0 ? tools : undefined;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -101,7 +94,6 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			tools: parseToolList(frontmatter.tools),
 			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
 			systemPrompt: body,
-			source,
 			filePath,
 		});
 	}
@@ -109,43 +101,9 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 	return agents;
 }
 
-function isDirectory(p: string): boolean {
-	try {
-		return fs.statSync(p).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-function findNearestProjectAgentsDir(cwd: string): string | null {
-	let currentDir = cwd;
-	while (true) {
-		const candidate = path.join(currentDir, CONFIG_DIR_NAME, "agents");
-		if (isDirectory(candidate)) return candidate;
-
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
-	}
-}
-
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
-	const userDir = path.join(getAgentDir(), "agents");
-	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
-
-	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
-
-	const agentMap = new Map<string, AgentConfig>();
-
-	if (scope === "both") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	} else if (scope === "user") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-	} else {
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	}
-
-	return { agents: Array.from(agentMap.values()), projectAgentsDir };
+/** The agents installed in <agent dir>/agents/, except that `pinned` names always load from `packageDir`, so an old
+ * installed copy of the verifier's prompt can never stand in for the package's. */
+export function discoverAgents(packageDir: string, pinned: string[]): AgentConfig[] {
+	const own = loadAgentsFromDir(packageDir).filter((a) => pinned.includes(a.name));
+	return [...loadAgentsFromDir(path.join(getAgentDir(), "agents")).filter((a) => !pinned.includes(a.name)), ...own];
 }

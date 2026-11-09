@@ -3,7 +3,7 @@
 hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge stage on 6 Nov 2026.
 
 For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a
-preapprove row pinned to the head for a declared deep/human tier) and blockers() (what stops any merge: draft,
+risk tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED). next_action() turns both into one action: merge, rerun a red
 ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. A draft is a skip: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
@@ -42,8 +42,8 @@ GATE_CHECK = "ci-gate"   # the one check the gate reads: it owns red checks and 
 NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a reason to wait
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
-TIERS = ["light", "standard", "deep", "human"]
-HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
+TIERS = ["light", "standard", "deep", "human"]   # the one risk enum; a PR declaring none of these never merges
+HOLD_KINDS = ("hold", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
 PATH_MODES = ("never", "split-undone")
 SPLIT_PR = 2886
 SGT = ZoneInfo("Asia/Singapore")
@@ -52,7 +52,7 @@ ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", os.environ.get("PATH") or "/usr/bin:/bin"])}
 
 Reason = namedtuple("Reason", "code text")
-# gate codes: ci | holds-unreadable | hold | hands-off | risk. blocker codes: draft | conflict | mergeable | paused
+# gate codes: ci | holds-unreadable | hold | hands-off | no-tier | risk. blocker codes: draft | conflict | mergeable | paused
 
 
 def now():
@@ -70,7 +70,7 @@ def parse_holds(text):
     """The rows the gate reads. Every row is validated: a malformed one raises ValueError, because a hold must never
     be dropped silently. Rows only pickup reads (hands-off-user, skip-author, review-only, exception) are checked,
     not kept."""
-    h = {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}}
+    h = {"hold": set(), "path_modes": {}, "preapproved": {}}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -88,10 +88,10 @@ def parse_holds(text):
             if h["preapproved"].get(n, f[3]) != f[3]:
                 raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
             h["preapproved"][n] = f[3]
-        elif kind in ("hold", "no-move"):
+        elif kind == "hold":
             if not re.fullmatch(r"#?\d+", target):
-                raise ValueError(f"holds file line {ln}: {kind} needs a PR number")
-            h["hold" if kind == "hold" else "no_move"].add(int(target.lstrip("#")))
+                raise ValueError(f"holds file line {ln}: hold needs a PR number")
+            h["hold"].add(int(target.lstrip("#")))
         elif kind == "hands-off-path":
             mode = f[3][len("mode="):].strip() if f[3].startswith("mode=") else "never"
             if mode not in PATH_MODES:
@@ -181,17 +181,14 @@ def hands_off_verdict(paths, patches, holds):
 
 # ---------------- checks ----------------
 
-def norm_tier(t):
-    return {"low": "light", "light": "light", "standard": "standard", "high": "deep", "deep": "deep",
-            "human": "human"}.get((t or "").strip().lower())
+RISK = re.compile(rf"risk: *({'|'.join(TIERS)})\b")
 
 
 def declared_risk(labels, body):
-    """The strictest tier among risk:<tier> labels and `risk:` body lines, or None."""
-    found = [norm_tier(x.split(":", 1)[1]) for x in labels if x.startswith("risk:")]
-    found += [norm_tier(t) for t in re.findall(r"^risk: *(\w+)", body or "", re.M)]
-    known = [t for t in found if t]
-    return max(known, key=TIERS.index) if known else None
+    """The strictest tier among risk:<tier> labels and `risk:` body lines, or None. Only TIERS words count."""
+    found = [m.group(1) for x in labels if (m := RISK.fullmatch(x.replace("risk:", "risk: ", 1)))]
+    found += RISK.findall("\n".join(line for line in (body or "").splitlines() if line.startswith("risk:")))
+    return max(found, key=TIERS.index) if found else None
 
 
 def check_name(c):
@@ -245,9 +242,9 @@ def check_state(rollup):
 def gate(pr, holds, hands_off=None, notes=None):
     """The merge gate: exactly three checks at the PR head, every one run, returning [Reason] (empty = pass).
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
-    2. No hold row: hold, no-move, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
+    2. No hold row: hold, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
        holds None (the file is unreadable) holds every PR.
-    3. A declared deep/human tier has a preapprove row at exactly this head. An undeclared tier does not block."""
+    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head."""
     notes = [] if notes is None else notes
     R, n, head = [], pr.get("number"), pr["headRefOid"]
     ci = [conclusion(c) for c in latest_checks(pr.get("statusCheckRollup")) if check_name(c) == GATE_CHECK]
@@ -257,19 +254,21 @@ def gate(pr, holds, hands_off=None, notes=None):
         R.append(Reason("ci", f"{GATE_CHECK} {'/'.join(sorted(set(ci))) or 'missing'}"))
     if holds is None:
         R.append(Reason("holds-unreadable", "holds file unreadable: every PR counts as held"))
-    elif n in holds["hold"] or n in holds["no_move"]:
-        R.append(Reason("hold", f"hold: #{n} has a {'hold' if n in holds['hold'] else 'no-move'} row in the holds file"))
+    elif n in holds["hold"]:
+        R.append(Reason("hold", f"hold: #{n} has a hold row in the holds file"))
     elif hands_off and (hit := hands_off()):
         if hit[0]:
             R.append(Reason("hands-off", hit[1]))
         else:
             notes.append(hit[1])
     tier, pre = declared_risk(pr.get("labels") or [], pr.get("body")), (holds or {}).get("preapproved", {}).get(n)
-    if tier in ("deep", "human") and pre != head:
+    if tier is None:
+        R.append(Reason("no-tier", f"no risk tier ({'|'.join(TIERS)})"))
+    elif tier in ("deep", "human") and pre != head:
         R.append(Reason("risk", f"declared {tier}: needs Zane"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
-        notes.append(f"risk {tier or 'undeclared'}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
+        notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
     return R
 
 
@@ -286,7 +285,7 @@ def blockers(pr, paused):
     return R
 
 
-SKIP_CODES = {"holds-unreadable", "hold", "draft", "paused"}   # logged, nobody woken
+SKIP_CODES = {"holds-unreadable", "hold", "no-tier", "draft", "paused"}   # logged, nobody woken
 BUFFER_CODES = {"hands-off", "risk", "conflict"}      # needs onigiri or Zane, buffered once per head
 
 
@@ -526,7 +525,7 @@ class Job:
             print(f"holds file unreadable: {e}")
         reasons, notes = self.evaluate(p, holds)
         act, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
-        gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "risk"}
+        gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk"}
         lines = [f"{SHORT}#{n} {p.get('state', '')} by {(p.get('author') or {}).get('login', '?')} at {p['headRefOid']}: "
                  f"{(p.get('title') or '')[:90]}", f"gate: {'pass' if not gate_codes & {r.code for r in reasons} else 'fail'}"]
         lines += [f"  {'gate' if r.code in gate_codes else 'blocker'} [{r.code}] {r.text}" for r in reasons]
