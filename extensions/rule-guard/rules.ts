@@ -8,10 +8,11 @@ export function mergeOwned(env = process.env.ONIGIRI_MERGE_OWNED ?? ""): Set<str
 	return new Set(env.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean));
 }
 
-/** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory, and whether a path
- * (absolute, or starting with ~) is an existing directory. */
-export interface Host { repoAt(dir: string): string | undefined; isDir(p: string): boolean }
-const NO_HOST: Host = { repoAt: () => undefined, isDir: () => false };
+/** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
+ * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
+ * with ~) is an existing file. */
+export interface Host { repoAt(dir: string): string | null | undefined; isFile(p: string): boolean }
+const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
@@ -41,11 +42,33 @@ const isHolds = (w: string) => base(w) === HOLDS;
  * (`cd x || gh ...`), so a command keeps the directories from before each `cd` too; undefined is one that can't be
  * told (`cd ~/x`, `cd $X`, or a remote shell).
  */
-interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[] }
+interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; remote: boolean }
+const REMOTE = new Set(["ssh", "vm"]);
 
-function simpleCommands(line: string, dirs: (string | undefined)[], depth = 0): Cmd[] {
+/**
+ * The line with each here-document body removed unless a shell reads it: a `python3 - <<'EOF'` script or a
+ * `cat > f <<EOF` body is data, not commands, while `bash <<EOF` and `ssh host <<EOF` run theirs. A body with no
+ * closing line is kept, so an unclosed or quoted `<<` hides nothing.
+ */
+function stripHeredocs(line: string): string {
+	const lines = line.split("\n");
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		out.push(lines[i]);
+		for (const m of lines[i].matchAll(/<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g)) {
+			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
+			if (end < 0) continue;
+			const before = commands(lines[i].slice(0, m.index)).pop() ?? [];
+			if (SHELLS.has(program(before)[0] ?? "")) continue;
+			lines.splice(i + 1, end - i - 1);
+		}
+	}
+	return out.join("\n");
+}
+
+function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0): Cmd[] {
 	const out: Cmd[] = [];
-	for (const words of commands(line)) {
+	for (const words of commands(stripHeredocs(line))) {
 		const w = program(words);
 		if (w[0] === "cd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
 			const to = w[1] ?? "~";
@@ -53,9 +76,9 @@ function simpleCommands(line: string, dirs: (string | undefined)[], depth = 0): 
 			dirs = [...dirs, /^[~$]/.test(to) ? undefined : to.startsWith("/") ? path.posix.resolve(to) : last && path.posix.resolve(last, to)];
 			continue;
 		}
-		out.push({ words: w, raw: words, dirs });
+		out.push({ words: w, raw: words, dirs, remote });
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
-			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], depth + 1));
+			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1));
 	}
 	return out;
 }
@@ -66,6 +89,12 @@ function program(words: string[]): string[] {
 	while (i < words.length) {
 		const w = words[i];
 		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || KEYWORDS.has(w)) { i++; continue; }
+		// `perl -e '...exec @ARGV' [n] cmd...` is the timeout wrapper on hosts without timeout(1)
+		if (base(w) === "perl" && words[i + 1] === "-e" && /\bexec\s+@ARGV\b/.test(words[i + 2] ?? "")) {
+			i += 3;
+			if (/^\d+$/.test(words[i] ?? "")) i++;
+			continue;
+		}
 		if (!WRAPPERS.has(base(w))) break;
 		const valued = VALUE_OPTS[base(w)] ?? new Set<string>();
 		i++;
@@ -122,11 +151,18 @@ function ghApiWrites(w: string[]): boolean {
 	return method ? method !== "GET" : fields;
 }
 
+// GraphQL mutations that ready, merge or auto-merge a PR. The query names a node id, not a repo, so any owned repo counts.
+const GRAPHQL_MERGE = /\b(markPullRequestReadyForReview|mergePullRequest|enablePullRequestAutoMerge)\b/;
+
 function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: Host["repoAt"]): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
-	const act =
-		w[1] === "pr" && w[2] === "merge" ? "`gh pr merge`" :
+	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a)))
+		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
+	const help = w.includes("--help") || w.includes("-h");
+	const act = help ? undefined :
+		w[1] === "pr" && w[2] === "merge" && !w.includes("--disable-auto") ? "`gh pr merge`" :
+		w[1] === "pr" && w[2] === "ready" && !w.includes("--undo") ? "`gh pr ready` (a draft is a hold)" :
 		w[1] === "run" && w[2] === "rerun" ? "`gh run rerun`" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
@@ -134,7 +170,7 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: Host[
 	const env = raw.slice(0, raw.length - w.length).map((a) => a.match(/^GH_REPO=(.+)$/)?.[1]).find(Boolean);
 	const named = ghNamedRepo(w) ?? repoName(env);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
-	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : repoAt(d)));
+	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
 	return hit ? `${act} in ${hit}: the merge job is its only merger (policy, Merging)` : undefined;
@@ -151,7 +187,7 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	return out;
 }
 
-function writesHolds(w: string[], dir: string | undefined, host: Host): boolean {
+function writesHolds(w: string[], dir: string | undefined, remote: boolean, host: Host): boolean {
 	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word). A word with
 	// whitespace in it was quoted, so its `>` is text: `echo "x >hold-prs.txt"` writes nothing.
 	for (let i = 0; i < w.length; i++) {
@@ -173,13 +209,14 @@ function writesHolds(w: string[], dir: string | undefined, host: Host): boolean 
 		case "cp": case "install": case "ln": case "ditto":
 			// with -t DIR every operand is a source copied into DIR under its own name
 			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
-			// the destination is the file itself, or a directory that receives a source named hold-prs.txt
+			// the destination is the file itself, or a directory that already holds a hold-prs.txt the copy replaces.
+			// A copy into a directory without one (a test fixture) creates a new file and edits no holds.
 			if (ops.length < 2) return false;
 			const dest = ops[ops.length - 1];
 			if (isHolds(dest)) return true;
 			if (!ops.slice(0, -1).some(isHolds)) return false;
-			const abs = /^[/~]/.test(dest) ? dest : dir === undefined || dest.startsWith("$") ? undefined : path.posix.resolve(dir, dest);
-			return dest.endsWith("/") || abs === undefined || host.isDir(abs);
+			const abs = remote || dest.startsWith("$") ? undefined : /^[/~]/.test(dest) ? dest : dir && path.posix.resolve(dir, dest);
+			return abs === undefined || host.isFile(path.posix.join(abs, HOLDS));
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
 	}
@@ -189,7 +226,7 @@ function writesHolds(w: string[], dir: string | undefined, host: Host): boolean 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. */
 export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
-		if (writesHolds(c.words, c.dirs[c.dirs.length - 1], host))
+		if (writesHolds(c.words, c.dirs[c.dirs.length - 1], c.remote, host))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, (d) => host.repoAt(d));
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;

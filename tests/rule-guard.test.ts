@@ -5,10 +5,11 @@ import { checkBash, checkWrite, mergeOwned } from "../extensions/rule-guard/rule
 
 const OWNED = mergeOwned("trycua/cua");
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
-const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : undefined);
-// and a fake filesystem whose only directories are these
-const DIRS = new Set(["/srv/onigiri", "/zs/sync"]);
-const host = { repoAt, isDir: (p: string) => DIRS.has(p.replace(/\/$/, "")) };
+// and /scratch is a directory outside any checkout
+const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
+// and a fake filesystem whose only holds files are these
+const FILES = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt"]);
+const host = { repoAt, isFile: (p: string) => FILES.has(p) };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
@@ -46,6 +47,8 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 		"! git push --force",
 		"env -i git push -f",
 		"env -i PATH=/usr/bin git push -f",
+		"perl -e 'alarm 20; exec @ARGV' git push -f origin x",
+		"perl -e 'alarm shift; exec @ARGV' 300 git push --no-verify",
 	])
 		blocked(c);
 });
@@ -102,8 +105,34 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
 	allowed("gh api repos/trycua/cua/actions/runs/9/rerun");
 	allowed("gh pr merge 33 -R injaneity/zstack", inCua);
+	allowed("gh pr merge 1", "/scratch");
+	allowed("gh pr merge --help", inCua);
+	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
 	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);
 	assert.deepEqual([...mergeOwned(" trycua/cua , A/B ")], ["trycua/cua", "a/b"]);
+});
+
+test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", () => {
+	blocked("gh pr ready 7040 -R trycua/cua");
+	blocked("gh pr ready 7040", inCua);
+	blocked("gh pr ready https://github.com/trycua/cua/pull/7040");
+	blocked(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	blocked(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	blocked(`gh api graphql -F query=@m.graphql -f q='enablePullRequestAutoMerge'`);
+	allowed("gh pr ready 7040 -R trycua/cua --undo");
+	allowed("gh pr ready 33 -R injaneity/zstack", inCua);
+	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);
+	allowed("gh pr create --draft --title x --body y", inCua);
+	allowed("gh pr view 7040 --json isDraft", inCua);
+});
+
+test("here-document bodies are data unless a shell reads them", () => {
+	allowed("cd /zs && python3 - <<'EOF'\nsub('docs', 'never gh pr merge 1 or git push -f')\nEOF");
+	allowed("cat > /tmp/body.md <<EOF\nwe never run gh pr merge here\nEOF\ngh pr create --body-file /tmp/body.md", inCua);
+	blocked("python3 - <<'EOF'\nx\nEOF\ngit push -f");
+	blocked("bash <<'EOF'\ngit push --force\nEOF");
+	blocked("~/onigiri-vm/vm <<'EOF'\necho x >> /srv/onigiri/hold-prs.txt\nEOF");
+	blocked("cat <<EOF\nx"+"\ngit push -f"); // no closing line: nothing is stripped
 });
 
 test("writes to the holds file are blocked; reads run", () => {
@@ -127,6 +156,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"echo x>>/srv/onigiri/hold-prs.txt",
 		"cp -t /srv/onigiri /tmp/hold-prs.txt",
 		"cp /tmp/hold-prs.txt /srv/onigiri/",
+		"cp -p /tmp/hold-prs.txt $ROOT",
+		"ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'",
 		"mv /tmp/hold-prs.txt /srv/onigiri",
 		"cp /tmp/hold-prs.txt sync",
 		"mv /srv/onigiri/hold-prs.txt /tmp/holds-copy",
@@ -146,6 +177,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp hold-prs.txt /tmp/x.txt",
 		'echo "x >hold-prs.txt"',
 		"cp /srv/onigiri/hold-prs.txt ~/scratch/holds.bak-1108",
+		"cp ~/onigiri/sync/hold-prs.txt dry/root/", // a fixture copy into a directory with no holds file
+		"cp /srv/onigiri/hold-prs.txt /tmp",
 	])
 		allowed(c);
 	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);

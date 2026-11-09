@@ -6,16 +6,22 @@ import * as os from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { checkBash, checkWrite, type Host, mergeOwned } from "./rules.ts";
 
-function originRepo(dir: string): string | undefined {
+const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
+const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
+
+// Runs only for a gh merge, rerun or ready with no repo named, so ordinary calls spawn nothing.
+function originRepo(dir: string): string | null | undefined {
+	if (!stat(dir)?.isDirectory()) return undefined;
 	try {
-		const url = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000 }).trim();
+		const url = execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] }).trim();
 		return url.match(/github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/)?.[1].toLowerCase();
-	} catch {
-		return undefined;
+	} catch (e) {
+		// not a git checkout: gh has no repo to act on there, so no owned repo either
+		return /not a git repository/.test(String((e as { stderr?: unknown }).stderr)) ? null : undefined;
 	}
 }
 
-const host: Host = { repoAt: originRepo, isDir: (p) => fs.statSync(p.replace(/^~(?=\/|$)/, os.homedir()), { throwIfNoEntry: false })?.isDirectory() ?? false };
+const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false };
 
 export default function (pi: ExtensionAPI) {
 	const owned = mergeOwned();
