@@ -13,7 +13,7 @@ export const FIND_HINT =
 	`or bound it with -maxdepth ${MAX_DEPTH} or less.`;
 
 /** Split a command line into words per simple command. Quotes are honoured; expansions are left as text. */
-function commands(line: string): string[][] {
+export function commands(line: string): string[][] {
 	const out: string[][] = [];
 	let words: string[] = [];
 	let word = "";

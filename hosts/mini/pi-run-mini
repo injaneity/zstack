@@ -47,7 +47,7 @@ export PATH="$HOME/onigiri/mamba/envs/bash/bin:$PATH" CARGO_INCREMENTAL=0 CARGO_
 "$HOME/onigiri/bin/sync-from-vm.sh" || echo "pi-run-mini: sync failed, using copies from $(cat $HOME/onigiri/sync/synced-at)" >&2
 cat "$pkg/hosts/mini/host-mini.md" "$brief" > "$d/brief.full.md"
 cd "$d"; rm -f run.rc run.pid   # a stale run.pid would end the wait below before the new wrapper writes its own
-export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py"
+export ONIGIRI_WAKE="$pkg/hosts/vm/wake.py" ONIGIRI_MERGE_OWNED=${ONIGIRI_MERGE_OWNED:-trycua/cua}
 nohup /usr/bin/python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
   /bin/bash -c 'sid=$1; fin() { "$ONIGIRI_WAKE" --exit "$1" "$sid"; echo "$1" > run.rc; rm -f run.pid; exit "$1"; }
     fwd() { if [ -n "$!" ]; then kill -TERM "$!" 2>/dev/null; else fin 143; fi; }
