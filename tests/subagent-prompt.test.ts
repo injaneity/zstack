@@ -68,7 +68,7 @@ test("the builder leaves the verify skill, E2E and Lume to the verifier", () => 
 // skill, E2E or Lume, says "yourself", or runs "them", "it" or "those" (a pronoun can point back at the checks) must be
 // one of HANDOFF. Each listed sentence gives the checks to the verifier, forbids the builder to run them, or tells the
 // builder to do something else itself. Any other such sentence fails, so a new or edited one is reviewed here.
-const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills|\byourself\b|\b(re)?run (the |its |every |any )?(\w+ )?(checks?|tests?)\b|\brun (them|those)\b|\brun it\b(?! well)/i;
+const CHECKS = /\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills|\byourself\b|\b(re)?run\b[^.;!?]*\b(checks?|tests?|lanes?|suites?)\b|\brun (them|those)\b|\brun it\b(?! well)/i;
 const HANDOFF = new Set([
 	"The `verifier` subagent runs the repo verify skill, with E2E and Lume where that skill calls for them (`agents/verifier.md`).",
 	"You do not run the verify skill, E2E or Lume yourself.",
@@ -87,6 +87,9 @@ const HANDOFF = new Set([
 	"- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value.",
 	"Run it on the machine that does the work, never in the chat.",
 	"Run it through **unslop**.",
+	// how to wait on a long run, not which checks to run; the session prompt's tool-guard lines say the same
+	"Run a long build or test in the background with its output in a log and wait on it once (`wait <pid>`, or until the log shows its end marker or the pid exits), never `sleep N;",
+	"- **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass.",
 	"For a conflict, update the branch the way Hard rules' Merging section says and have the verifier rerun the checks.",
 	"After a push to an existing PR, the verifier reruns the scoped checks on the new head.",
 ]);
@@ -106,6 +109,7 @@ test("the leak check catches a builder told to run the checks itself", () => {
 		"You do not run the verify skill, E2E or Lume yourself. Then run those.",
 		"Run the checks before opening the PR.",
 		"Rerun the scoped checks on the new head.",
+		"Run the relevant unit tests before opening the PR.",
 	])
 		assert.notDeepEqual(builderLeaks(bad), [], bad);
 });
