@@ -121,7 +121,7 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(dict(p, headRefOid=H2), holds=pre),
                              ("buffer", f"declared {want}: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})"))
             self.assertEqual(verdict(dict(p, number=5901), holds=pre)[0], "buffer")
-            self.assertEqual(verdict(dict(p, isDraft=True))[0], "buffer")   # a deep draft is never readied
+            self.assertEqual(verdict(dict(p, isDraft=True))[0], "skip")   # a deep draft is never readied
         self.assertEqual(verdict(pr(labels=["risk:deep"]))[0], "buffer")    # the strictest of label and body wins
 
     def test_strictest_declared_tier(self):
@@ -151,13 +151,29 @@ class NextAction(unittest.TestCase):
         status = pr(statusCheckRollup=[{"__typename": "StatusContext", "context": "ci-gate", "state": "FAILURE"}])
         self.assertEqual(verdict(status)[0], "buffer")             # nothing to rerun
 
-    def test_pending_waits_and_drafts_are_readied(self):
+    def test_pending_waits(self):
         pending = pr(statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None), cr("x", conclusion="FAILURE")])
         self.assertEqual(verdict(pending), ("wait", "ci-gate PENDING"))
         self.assertEqual(verdict(pr(statusCheckRollup=[])), ("wait", "ci-gate missing"))
-        self.assertEqual(verdict(pr(isDraft=True)), ("ready", "draft; readied: ci-gate SUCCESS, risk light"))
-        self.assertEqual(verdict(pr(isDraft=True, statusCheckRollup=[], mergeable="UNKNOWN")),
-                         ("ready", "ci-gate missing; draft; mergeable UNKNOWN; readied: risk light"))
+
+    def test_a_draft_is_never_readied_or_merged(self):
+        """Draft means not ready. Only a person, or the session that opened it, readies a draft."""
+        held = "draft"
+        # cua#6970: draft, risk standard, "do not merge" in the body, CI not started, mergeability unknown
+        p6970 = pr(number=6970, isDraft=True, mergeable="UNKNOWN", statusCheckRollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
+                   body="**awaits Zane's decision; do not merge.**\nrisk: standard\n")
+        self.assertEqual(verdict(p6970), ("skip", f"ci-gate PENDING; {held}; mergeable UNKNOWN"))
+        # cua#7050: a light draft shown as a sample ("propose this before merging"), no hold row, CI pending
+        p7050 = pr(number=7050, isDraft=True, statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)],
+                   body="Draft: a sample. Please do not merge until the audit is reviewed.\nrisk: light\n")
+        self.assertEqual(verdict(p7050), ("skip", f"ci-gate PENDING; {held}"))
+        # and still not once its CI is green: nothing but the draft is left
+        self.assertEqual(verdict(dict(p7050, statusCheckRollup=[cr("ci-gate")])), ("skip", held))
+        # cua#7035 pattern: a draft with no hold row whose body says light; a human tier is a skip too, not a wake
+        for tier in ("light", "standard", "human"):
+            self.assertEqual(verdict(pr(number=7035, isDraft=True, body=f"risk: {tier}\n"))[0], "skip", tier)
+        self.assertNotIn("ready", {verdict(pr(isDraft=True, statusCheckRollup=r))[0]
+                                   for r in ([], [cr("ci-gate")], self.RED, [cr("ci-gate", conclusion="SKIPPED")])})
 
     def test_github_mergeability_and_pause(self):
         self.assertEqual(verdict(pr(mergeable="CONFLICTING")), ("buffer", "merge conflict"))
@@ -335,7 +351,7 @@ class Stage(unittest.TestCase):
         self.add(6309, body="risk: deep\n")
         self.add(6312, draft=True)
         self.run_()
-        self.assertEqual(self.calls, [["gh", "pr", "ready", "6312", "-R", "trycua/cua"]])
+        self.assertEqual(self.calls, [])
         self.assertIn("skipped cua#5675 hold: #5675 has a hold row in the holds file", self.events())
         self.assertEqual(sorted((b["id"], b["reason"]) for b in self.buffered()),
                          [("cua#6306", "touches impl_.rs (hands-off path, mode never; see the holds file)"),
@@ -371,7 +387,24 @@ class Stage(unittest.TestCase):
         self.assertEqual(os.listdir(self.d / "tick"), [])
         self.assertIn(f"dry-run cua#6313 {H[:9]} merge: green, ci-gate SUCCESS, risk light", out)
         self.assertIn(f"dry-run cua#5675 {H[:9]} skip: hold: #5675 has a hold row in the holds file", out)
-        self.assertIn("would-ready cua#6312", out)
+        self.assertIn(f"dry-run cua#6312 {H[:9]} skip: draft", out)
+
+    def test_drafts_stay_drafts_across_runs(self):
+        """cua#6970, cua#7050 and cua#7035/7037/7039 were readied by one run and merged by a later one."""
+        self.add(6970, draft=True, mergeable="UNKNOWN", rollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
+                 body="do not merge.\nrisk: standard\n")
+        self.add(7050, draft=True, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
+        self.add(7035, draft=True)
+        self.run_()
+        for n in (6970, 7050):   # CI finishes green between runs
+            self.prs[n].update(mergeable="MERGEABLE", statusCheckRollup=list(self.GREEN))
+        self.prs[7035]["body"] = "risk: human\n"
+        self.run_()
+        self.run_()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.buffered(), [])
+        self.assertEqual(sorted(x.split(" ", 2)[1] for x in self.events() if x.startswith("skipped")),
+                         ["cua#6970", "cua#6970", "cua#7035", "cua#7035", "cua#7050", "cua#7050"])
 
     def test_one_prs_failure_does_not_skip_the_rest(self):
         self.add(6323)
