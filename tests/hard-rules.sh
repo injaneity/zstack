@@ -25,6 +25,8 @@ mkdir -p "$tmp/pkg/bin" "$tmp/pkg/skills/onigiri-mode"
 cp "$src/bin/hard-rules" "$src/bin/pi-run" "$tmp/pkg/bin/"
 printf '# onigiri mode\n\n## Principles\n\n- x\n' > "$tmp/pkg/skills/onigiri-mode/SKILL.md"
 "$tmp/pkg/bin/hard-rules" > /dev/null 2>&1; check "no section: hard-rules exits 1" $? 1
+printf '# onigiri mode\n\n## Hard rules\n\n   \n## Principles\n\n- x\n' > "$tmp/pkg/skills/onigiri-mode/SKILL.md"
+"$tmp/pkg/bin/hard-rules" > /dev/null 2>&1; check "heading only: hard-rules exits 1" $? 1
 
 # fake pi records the --append-system-prompt it was given
 mkdir -p "$tmp/bin"

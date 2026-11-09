@@ -1,9 +1,9 @@
 #!/bin/bash
 # hard-rules: prints the "## Hard rules" section of skills/onigiri-mode/SKILL.md, the text both launchers append
-# to every session's system prompt. Exits 1 when the section is missing or empty, so a launcher never starts a
-# session with no rules.
+# to every session's system prompt. Exits 1 when the section is missing or holds no text under its heading, so a
+# launcher never starts a session with no rules.
 set -eu
 skill="$(cd "$(dirname "$0")/.." && pwd)/skills/onigiri-mode/SKILL.md"
 out=$(awk '/^## /{on = ($0 == "## Hard rules")} on' "$skill")
-[ -n "$out" ] || { echo "hard-rules: no \"## Hard rules\" section in $skill" >&2; exit 1; }
+printf '%s\n' "$out" | tail -n +2 | grep -q '[^[:space:]]' || { echo "hard-rules: no \"## Hard rules\" section with text in $skill" >&2; exit 1; }
 printf '%s\n' "$out"
