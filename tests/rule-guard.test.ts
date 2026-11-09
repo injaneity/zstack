@@ -31,6 +31,12 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 		"env -u X git push -f",
 		"nice -n 5 git push --force",
 		"timeout -k 5 60 git push -f",
+		"sudo --user bob git push -f",
+		"env --unset X git push -f",
+		"git -ccore.hooksPath=/dev/null push",
+		"git --config-env=core.hooksPath=HP push",
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push",
+		"git --git-dir /tmp/repo push -f",
 	])
 		blocked(c);
 });
@@ -72,7 +78,13 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh pr view 7031 -R trycua/cua --json state", inCua);
 	allowed("gh pr checks 7031 -R trycua/cua", inCua);
 	allowed("gh api repos/trycua/cua/pulls/123/merge");
-	allowed("cd /zs/wt && gh pr merge 33 --squash", inCua);
+	blocked("cd /zs/wt || gh pr merge 1", inCua);
+	blocked("cd /zs/wt && gh pr merge 33", inCua); // a cd can fail, so the starting checkout still counts
+	blocked("GH_REPO=trycua/cua gh pr merge 1");
+	blocked("gh api repos/trycua/cua/pulls/1/merge -f x=y -X PUT");
+	allowed("cd /zs/wt && gh pr merge 33 -R injaneity/zstack", inCua);
+	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
+	allowed("gh api repos/trycua/cua/actions/runs/9/rerun");
 	allowed("gh pr merge 33 -R injaneity/zstack", inCua);
 	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), repoAt, inCua), undefined);
 	assert.deepEqual([...mergeOwned(" trycua/cua , A/B ")], ["trycua/cua", "a/b"]);
@@ -95,6 +107,9 @@ test("writes to the holds file are blocked; reads run", () => {
 		"perl -pi -e 's/a/b/' hold-prs.txt",
 		"echo x 2>>hold-prs.txt",
 		"dd if=/tmp/x of=/srv/onigiri/hold-prs.txt",
+		"echo x>hold-prs.txt",
+		"echo x>>/srv/onigiri/hold-prs.txt",
+		"cp -t /srv/onigiri /tmp/hold-prs.txt",
 	])
 		blocked(c);
 	for (const c of [
@@ -107,7 +122,7 @@ test("writes to the holds file are blocked; reads run", () => {
 		'git commit -m "fix: use rm hold-prs.txt in docs"',
 		"tee hold-prs.txt.bak < hold-prs.txt",
 		"sed -n 1,5p hold-prs.txt",
-		"cp -t /tmp hold-prs.txt",
+		"cp hold-prs.txt /tmp/x.txt",
 	])
 		allowed(c);
 	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);

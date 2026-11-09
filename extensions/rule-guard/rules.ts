@@ -14,28 +14,37 @@ export type RepoAt = (dir: string) => string | undefined;
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const WRAPPERS = new Set(["sudo", "env", "nohup", "nice", "time", "command", "exec", "timeout", "gtimeout", "xargs", "stdbuf"]);
-// Wrapper options that take the next word as their value (`sudo -u bob`, `env -u X`, `nice -n 5`, `timeout -k 5`).
-const VALUE_OPTS = new Set(["-u", "-g", "-n", "-k", "-s", "-C", "-S", "-p", "-h", "-D", "-i", "-o", "-e"]);
+// Wrapper options that take the next word as their value (`sudo -u bob`, `env --unset X`, `nice -n 5`, `timeout -k 5`).
+const VALUE_OPTS = new Set(["-u", "-g", "-n", "-k", "-s", "-C", "-S", "-p", "-h", "-D", "-i", "-o", "-e", "-r", "-t", "-U", "-T",
+	"--user", "--group", "--unset", "--chdir", "--adjustment", "--signal", "--kill-after", "--prompt", "--host", "--role", "--type",
+	"--split-string", "--close-from", "--other-user", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--input", "--output", "--error"]);
+// git global options that take the next word as their value.
+const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
 
 const base = (w: string) => w.slice(w.lastIndexOf("/") + 1);
 const isHolds = (w: string) => base(w) === HOLDS;
 
-/** A simple command with its effective directory (undefined when a `cd` can't be resolved or it runs remotely). */
-interface Cmd { words: string[]; cwd: string | undefined }
+/**
+ * A simple command, its raw words (env prefixes included) and every directory it might run in. A `cd` may fail
+ * (`cd x || gh ...`), so a command keeps the directories from before each `cd` too; undefined is one that can't be
+ * told (`cd ~/x`, `cd $X`, or a remote shell).
+ */
+interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[] }
 
-function simpleCommands(line: string, cwd: string | undefined, depth = 0): Cmd[] {
+function simpleCommands(line: string, dirs: (string | undefined)[], depth = 0): Cmd[] {
 	const out: Cmd[] = [];
 	for (const words of commands(line)) {
 		if (words[0] === "cd") {
 			const to = words[1] ?? "~";
-			cwd = /^[~$]/.test(to) ? undefined : to.startsWith("/") ? path.posix.resolve(to) : cwd && path.posix.resolve(cwd, to);
+			const last = dirs[dirs.length - 1];
+			dirs = [...dirs, /^[~$]/.test(to) ? undefined : to.startsWith("/") ? path.posix.resolve(to) : last && path.posix.resolve(last, to)];
 			continue;
 		}
 		const w = program(words);
-		out.push({ words: w, cwd });
+		out.push({ words: w, raw: words, dirs });
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
-			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, undefined, depth + 1));
+			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], depth + 1));
 	}
 	return out;
 }
@@ -58,15 +67,13 @@ function program(words: string[]): string[] {
 	return w;
 }
 
-function gitPush(w: string[]): string | undefined {
+function gitPush(w: string[], raw: string[]): string | undefined {
 	let i = 1;
-	let hooksOff = false;
-	while (i < w.length && w[i].startsWith("-")) {
-		if (w[i] === "-c" && /^core\.hookspath=/i.test(w[i + 1] ?? "")) hooksOff = true;
-		i += w[i] === "-C" || w[i] === "-c" ? 2 : 1;
-	}
+	while (i < w.length && w[i].startsWith("-")) i += GIT_VALUE_OPTS.has(w[i]) ? 2 : 1;
 	if (w[i] !== "push") return undefined;
-	if (hooksOff) return "it overrides core.hooksPath, which skips the pre-push hook";
+	// -c core.hooksPath=, -ccore.hooksPath=, --config-env=core.hooksPath=..., or GIT_CONFIG_KEY_0=core.hooksPath
+	if ([...raw.slice(0, raw.length - w.length), ...w.slice(1, i)].some((a) => /core\.hookspath/i.test(a)))
+		return "it overrides core.hooksPath, which skips the pre-push hook";
 	for (const a of w.slice(i + 1)) {
 		if (a === "--no-verify") return "`--no-verify` skips the pre-push hook (the patent hold)";
 		if (/^--force(-with-lease|-if-includes)?(=|$)/.test(a) || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(a)) return "it force-pushes";
@@ -87,26 +94,33 @@ function ghNamedRepo(w: string[]): string | undefined {
 }
 
 function ghApiWrites(w: string[]): boolean {
+	let method: string | undefined;
+	let fields = false;
 	for (let i = 2; i < w.length; i++) {
 		const a = w[i];
 		const m = a === "-X" || a === "--method" ? w[i + 1] : a.match(/^(?:-X|--method=)(.+)$/)?.[1];
-		if (m !== undefined) return m.toUpperCase() !== "GET";
-		if (/^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF]./.test(a)) return true;
+		if (m !== undefined) method = m.toUpperCase();
+		if (/^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF]./.test(a)) fields = true;
 	}
-	return false;
+	return method ? method !== "GET" : fields;
 }
 
-function ghOwned({ words: w, cwd }: Cmd, owned: Set<string>, repoAt: RepoAt): string | undefined {
+function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, repoAt: RepoAt): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
+	const api = w[1] === "api" && ghApiWrites(w);
 	const act =
 		w[1] === "pr" && w[2] === "merge" ? "`gh pr merge`" :
 		w[1] === "run" && w[2] === "rerun" ? "`gh run rerun`" :
-		w[1] === "api" && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) && ghApiWrites(w) ? "a merge through `gh api`" :
-		w[1] === "api" && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
+		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
+		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
 	if (!act) return undefined;
-	const repo = ghNamedRepo(w) ?? (cwd === undefined ? undefined : repoAt(cwd));
-	if (repo === undefined) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
-	return owned.has(repo) ? `${act} in ${repo}: the merge job is its only merger (policy, Merging)` : undefined;
+	const env = raw.slice(0, raw.length - w.length).map((a) => a.match(/^GH_REPO=(.+)$/)?.[1]).find(Boolean);
+	const named = ghNamedRepo(w) ?? env?.toLowerCase().replace(/^(https?:\/\/)?github\.com\//, "");
+	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
+	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : repoAt(d)));
+	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
+	const hit = repos.find((r) => owned.has(r as string));
+	return hit ? `${act} in ${hit}: the merge job is its only merger (policy, Merging)` : undefined;
 }
 
 /** The words that are not options. `valued` lists options that take the next word. */
@@ -121,9 +135,9 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 }
 
 function writesHolds(w: string[]): boolean {
-	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`
+	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word)
 	for (let i = 0; i < w.length; i++) {
-		const m = w[i].match(/^(?:\d*|&)>>?\|?(.*)$/);
+		const m = w[i].match(/>>?\|?(.*)$/);
 		if (m && isHolds(m[1] || w[i + 1] || "")) return true;
 	}
 	const [p, ...all] = w;
@@ -136,7 +150,9 @@ function writesHolds(w: string[]): boolean {
 		case "sed": case "perl":
 			return args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place")) && ops.some(isHolds);
 		case "cp": case "mv": case "install": case "rsync": case "ln": case "ditto":
-			return !args.some((a) => a === "-t" || a.startsWith("--target-directory")) && ops.length >= 2 && isHolds(ops[ops.length - 1]);
+			// with -t DIR every operand is a source copied into DIR under its own name
+			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
+			return ops.length >= 2 && isHolds(ops[ops.length - 1]);
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
 	}
@@ -145,10 +161,10 @@ function writesHolds(w: string[]): boolean {
 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. */
 export function checkBash(command: string, owned: Set<string>, repoAt: RepoAt = () => undefined, cwd?: string): string | undefined {
-	for (const c of simpleCommands(command, cwd)) {
+	for (const c of simpleCommands(command, [cwd])) {
 		if (writesHolds(c.words))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
-		const why = c.words[0] === "git" ? gitPush(c.words) : ghOwned(c, owned, repoAt);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, repoAt);
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
 	}
 	return undefined;
