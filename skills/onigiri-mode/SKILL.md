@@ -42,7 +42,7 @@ license: MIT
 
 ### Checks
 
-- You write the code and a short test plan. The `verifier` subagent runs the repo verify skill, with E2E and Lume where that skill calls for them (`agents/verifier.md`). You do not run the verify skill, E2E or Lume yourself. The verification comment states only what actually ran and names anything skipped.
+- You write the code and a short test plan. Verification is the `verifier` subagent's alone, end to end: what it owns is in `agents/verifier.md`. The verification comment states only what actually ran and names anything skipped.
 - Windows and macOS platform crates are not buildable on the VM. Say in the verdict which platform checks could not run.
 - Before you call a diff done or open a PR, spawn the `verifier` subagent on the diff range. Check each finding, and report its `ran …; skipped …; result …` line in your `verified <sha>` comment. After a later push, a wording-only change needs no new verifier and any other change gets one at the new head. Only a read-only answer with no diff skips it, and says so.
 - Cargo builds into each workspace's own `target/`. Never commit it.
@@ -72,7 +72,7 @@ No invented limits: a restriction must trace to Zane's words or these rules. If 
 
 - **Restate the goal first.** Name the problem and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
 - **Name the principle that changed a decision**, and the decision it changed.
-- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. The verifier runs the repo verify skill, E2E and Lume. Never hand the user a check it could run.
+- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. Never hand the user a check the verifier could run.
 - **A cold verifier checks every diff**, when and how Hard rules' Checks says. Subagents names the agent.
 - **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
 - **Clean up your scratch.** Remove only what you created, after saving the evidence.
@@ -98,7 +98,7 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs agents installed in `<pi agen
 |---|---|---|---|
 | Explore | `explorer`, 2 to 4 at once | Diagnose, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
 | Design | `designer`, twice (`variant` 1 and 2) | Change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
-| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Required for every diff and every done claim that rests on one, in coding and research sessions alike. The verifier is the only place the repo verify skill, E2E and Lume run. Its `ran …; skipped …; result …` line is the verification you record the way Hard rules' Merging says, once you have checked each finding. |
+| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Required for every diff and every done claim that rests on one, in coding and research sessions alike, and for a review of someone else's PR. It owns all of verification (`agents/verifier.md`). Its `ran …; skipped …; result …` line is the verification you record the way Hard rules' Merging says, once you have checked each finding. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one `subagent` call per angle with `agent: explorer`. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
 - **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. A fix round's brief carries only its findings and the new range, never your logs or reasoning.

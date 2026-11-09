@@ -13,6 +13,13 @@ test("a child's prompt is its role prompt, the no-polling line and the framing l
 	assert.equal(buildChildPrompt(""), `${NO_POLLING_LINE}\n\n${ROLE_FRAMING}\n`);
 });
 
+test("the verifier is the one agent that verifies; every agent file is one of the three roles", () => {
+	const agents = fs.readdirSync(`${root}agents`).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
+	assert.deepEqual(agents, ["designer", "explorer", "verifier"]);
+	const roles = Object.keys(JSON.parse(fs.readFileSync(`${root}config/models.json`, "utf-8")).roles);
+	assert.deepEqual(roles.filter((r) => /verif|review/.test(r)), ["verifier"]);
+});
+
 for (const name of ["verifier", "explorer", "designer"]) {
 	test(`${name} gets its own role prompt and not the session's Hard rules`, () => {
 		const prompt = buildChildPrompt(body(name));
