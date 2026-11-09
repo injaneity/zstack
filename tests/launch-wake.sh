@@ -17,6 +17,7 @@ case "\$1" in
   list) echo "User packages:"; sed -n 's/^packages=("\([^"]*\)")\$/  \1/p' "$src/bin/ensure-extensions";;
   *) /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$tmp/int-ignored"
      trap 'echo TERM > "$tmp/got-sig"; exit 143' TERM; trap 'echo HUP > "$tmp/got-sig"; exit 129' HUP
+     echo "\${ONIGIRI_READY_ALLOWED-unset}" > "$tmp/seen-ready"
      echo "\$ONIGIRI_WAKE" > "$tmp/seen-wake"   # last: the signal checks wait for it, so the traps are set by then
      [ -e "$tmp/hang" ] && while :; do sleep 0.1; done
      exit \$(cat "$tmp/rc");;
@@ -105,6 +106,23 @@ check "mini: a dry run leaves no review dir" "$([ -e "$tmp/onigiri/review/mini-d
 env_run env PI_RUN_DRY=1 "$src/hosts/vm/pi-run" vm-dry coding "$tmp/brief.md" > /dev/null 2>&1
 check "vm: a dry run leaves no review dir" "$([ -e "$tmp/root/review/vm-dry" ] && echo left || echo none)" none
 
+# rule-guard passes `gh pr ready` only when the brief has a `merge: allowed` line; the caller's env never grants it.
+printf 'task\nmerge: allowed\n' > "$tmp/brief-merge.md"; printf 'task\nmerge: allowed later\n' > "$tmp/brief-near.md"
+echo 0 > "$tmp/rc"
+k=0
+for c in "brief-merge.md:1:" "brief.md:0:" "brief.md:0:ONIGIRI_READY_ALLOWED=1" "brief-near.md:0:"; do
+  b=${c%%:*}; r=${c#*:}; want=${r%%:*}; pre=${r#*:}; k=$((k + 1))
+  rm -f "$tmp/seen-ready"; env_run env ${pre:+"$pre"} "$src/hosts/vm/pi-run" vm-ready$k coding "$tmp/$b" > /dev/null 2>&1
+  check "vm: $b ${pre:+($pre) }gives ONIGIRI_READY_ALLOWED=$want" "$(cat "$tmp/seen-ready" 2>/dev/null)" "$want"
+  rm -f "$tmp/seen-ready"; env_run env ${pre:+"$pre"} "$src/hosts/mini/pi-run-mini" mini-ready$k "$tmp/$b" > /dev/null 2>&1
+  for _ in $(seq 50); do [ -e "$tmp/onigiri/review/mini-ready$k/run.rc" ] && break; sleep 0.1; done   # bounded: 5s
+  check "mini: $b ${pre:+($pre) }gives ONIGIRI_READY_ALLOWED=$want" "$(cat "$tmp/seen-ready" 2>/dev/null)" "$want"
+done
+# a relative brief path is read where the caller named it, not in the review dir the launcher moves to
+mkdir -p "$tmp/onigiri/review/mini-rel"; cp "$tmp/brief-merge.md" "$tmp/onigiri/review/mini-rel/brief.md"; rm -f "$tmp/seen-ready"
+(cd "$tmp" && env_run "$src/hosts/mini/pi-run-mini" mini-rel brief.md > /dev/null 2>&1)
+for _ in $(seq 50); do [ -e "$tmp/onigiri/review/mini-rel/run.rc" ] && break; sleep 0.1; done   # bounded: 5s
+check "mini: a relative brief.md is the caller's, not the review dir's" "$(cat "$tmp/seen-ready" 2>/dev/null)" 0
 # pi keeps a working Ctrl-C though it now runs as a background job, which bash starts with INT ignored.
 # The subshell's trap - INT restores it on bash 4 and later (the VM and CI); macOS /bin/bash 3.2 does not.
 # LAUNCH_BASH picks the bash that runs the launcher (default its #!/bin/bash).

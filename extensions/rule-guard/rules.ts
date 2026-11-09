@@ -8,6 +8,12 @@ export function mergeOwned(env = process.env.ONIGIRI_MERGE_OWNED ?? ""): Set<str
 	return new Set(env.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean));
 }
 
+/** Whether the session's brief allows merging, so it may ready its own draft. The launcher sets $ONIGIRI_READY_ALLOWED
+ * from the brief's `merge: allowed` header; the extension reads it once at load, so the session can't set it later. */
+export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
+	return env === "1";
+}
+
 /** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
  * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
  * with ~) is an existing file. `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
@@ -172,22 +178,23 @@ function ghApiWrites(w: string[]): boolean {
 }
 
 // GraphQL mutations that ready, merge or auto-merge a PR. The query names a node id, not a repo, so any owned repo counts.
-const GRAPHQL_MERGE = /\b(markPullRequestReadyForReview|mergePullRequest|enablePullRequestAutoMerge)\b/;
+const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
+const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
 // gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
 
-function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Set<string>, host: Host): string | undefined {
+function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Set<string>, host: Host, ready: boolean): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
-	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a)))
+	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
 	// a flag, not the value of the option before it (`--subject --help`)
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
 	const act = help ? undefined :
 		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
-		w[1] === "pr" && w[2] === "ready" && !flag("--undo") ? "`gh pr ready` (a draft is a hold)" :
+		w[1] === "pr" && w[2] === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
 		w[1] === "run" && w[2] === "rerun" ? "`gh run rerun`" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
@@ -252,13 +259,19 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 	return false;
 }
 
-/** The reason to refuse a bash `command` run in `cwd`, or undefined. */
-export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string): string | undefined {
+/** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
+export function checkBash(command: string, owned: Set<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
+	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
+	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
+	// bodies included. The bare reads go first, then quotes and backslashes, as the shell joins `ONIGIRI_READY_""ALLOWED`
+	// and `$'ONIGIRI_READY_ALLOWED'` into the name.
+	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/(?<!\\)\$ONIGIRI_READY_ALLOWED(?![A-Za-z0-9_])/g, "").replace(/["'\\]/g, "")))
+		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (policy, Work); put the row you want under questions:.";
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. The onigiri policy forbids it; if you think it is needed, put it under questions:.`;
 	}
 	return undefined;

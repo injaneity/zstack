@@ -1,7 +1,7 @@
 // Tests for extensions/rule-guard/rules.ts. Run: node --test tests/rule-guard.test.ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkBash, checkWrite, mergeOwned } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
 const OWNED = mergeOwned("trycua/cua");
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
@@ -142,6 +142,47 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);
 	allowed("gh pr create --draft --title x --body y", inCua);
 	allowed("gh pr view 7040 --json isDraft", inCua);
+});
+
+test("a brief that allows merging lets the session ready its draft, and nothing else", () => {
+	const ok = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd, true), undefined, c);
+	const no = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd, true) ?? "", /^blocked: /, c);
+	ok("gh pr ready 7040 -R trycua/cua");
+	ok("gh pr ready 7040", inCua);
+	ok(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	no("gh pr merge 7040 -R trycua/cua --squash");
+	no("gh pr merge 7040 --auto", inCua);
+	no("gh run rerun 9 -R trycua/cua");
+	no("gh api -X PUT repos/trycua/cua/pulls/7040/merge");
+	no(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	no(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	no(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "X"}) { clientMutationId } }'`);
+	no("git push -f origin HEAD:main");
+	// only the launcher's exact flag counts; anything else is the default, blocked
+	assert.equal(readyAllowed("1"), true);
+	for (const v of ["", "0", "true", "yes", " 1"]) assert.equal(readyAllowed(v), false, v);
+	// a flag on the command is not the session's: the guard reads the env it was loaded with
+	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R trycua/cua");
+	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inCua);
+	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R trycua/cua'");
+	blocked("export ONIGIRI_READY_ALLOWED=1; pi -p go");
+	blocked("ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED");
+	blocked("bash -c 'env ONIGIRI_READY_ALLOWED=1 pi -p go'");
+	blocked("printf -v ONIGIRI_READY_ALLOWED %s 1; pi -p go");
+	blocked("read ONIGIRI_READY_ALLOWED <<< 1; pi -p go");
+	blocked("declare -x ONIGIRI_READY_ALLOWED=1; pi -p go");
+	blocked(`export ONIGIRI_READY_""ALLOWED=1; pi -p go`);
+	blocked("export ONIGIRI_READY_'A'LLOWED=1; pi -p go");
+	blocked("export ONIGIRI_READY_\\ALLOWED=1; pi -p go");
+	blocked("ONIGIRI_READY_ALLOWED1=1 true");
+	blocked("python3 - <<'EOF'\nimport os; os.environ['ONIGIRI_READY_ALLOWED'] = '1'; os.execvp('pi', ['pi', '-p', 'go'])\nEOF");
+	blocked(`set -a; : "\${ONIGIRI_READY_ALLOWED:=1}"; pi -p go`);
+	blocked("echo ${ONIGIRI_READY_ALLOWED=1}");
+	blocked("export $'ONIGIRI_READY_ALLOWED'=1; pi -p go");
+	blocked(`export $"ONIGIRI_READY_ALLOWED"=1; pi -p go`);
+	blocked("export \\$ONIGIRI_READY_ALLOWED=1");
+	blocked("echo ${ONIGIRI_READY_ALLOWED:-unset}");
+	allowed(`echo $ONIGIRI_READY_ALLOWED "[$ONIGIRI_READY_ALLOWED]"`);
 });
 
 test("here-document bodies are data unless a shell reads them", () => {
