@@ -172,8 +172,11 @@ def supervise(d, sid, cmd, env):
 def report_fields(d, attempt):
     """report= the run's log (pi -p prints the final report there) and prs= the PR links this attempt's part of it names."""
     log = os.path.join(d, "run.log")
-    with open(log, errors="replace") as f:
-        text = f.read().split(f"== attempt {attempt}\n")[-1]
+    try:
+        with open(log, errors="replace") as f:
+            text = f.read().split(f"== attempt {attempt}\n")[-1]
+    except OSError:   # a missing log must not cost the exit record
+        text = ""
     prs = dict.fromkeys(re.findall(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", text))
     return [f"report={log}"] + ([f"prs={','.join(prs)}"] if prs else [])
 
