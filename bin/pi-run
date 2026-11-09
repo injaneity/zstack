@@ -145,14 +145,20 @@ def supervise(d, sid, cmd, env):
         if not r.run or r.run["pid"] != os.getpid():
             os._exit(1)
         print(f"== attempt {r.run['attempt']}", flush=True)
+    rc = None
     if not got:
-        proc = subprocess.Popen(cmd, cwd=d, env=env)
-        if got:
+        try:
+            proc = subprocess.Popen(cmd, cwd=d, env=env)
+        except OSError as e:
+            print(f"pi-run: cannot start pi: {e}", flush=True)
+            rc = 127
+        if got and proc:
             proc.send_signal(got[0])
-    rc = 128 + got[0] if proc is None else proc.wait()
+    if rc is None:
+        rc = 128 + got[0] if proc is None else proc.wait()
     rc = 128 - rc if rc < 0 else rc
     if rc:   # before the exit is recorded, so an exited run has already sent its wake
-        subprocess.run([sys.executable, WAKE, "failed", f"{sid} exited rc={rc}"], env={**env, "PI_SESSION_ID": sid})
+        subprocess.run([sys.executable, WAKE, "failed", f"{sid} exited rc={rc}"], env=env)
     with Run(d) as r:
         r.write(step(r.run, "exit", pid=os.getpid(), rc=rc))
     os._exit(rc)
@@ -192,7 +198,7 @@ def start(sid, role, brief, extra):
     rules = subprocess.run([os.path.join(PKG, "bin", "hard-rules")], capture_output=True, text=True)
     if rules.returncode:
         die(2, rules.stderr.strip())
-    env.update(ONIGIRI_WAKE=WAKE, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in text.splitlines() else "0")
+    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in text.splitlines() else "0")
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
            "--append-system-prompt", rules.stdout.rstrip("\n"), *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)

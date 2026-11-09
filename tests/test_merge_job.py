@@ -121,11 +121,12 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(dict(p, number=5901), holds=pre)[0], "buffer")
             self.assertEqual(verdict(dict(p, isDraft=True))[0], "skip")   # a deep draft is never readied
         self.assertEqual(verdict(pr(labels=["risk:deep"]))[0], "buffer")    # the strictest of label and body wins
+        self.assertEqual(verdict(pr(body="risk: high\n")), ("buffer", "declared human: needs Zane (no preapprove row)"))
 
     def test_strictest_declared_tier(self):
         self.assertEqual(mj.declared_risk(["risk:light", "risk:deep"], ""), "deep")
         self.assertEqual(mj.declared_risk(["risk:light"], "risk: human\n"), "human")
-        self.assertIsNone(mj.declared_risk([], "x\nrisk: low\n"))   # not a tier
+        self.assertEqual(mj.declared_risk([], "x\nrisk: high\n"), "human")   # not a tier: held for Zane
         self.assertIsNone(mj.declared_risk([], "the risk: deep is mid-line"))
 
     def test_every_reason_is_reported_gate_then_blockers(self):

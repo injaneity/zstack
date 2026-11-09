@@ -182,8 +182,9 @@ def hands_off_verdict(paths, patches, holds):
 # ---------------- checks ----------------
 
 def norm_tier(t):
+    """A declared tier; a word that is not one counts as human, so a typo or an old name never skips a preapproval."""
     t = (t or "").strip().lower()
-    return t if t in TIERS else None
+    return t if t in TIERS else "human"
 
 
 def declared_risk(labels, body):

@@ -24,10 +24,14 @@ EXT = next(line.split('"')[1] for line in (PKG / "bin" / "ensure-extensions").re
 # fake pi: `list` shows the pinned extension; a run records its args and env, then hangs while $T/hang exists
 # and exits with $T/rc. It traps TERM like pi does, so a forwarded signal is visible.
 FAKE_PI = f"""#!/bin/bash
-case "$1" in list) echo "User packages:"; echo "  {EXT}"; exit 0;; esac
+case "$1" in
+  list) echo "User packages:"; echo "  {EXT}"; echo >> "$T/lists"
+        [ -e "$T/vanish" ] && [ "$(wc -l < "$T/lists")" -ge 2 ] && rm "$0"; exit 0;;
+esac
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
 printf '%s\\n' "$@" > "$T/args"
 echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
+ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake" 2>/dev/null
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
 while [ -e "$T/hang" ]; do sleep 0.05; done
@@ -136,6 +140,8 @@ class Launcher(unittest.TestCase):
         self.assertEqual(args[args.index("--append-system-prompt") + 1:][0], "## Hard rules")
         wakes = [json.loads(line) for line in self.log("cua-1").splitlines() if line.startswith("{")]
         self.assertEqual([(w["kind"], w["id"]) for w in wakes], [("failed", "cua-1")])
+        mid = json.loads((self.t / "session-wake").read_text())
+        self.assertEqual((mid["kind"], mid["id"], mid["pr"]), ("blocked", "cua-1", 9))
 
     def test_pi_gets_exactly_the_hard_rules_and_a_working_ctrl_c(self):
         self.start("rules")
@@ -225,6 +231,14 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.finished("term")["rc"], 143)
         self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
         self.assertIn("wake: failed", self.log("term"))
+
+    def test_a_pi_that_cannot_start_is_a_failed_exit_not_a_loss(self):
+        (self.t / "vanish").touch()   # the fake pi passes ensure-extensions' two `pi list` calls, then removes itself
+        self.start("nopi")
+        run = self.finished("nopi")
+        self.assertEqual(run["rc"], 127)
+        self.assertIn("cannot start pi", self.log("nopi"))
+        self.assertIn("wake: failed", self.log("nopi"))
 
     def test_merge_allowed_comes_only_from_the_brief(self):
         (self.t / "m.md").write_text("task\nmerge: allowed\n")
