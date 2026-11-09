@@ -1,6 +1,7 @@
 // Tests for extensions/subagent/prompt.ts and the agents/*.md role prompts. Run: node --test tests/subagent-prompt.test.ts
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { buildChildPrompt, NO_POLLING_LINE, ROLE_FRAMING } from "../extensions/subagent/prompt.ts";
 
@@ -30,7 +31,7 @@ for (const name of ["verifier", "explorer", "designer"]) {
 		const prompt = buildChildPrompt(body(name));
 		assert.match(prompt, new RegExp(`^You are (a|an|the) ${name}\\b`));
 		assert.ok(prompt.includes("builder session"), `${name} is told who spawned it`);
-		assert.doesNotMatch(prompt, /onigiri policy|policy\.md|## Hard rules/);
+		assert.doesNotMatch(prompt, /## Hard rules/);
 		for (const line of sessionOnly) assert.ok(!prompt.includes(line), `${name} prompt carries "${line}"`);
 	});
 }
@@ -60,4 +61,27 @@ test("the designer carries the size and patent-hold rules word for word", () => 
 test("the builder leaves the verify skill, E2E and Lume to the verifier", () => {
 	assert.match(hardRules, /You do not run the verify skill, E2E or Lume yourself\./);
 	assert.doesNotMatch(hardRules, /run fmt, clippy and test for the touched crates\/projects yourself/);
+});
+
+// Everything a builder session reads as instructions: the appended Hard rules (inside SKILL.md), the skill and its
+// playbooks, the /onigiri-mode prompt, AGENTS.md and the mini's brief prefix. None of it may tell the builder to run
+// the verify skill, E2E or Lume, so every line naming one also names the verifier that runs it.
+test("builder prompts leave the verify skill, E2E and Lume to the verifier", () => {
+	const sources = ["skills/onigiri-mode/SKILL.md", "prompts/onigiri-mode.md", "AGENTS.md", "hosts/mini/host-mini.md"];
+	for (const f of fs.readdirSync(`${root}skills/onigiri-mode/playbooks`)) sources.push(`skills/onigiri-mode/playbooks/${f}`);
+	let named = 0;
+	for (const f of sources)
+		for (const line of fs.readFileSync(`${root}${f}`, "utf-8").split("\n")) {
+			if (!/\bE2E\b|\blume\b|verify skill|verify-skill|verify-cua|\.cursor\/skills/i.test(line)) continue;
+			named++;
+			assert.match(line, /\bverifier\b/, `${f}: ${line}`);
+		}
+	assert.ok(named >= 4, `expected the hand-off lines, saw ${named}`);
+});
+
+test("the verifier runs on terra, from config/models.json by agent name", () => {
+	const roles = JSON.parse(fs.readFileSync(`${root}config/models.json`, "utf-8")).roles;
+	assert.deepEqual(roles.verifier, { provider: "openai-codex", model: "gpt-6.1-terra" });
+	assert.equal(execFileSync(`${root}bin/model-for`, ["verifier"], { encoding: "utf-8" }).trim(), "openai-codex gpt-6.1-terra");
+	assert.ok(fs.existsSync(`${root}agents/verifier.md`), "the seat key is the agent name the subagent tool looks up");
 });

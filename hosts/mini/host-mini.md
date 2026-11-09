@@ -6,8 +6,8 @@ This session runs on the relay Mac mini. onigiri-mode's Hard rules, appended to 
 - verify: the `verifier` subagent runs the repo verify skill (Hard rules, Checks). This host can build platform-macos, so name it in the verifier's brief when touched.
 - Before your first tool call on a coding task, read the onigiri-mode skill and its matched playbook in full.
 - The patent pre-push hook is installed in `~/onigiri/cua`; same rules as Hard rules' Patent hold.
-- macOS crates build and test here. Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: say in the verdict which checks could not run here.
+- macOS crates build and test here. Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: the verifier says in its verdict which checks could not run here.
 - There is no `timeout` or `setsid` command; default bash is 3.2 (bash 5 is first on PATH).
 - Wakes and `questions:` work as onigiri-mode's Autonomy section says. After a push to an existing PR, rerun the scoped checks on the new head. A `verified` comment counts only for the head it names.
 
-- Pruning is allowed on the mini to stay productive: stale lume worker VMs, finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.
+- Pruning is allowed on the mini to stay productive: stale lume worker VMs (verifier runs stop them, never delete them), finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.

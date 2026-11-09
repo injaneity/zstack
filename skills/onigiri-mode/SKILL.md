@@ -50,7 +50,7 @@ Both launchers append this section, and only this section, to every session's sy
 ### Scope
 
 - Do not salvage or rewrite PRs by injaneity or bots. PRs by f-trycua, ddupont808 and 0xjohnnydev are review-only: a first review is allowed, but never push to, rebase, salvage, rewrite, close, comment on or request changes on them.
-- Never commit `.onigiri.json` or any onigiri config to `trycua/cua`. No PR comments. (rule-guard refuses force-pushes.)
+- Never commit `.onigiri.json` or any onigiri config to `trycua/cua`. (rule-guard refuses force-pushes.)
 - Bench numbers and timings stay out of commits and PR text.
 
 ### Merging

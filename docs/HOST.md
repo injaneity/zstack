@@ -10,7 +10,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## Rules
 
-- The rules every session runs under are onigiri-mode's Hard rules section, appended by both launchers through `bin/hard-rules`, so they move with the package pin. `/srv/onigiri/policy.md`, its `/home/box/.pi/agent/onigiri/policy.md` symlink and the mini's `~/onigiri/sync/policy.md` copy are no longer read by zstack.
+- The rules every session runs under are onigiri-mode's Hard rules section, appended by both launchers through `bin/hard-rules`, so they move with the package pin.
 - Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. The merge job reads it on every run. Only Zane edits it.
 - Author rows steer the hourly pickup, not the merge job. `skip-author` (bots) is never picked up or reviewed, and neither is a PR of our own. `review-only` (teammates) gets a first review and nothing else: no push, rebase, salvage, close, comment or request-changes, so a review task for one is filed, never cancelled.
 

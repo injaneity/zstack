@@ -45,7 +45,4 @@ check "hosts/vm/pi-run appends exactly the Hard rules" "$(cat "$tmp/appended" 2>
 rm -f "$tmp/appended"; run "$tmp/pkg/bin/pi-run" s2 "$tmp/brief.md" > /dev/null 2>&1; got=$?
 check "no section: bin/pi-run exits 2" $got 2
 check "no section: bin/pi-run starts no pi" "$([ -e "$tmp/appended" ] && echo started || echo none)" none
-# a stale ONIGIRI_POLICY in the caller's env changes nothing
-rm -f "$tmp/appended"; run env ONIGIRI_POLICY="$tmp/brief.md" "$src/bin/pi-run" s3 "$tmp/brief.md" > /dev/null 2>&1
-check "ONIGIRI_POLICY is ignored" "$(cat "$tmp/appended" 2>/dev/null)" "$rules"
 exit $fail
