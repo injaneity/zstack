@@ -120,6 +120,10 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	assert.match(checkBash("env -u GH_REPO sh -c 'gh pr ready 1'", OWNED, zsEnv, inCua) ?? "", /^blocked: /);
 	blocked("gh pr merge 1 -R trycua/cua --subject --help");
 	blocked("gh pr merge 1 -R trycua/cua --body --disable-auto");
+	// the session's GH_REPO does not reach a remote shell, whose directory is unknown
+	assert.match(checkBash("ssh server 'gh pr merge 123'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
+	allowed("gh pr merge 1 -R trycua/cua --squash --help");
+	allowed("gh pr merge 1 -R trycua/cua --squash --disable-auto");
 	allowed("gh pr merge --help", inCua);
 	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
 	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", mergeOwned(""), host, inCua), undefined);

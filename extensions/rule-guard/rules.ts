@@ -174,13 +174,16 @@ function ghApiWrites(w: string[]): boolean {
 // GraphQL mutations that ready, merge or auto-merge a PR. The query names a node id, not a repo, so any owned repo counts.
 const GRAPHQL_MERGE = /\b(markPullRequestReadyForReview|mergePullRequest|enablePullRequestAutoMerge)\b/;
 
-function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, host: Host): string | undefined {
+// gh pr merge/ready options that take the next word as their value
+const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
+
+function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Set<string>, host: Host): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a)))
 		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
 	// a flag, not the value of the option before it (`--subject --help`)
-	const flag = (f: string) => w.some((a, i) => a === f && !w[i - 1]?.startsWith("-"));
+	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
 	const act = help ? undefined :
 		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
@@ -189,11 +192,12 @@ function ghOwned({ words: w, raw, dirs }: Cmd, owned: Set<string>, host: Host): 
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" :
 		api && w.some((a) => /\/actions\/(runs|jobs)\/[^/]+\/rerun/.test(a)) ? "a CI rerun through `gh api`" : undefined;
 	if (!act) return undefined;
-	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one
+	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one,
+	// and a remote shell never had it
 	const pre = raw.slice(0, raw.length - w.length);
 	const inline = pre.map((a) => a.match(/^GH_REPO=(.*)$/)?.[1]).filter((v) => v !== undefined).pop();
 	const cleared = pre.some((a, i) => a === "-i" || a === "--ignore-environment" || a === "--unset=GH_REPO" || ((a === "-u" || a === "--unset") && pre[i + 1] === "GH_REPO"));
-	const named = ghNamedRepo(w) ?? repoName(inline !== undefined ? inline || undefined : cleared ? undefined : host.ghRepo);
+	const named = ghNamedRepo(w) ?? repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
 	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
