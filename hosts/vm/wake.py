@@ -67,20 +67,24 @@ def sha():
     return r.stdout.strip() or "unknown"
 
 
+def post(kind, message, fields=None):
+    """Send one pi event (printed instead under ONIGIRI_WAKE_DRY). Returns the log-safe status line."""
+    body = {"kind": kind, "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": message[:1000],
+            "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
+    body.update({k: int(v) if k in ("pr", "rc") else v.split(",") if k == "prs" else v for k, v in (fields or {}).items()})
+    if os.environ.get("ONIGIRI_WAKE_DRY"):
+        print(json.dumps(body))
+        return "not sent: dry run"
+    return send(body)
+
+
 def main(argv):
     fields = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
     if (len(argv) < 2 or argv[0] not in KINDS or not argv[1].strip() or len(fields) != len(argv) - 2
             or not all(k in FIELDS and re.fullmatch(FIELDS[k], v) for k, v in fields.items())):
         print("usage: wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]", file=sys.stderr)
         return 2
-    body = {"kind": argv[0], "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": argv[1][:1000],
-            "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
-    body.update({k: int(v) if k in ("pr", "rc") else v.split(",") if k == "prs" else v for k, v in fields.items()})
-    if os.environ.get("ONIGIRI_WAKE_DRY"):
-        print(json.dumps(body))
-        status = "not sent: dry run"
-    else:
-        status = send(body)
+    status = post(argv[0], argv[1], fields)
     print(f"zstack {sha()}\nwake: {argv[0]} {status}", file=sys.stderr)
     return 0
 

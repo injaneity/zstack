@@ -142,7 +142,19 @@ class Hourly(unittest.TestCase):
                       "merge job unstick: 1\n  cua#7185 96f2fa0ea: red after rerun: ci-gate\n", out)
         self.assertNotIn("7190", out)
         self.assertNotIn("7191", out)
-        self.assertNotIn("merge job", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))   # no merge host: nothing asked
+        self.assertIn("merge job needs-Zane: none", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))   # no merge host: nothing asked
+        self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        if "preapprove batch: due" in out:
+            self.hourly("log", "local", "preapprove-batch", "-", "none")
+            self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        self.assertIn("skip:", self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm"))
+        peer.write_text(peer.read_text().replace("'dry-run cua#7190 3c4132d84 merge: green, ci-gate SUCCESS, risk standard'",
+                                                 "'dry-run cua#7190 3c4132d84 wait who=session: red after rerun: ci-gate'"))
+        out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")   # same heads, a new wait: never skipped
+        self.assertIn("merge job unstick: 2\n", out)
+        peer.write_text(peer.read_text().replace("*merge_job.py*) printf", "*merge_job.py*) exit 1; printf"))
+        self.assertIn("error: merge job dry run on vm: exit 1", self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm"))
 
     def test_a_failed_pr_query_is_reported_and_never_skips(self):
         self.hourly("done")

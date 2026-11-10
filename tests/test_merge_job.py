@@ -859,6 +859,15 @@ class PatentPush(unittest.TestCase):
             self.assertNotIn('"kind": "blocked"', g.stdout + g.stderr)
             self.assertEqual(len(mj.read(f"{root}/events.log").splitlines()), 1)
 
+    def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(pp.wake, "post", side_effect=["webhook failed: OSError", "webhook sent (200)"]) as post:
+                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
+                self.assertTrue(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
+                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))   # sent: never again for this head
+            self.assertEqual(post.call_count, 2)
+            self.assertEqual([x.split(" ", 7)[6] for x in mj.read(f"{root}/events.log").splitlines()], ["failed:", "sent"])
+
     def test_the_installed_hook_is_a_symlink_and_logs_beside_the_clone(self):
         """Both hosts install hosts/vm/pre-push as a symlink. With no $ONIGIRI_ROOT (a push from any shell) the hold is
         logged in the directory the clone is in, also for a push from one of its worktrees."""

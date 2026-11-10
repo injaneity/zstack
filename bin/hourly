@@ -155,7 +155,8 @@ def snapshot(linear):
     ours = gh("--author", "injaneity", "--json", "number,headRefOid")
     others = gh("--search", "-author:injaneity", "--json", "number,author")
     bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
-    return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors,
+    waits = merge_waits(errors)
+    return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors, "waits": waits,
             "ours": sorted(f"{p['number']}:{p['headRefOid'][:9]}" for p in ours),   # a push to ours is work: merge, unstick
             "others": sorted(f"{p['number']}:{p['author']['login']}" for p in others if not bot(p["author"]))}   # new or closed
 
@@ -170,7 +171,8 @@ def fingerprint(s):
     keep = {h: {"runs": {k: (v["state"], v.get("idle_min", 0) >= HUNG_MIN) for k, v in f.get("runs", {}).items()},
                 "legacy": f.get("legacy"), "at_main": f.get("at_main"), "floor": f.get("free_gb", 0) >= FLOOR_GB, "error": "error" in f}
             for h, f in s["hosts"].items()}
-    return hashlib.sha256(json.dumps([keep, s["linear"], s["ours"], s["others"], s["batch_due"]], sort_keys=True).encode()).hexdigest()[:16]
+    return hashlib.sha256(json.dumps([keep, s["linear"], s["ours"], s["others"], s["batch_due"], s["waits"]],
+                                     sort_keys=True).encode()).hexdigest()[:16]
 
 
 def report(s, fp, last):
@@ -194,24 +196,25 @@ def report(s, fp, last):
         print(f"error: {e}: the PR lists are unknown this pass")
     print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
-    merge_waits()
-    print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
-
-
-def merge_waits():
-    """The merge job's --dry-run on $ONIGIRI_MERGE_HOST: the PRs it waits on someone for, grouped by who."""
-    h = HOST[0].get("ONIGIRI_MERGE_HOST")
-    if not h:
-        return
-    p = on(h, ["hosts/vm/merge_job.py", "--dry-run"])
-    lines = [x.split(" ", 1)[1] for x in p.stdout.splitlines() if x.startswith("dry-run ")]
-    if p.returncode or not lines and p.stderr.strip():
-        print(f"error: merge job dry run on {h}: {(p.stderr.strip().splitlines() or [f'exit {p.returncode}'])[-1][:200]}")
     for head, who in (("needs-Zane", "zane"), ("unstick", "session")):
-        hits = [x for x in lines if f" wait who={who}: " in x]
+        hits = [x for x in s["waits"] if f" wait who={who}: " in x]
         print(f"merge job {head}: {len(hits) or 'none'}")
         for x in hits:
             print(f"  {x.replace(f' wait who={who}', '')}")
+    print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
+
+
+def merge_waits(errors):
+    """The merge job's --dry-run on $ONIGIRI_MERGE_HOST: its `<id> <head> wait who=<zane|session>: <why>` lines, sorted.
+    They are in the fingerprint, so a PR that goes red after its rerun at the same head is still news."""
+    root()
+    h = HOST[0].get("ONIGIRI_MERGE_HOST")
+    if not h:
+        return []
+    p = on(h, ["hosts/vm/merge_job.py", "--dry-run"])
+    if p.returncode:
+        errors.append(f"merge job dry run on {h}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
+    return sorted(x.split(" ", 1)[1] for x in p.stdout.splitlines() if x.startswith("dry-run ") and " wait who=" in x)
 
 
 def log(host, action, item, reason):
