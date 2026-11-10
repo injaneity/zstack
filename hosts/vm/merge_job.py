@@ -22,8 +22,9 @@ teammate, a bot or an app). The job's own merges are the heads in state.json lan
   merge_job.py --explain N every reason for trycua/cua#N and the action a run would take; read-only
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
-PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs (events.log still has the wake;
-nothing re-sends it after the pause). An urgent wake (URGENT) POSTs the webhook once per kind, PR and key. A wait goes
+PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs: events.log still has the wake, and
+the first pass after the pause sends it. An urgent wake (URGENT) POSTs the webhook once per kind, PR and key, retried
+every pass until it is sent (a host with no webhook key counts as sent). A wait goes
 nowhere but events.log and --dry-run's `who=` lines, which bin/hourly prints under needs-Zane and unstick. Outputs:
 $ROOT/events.log (one line per decision, only when it changes), $ROOT/tick/state.json and $ROOT/tick/last-run. ROOT is
 $ONIGIRI_ROOT, default /srv/onigiri.
@@ -351,7 +352,8 @@ class Job:
             self.event(kind, ident, reason)
 
     def wake(self, kind, ident, head, reason):
-        """POST one urgent wake for this kind, id and head (or hour, or window), once."""
+        """POST one urgent wake for this kind, id and head (or hour, or window), once it is sent: a failed, paused or dry
+        POST is tried again next pass. Returns whether it counts as sent."""
         assert kind in URGENT, kind
         key = f"{kind}|{ident}|{head or '-'}"
         if key in self.s["woken"]:
@@ -365,11 +367,13 @@ class Job:
             if st in ("CLOSED", "MERGED"):
                 self.decide("skipped", ident, head, f"{kind}: PR {st.lower()}, no alert")
                 return False
-        self.s["woken"][key] = now()
         self.event("urgent", ident, f"{kind}: {reason}")
         sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
         self.event("urgent", ident, sent)
-        return True
+        if sent.startswith("webhook sent") or sent == "webhook not configured":
+            self.s["woken"][key] = now()
+            return True
+        return False
 
     def holds(self):
         try:

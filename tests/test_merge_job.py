@@ -550,6 +550,19 @@ class Stage(unittest.TestCase):
         self.assertEqual(posts, [(k, "cua#1") for k in mj.URGENT])
         self.assertFalse((self.d / "buffer.jsonl").exists())
 
+    def test_a_wake_that_failed_or_was_paused_is_sent_on_a_later_pass_then_never_again(self):
+        self.add(1, draft=True)   # stays open, so the closed-PR guard does not drop the wake
+        got = iter(["webhook failed: OSError", "webhook sent (200)"])
+        with patch.object(mj, "post_webhook", lambda *a: next(got)) as _, contextlib.redirect_stdout(io.StringIO()):
+            (self.d / "tick/PAUSED").write_text("manual\n")
+            for _ in range(4):   # paused, then failed, then sent, then nothing
+                job = mj.Job(dry=False)
+                job.wake("merge-failed", "cua#1", H, "why")
+                job.run()
+                (self.d / "tick/PAUSED").unlink(missing_ok=True)
+        self.assertEqual([x for x in self.events() if x.startswith("urgent cua#1 ") and not x.startswith("urgent cua#1 merge-failed:")],
+                         ["urgent cua#1 not sent: paused", "urgent cua#1 webhook failed: OSError", "urgent cua#1 webhook sent (200)"])
+
     def test_the_old_buffers_urgent_keys_carry_over_and_the_rest_is_dropped(self):
         key = f"unexpected-merge|cua#10|{'c' * 40}"
         (self.d / "tick/state.json").write_text(json.dumps({"buffered": {key: "t", f"merge-blocked|cua#9|{H}": "t"},
