@@ -1,9 +1,15 @@
 #!/bin/bash
-# read-only copies of the VM's holds and hands-off list for pi sessions on the mini host.
-d=$HOME/onigiri/sync; mkdir -p $d; rc=0
-for f in hold-prs.txt; do
-  if ~/onigiri-vm/vm "cat /srv/onigiri/$f" > $d/$f.new && [ -s $d/$f.new ]; then
-    chmod u+w $d/$f 2>/dev/null || true; mv -f $d/$f.new $d/$f; chmod a-w $d/$f
-  else echo "sync-from-vm: $f failed, keeping old copy" >&2; rm -f $d/$f.new; rc=1; fi
-done
-TZ=Asia/Singapore date '+%F %T SGT' > $d/synced-at; exit $rc
+# sync-from-vm.sh: refresh the mini's read-only copy of the VM's holds file, ~/onigiri/sync/hold-prs.txt, for pi
+# sessions here. hosts/mini/host.sh runs it at every launch, so launches overlap: each run fetches into its own temp
+# file and renames it over the copy, and a failed fetch keeps the old copy and exits 1. It reaches the VM through
+# ./vm, or $ONIGIRI_VM when set (the test's fake).
+set -u
+d=$HOME/onigiri/sync; mkdir -p "$d"
+new=$(mktemp "$d/.hold-prs.txt.XXXXXX") || exit 1
+stamp=; trap 'rm -f "$new" ${stamp:+"$stamp"}' EXIT
+if ! "${ONIGIRI_VM:-${BASH_SOURCE[0]%/*}/vm}" "cat /srv/onigiri/hold-prs.txt" > "$new" || [ ! -s "$new" ]; then
+  echo "sync-from-vm: hold-prs.txt failed, keeping old copy" >&2; exit 1
+fi
+chmod 444 "$new" && mv -f "$new" "$d/hold-prs.txt" || exit 1
+stamp=$(mktemp "$d/.synced-at.XXXXXX") || exit 1
+TZ=Asia/Singapore date '+%F %T SGT' > "$stamp" && chmod 644 "$stamp" && mv -f "$stamp" "$d/synced-at"
