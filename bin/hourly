@@ -219,11 +219,12 @@ def drain():
     shared slots allow (an auto brief also needs an auto slot), and a peer only at main with the floor free (playbook step 4).
     One that cannot start yet gets a `wait` row. PI_RUN_DRY=1 prints the plan and launches and logs nothing."""
     dry = bool(os.environ.get("PI_RUN_DRY"))
-    lock = os.open(os.path.join(root(), "hourly-queue.lock"), os.O_RDWR | os.O_CREAT, 0o644)   # held until exit
-    try:   # two passes counting the same free slot would both fill it
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        pr.die(3, "queue: another hourly queue pass is running; nothing launched")
+    if not dry:   # two passes counting the same free slot would both fill it; the lock is held until exit
+        lock = os.open(os.path.join(root(), "hourly-queue.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pr.die(3, "queue: another hourly queue pass is running; nothing launched")
     hosts = all_facts()
     running, auto = slots(hosts)
     blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free

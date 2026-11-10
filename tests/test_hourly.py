@@ -236,7 +236,8 @@ class Hourly(unittest.TestCase):
         self.assertEqual([x.split(":")[0] for x in dry.splitlines()],
                          ["would launch local a", "would launch test-vm b", "wait local c", "would launch test-vm d", "wait local e",
                           "queue"])
-        self.assertFalse((local / "pickup.log").exists())   # a dry pass logs and starts nothing
+        self.assertFalse((local / "pickup.log").exists())   # a dry pass logs, locks and starts nothing
+        self.assertFalse((local / "hourly-queue.lock").exists())
         self.assertFalse((vm / "review" / "b" / "run.json").exists())
         r = self.sh("hourly", "queue", ONIGIRI_PEERS=peers)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
