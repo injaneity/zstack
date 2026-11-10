@@ -245,6 +245,7 @@ class Stage(unittest.TestCase):
         k.start()
         self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
+        self.lists = []
         self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
@@ -259,6 +260,7 @@ class Stage(unittest.TestCase):
         if args[:2] == ["pr", "list"] and "open" in args:
             return [{k: p[k] for k in args[-1].split(",")} for p in self.prs.values() if p["state"] == "OPEN"]
         if args[:2] == ["pr", "list"]:
+            self.lists.append(args)
             return self.merged
         if args[:2] == ["pr", "view"]:
             n = int(args[2])
@@ -535,28 +537,60 @@ class Stage(unittest.TestCase):
         st = json.loads((self.d / "tick/state.json").read_text())
         self.assertIn("since", st["merges"])
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
+        st["landed"] = {"11": {"head": H, "at": "2026-11-05T09:00:00+08:00"}}
         (self.d / "tick/state.json").write_text(json.dumps(st))
-        with open(self.d / "events.log", "a") as e:
-            e.write("2026-11-05T09:00:00+08:00 merged cua#11 squash at x: green\n")
-        m = lambda n, by, bot=False: {"number": n, "mergedBy": {"login": by, "is_bot": bot}, "mergedAt": "2026-11-05T01:00:00Z",   # noqa: E731
-                                      "title": f"pr {n}", "mergeCommit": {"oid": "c" * 40}}
-        self.merged = [m(10, "injaneity"), m(11, "injaneity"), m(12, "zane"), m(13, "app/cua-agents")]
+        m = lambda n, by, head=H: {"number": n, "headRefOid": head, "mergedBy": {"login": by}, "mergedAt": "2026-11-05T01:00:00Z",   # noqa: E731
+                                   "title": f"pr {n}", "mergeCommit": {"oid": "c" * 40}}
+        self.merged = [m(10, "injaneity"), m(11, "injaneity"), m(12, "zane"), m(13, "app/cua-agents"), m(14, "injaneity", head=H2)]
         self.run_()
         self.run_()
-        self.assertEqual([(b["kind"], b["id"], b.get("urgent")) for b in self.buffered()], [("unexpected-merge", "cua#10", True)])
+        # every merger but the job wakes: a hand merge, a teammate, an app (cua#7037), and the job's PR at a head it never queued
+        self.assertEqual([(b["kind"], b["id"], b.get("urgent")) for b in self.buffered()],
+                         [("unexpected-merge", f"cua#{n}", True) for n in (10, 12, 13, 14)])
+        self.assertIn("merged by app/cua-agents", self.buffered()[2]["reason"])
         self.assertIn("not by the tick", self.buffered()[0]["reason"])
         ev = self.events()
-        self.assertEqual(sum(x.startswith("merge-noted cua#12") for x in ev), 1)
+        self.assertFalse(any(x.startswith("merge-noted") for x in ev))
         self.assertIn("urgent cua#10 webhook not configured", ev)
-        self.assertFalse(any("cua#13" in x for x in ev))
+        self.assertFalse(any("cua#11 " in x for x in ev))
+        self.assertIn(["pr", "list", "-R", "trycua/cua", "--state", "merged", "--author", "injaneity"], [c[:8] for c in self.lists])
         st = json.loads((self.d / "tick/state.json").read_text())
         self.assertGreater(st["merges"]["since"], "2026-11-05T00:00:00+08:00")   # the window moved up
         self.assertEqual(st["merges"]["seen"], {})                                # and forgot what fell out of it
+        self.assertEqual(st["landed"], {})
+
+    def test_a_merge_the_job_queued_is_not_unexpected_whether_or_not_it_has_logged_it_yet(self):
+        """cua#7180: queued by the job at c18608a73 and merged by the queue. The job's own heads come from state.json."""
+        self.queue = True
+        self.add(7180)
+        self.run_()                                       # queued; merge-watch seeds since
+        st = json.loads((self.d / "tick/state.json").read_text())
+        st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
+        (self.d / "tick/state.json").write_text(json.dumps(st))
+        self.merged = [{"number": 7180, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        # GitHub merged it after landed() read it OPEN this pass: still queued in state.json, so not unexpected
+        self.run_()
+        self.prs[7180].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
+        self.run_()
+        self.assertEqual(self.buffered(), [])
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7180"], ["merged", "cua#7180"]])
+
+    def test_the_first_run_seeds_the_allow_list_from_events_log(self):
+        with open(self.d / "events.log", "w") as e:
+            e.write("2026-11-10T12:47:08+08:00 merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
+                    "2026-11-10T13:00:00+08:00 merge-noted cua#7001 merged by f-trycua\n")
+        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T00:00:00+08:00"}}))
+        self.merged = [{"number": 7180, "headRefOid": "c18608a73e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
+                        "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        self.run_()
+        self.assertEqual(self.buffered(), [])
+        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")
 
     def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
         since = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": since, "seen": {}}}))
-        self.merged = [{"number": n, "mergedBy": {"login": "zane"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+        self.merged = [{"number": n, "headRefOid": H, "mergedBy": {"login": "zane"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
                         "mergeCommit": {"oid": "c" * 40}} for n in range(3)]
         with patch.object(mj, "WATCH_LIMIT", 3):
             self.run_()
@@ -565,14 +599,14 @@ class Stage(unittest.TestCase):
         self.assertEqual(sorted(st["merges"]["seen"]), ["0", "1", "2"])
         with patch.object(mj, "WATCH_LIMIT", 3):
             self.run_()
-        self.assertEqual([(b["kind"], b.get("urgent")) for b in self.buffered()], [("merge-watch-overflow", True)])
-        self.assertIn("the fetch limit: check merges as injaneity by hand", self.buffered()[0]["reason"])
+        self.assertEqual([(b["kind"], b.get("urgent")) for b in self.buffered()], [("unexpected-merge", True)] * 3 + [("merge-watch-overflow", True)])
+        self.assertIn("the fetch limit: check merges of PRs by injaneity by hand", self.buffered()[-1]["reason"])
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
 
     def test_paused_buffers_an_unexpected_merge_but_does_not_post(self):
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-05T00:00:00+08:00"}}))
         (self.d / "tick/PAUSED").write_text("manual\n")
-        self.merged = [{"number": 10, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
                         "mergeCommit": {"oid": "c" * 40}}]
         with patch.object(mj, "post_webhook", Mock(side_effect=AssertionError("no POST while paused"))):
             self.run_()

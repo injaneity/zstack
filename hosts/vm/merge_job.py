@@ -13,7 +13,8 @@ ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. The job's
 (state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
 entry is left alone; its merge wakes through the merge watch. A draft is a skip: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
-urgent unexpected-merge wake for a merge as ME that this job did not make.
+urgent unexpected-merge wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a
+teammate, a bot or an app). The job's own merges are the heads in state.json landed and queued.
 
   merge_job.py             one real run (cron, under flock)
   merge_job.py --dry-run   decide every PR, print would-<action>, change and write nothing
@@ -250,22 +251,22 @@ def should_dequeue(reasons, queued, entry, head, me=ME):
     return bool({r.code for r in reasons} & DEQUEUE_CODES)
 
 
-def merge_audit(merged, job_merged, known, me=ME):
-    """Merges this job did not make -> [(n, alert|log|ignore, by)]: alert for one as `me` (a hand merge or GitHub
-    auto-merge), log for another human, ignore a bot."""
+def merge_audit(merged, job_heads, known):
+    """Merges of our PRs this job did not make -> [(n, by)], oldest first. job_heads is {n: head} from state.json landed
+    and queued; a head kept short (seeded from events.log) matches as a prefix. known is the ones already handled."""
     out = []
     for p in sorted(merged, key=lambda p: p.get("mergedAt") or ""):
-        n, by = p["number"], (p.get("mergedBy") or {}).get("login") or ""
-        if n in job_merged or str(n) in known:
+        n, head = p["number"], p.get("headRefOid") or ""
+        if str(n) in known or (job_heads.get(n) and head.startswith(job_heads[n])):
             continue
-        bot = (p.get("mergedBy") or {}).get("is_bot") or by.startswith("app/") or by.endswith("[bot]")
-        out.append((n, "ignore" if bot else "alert" if by == me else "log", by))
+        out.append((n, (p.get("mergedBy") or {}).get("login") or "?"))
     return out
 
 
-def job_merges(events):
-    """PR numbers this job (or the tick before it) merged or asked GitHub to merge: its `merged` and `merge-queued` events."""
-    return {int(m.group(1)) for x in events if (m := re.search(r"^\S+ (?:merged|merge-queued) cua#(\d+) ", x))}
+def seed_landed(events):
+    """state.json landed before it existed: the `merged cua#N squash at <head>` lines events.log has, with their time."""
+    return {m.group(2): {"head": m.group(3), "at": m.group(1)}
+            for x in events if (m := re.match(r"(\S+) merged cua#(\d+) squash at ([0-9a-f]+)", x))}
 
 
 # ---------------- side effects ----------------
@@ -314,7 +315,9 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
-        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges", "queued")}
+        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges", "queued", "landed")}
+        if "landed" not in s:   # once, on the first run with this field
+            self.s["landed"] = seed_landed(read(EVENTS).splitlines() if os.path.exists(EVENTS) else [])
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -455,6 +458,7 @@ class Job:
         st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
         if st.get("state") == "MERGED":
             head = st.get("headRefOid") or q["head"]
+            self.s["landed"][ident.split("#")[1]] = {"head": head, "at": now()}
             self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
         elif st.get("state") == "CLOSED":
             self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
@@ -463,8 +467,8 @@ class Job:
         del self.s["queued"][ident]
 
     def merge_watch(self):
-        """Urgent unexpected-merge wake for a trycua/cua PR merged as ME that this job did not merge. Its `merged
-        cua#N` events are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
+        """Urgent unexpected-merge wake for a trycua/cua PR by ME that this job did not merge, whoever merged it. The heads
+        in state.json landed and queued are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
         up to WATCH_OVERLAP_S before this run only after a fetch that was not cut short, so no merge falls between two
         windows; merges.seen keeps the ones already handled inside the overlap."""
         mw = self.s["merges"]
@@ -474,28 +478,27 @@ class Job:
             return
         since = datetime.fromisoformat(mw["since"]).astimezone(ZoneInfo("UTC"))
         start = datetime.fromtimestamp(time.time() - WATCH_OVERLAP_S, SGT).isoformat(timespec="seconds")
-        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--limit", str(WATCH_LIMIT), "--search",
-                          f"merged:>={since.date().isoformat()}", "--json", "number,mergedBy,mergedAt,title,mergeCommit"]) or []
+        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--author", ME, "--limit", str(WATCH_LIMIT), "--search",
+                          f"merged:>={since.date().isoformat()}", "--json", "number,headRefOid,mergedBy,mergedAt,title,mergeCommit"]) or []
         at_of = lambda p: datetime.fromisoformat(p["mergedAt"].replace("Z", "+00:00"))   # noqa: E731
         by_n = {p["number"]: p for p in merged if at_of(p) >= since}
-        events = read(EVENTS).splitlines() if os.path.exists(EVENTS) else []
-        for n, act, by in merge_audit(list(by_n.values()), job_merges(events), known):
+        heads = {int(k): v["head"] for k, v in self.s["landed"].items()}
+        heads.update({int(k.split("#")[1]): v["head"] for k, v in self.s["queued"].items()})
+        for n, by in merge_audit(list(by_n.values()), heads, known):
             p, ident = by_n[n], f"{SHORT}#{n}"
             at = at_of(p).astimezone(SGT).isoformat(timespec="seconds")
             sha = (p.get("mergeCommit") or {}).get("oid") or "-"
             why = f"merged by {by} at {at} as {sha[:9]}, not by the tick: {(p.get('title') or '')[:100]}"
-            if act == "alert":
-                self.buffer("unexpected-merge", ident, sha, why, urgent=True)
-            elif act == "log":
-                self.event("merge-noted", ident, why)
-            known[str(n)] = {"by": by, "at": at, "outcome": act}
+            self.buffer("unexpected-merge", ident, sha, why, urgent=True)
+            known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
         if len(merged) >= WATCH_LIMIT:   # merges past the page are unseen: keep the window and wake a person, once per window
             self.errors += 1
-            why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges as {ME} by hand, then move merges.since"
+            why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges of PRs by {ME} by hand, then move merges.since"
             self.event("error", "merge-watch", why)
             return self.buffer("merge-watch-overflow", "merge-watch", mw["since"], why, urgent=True)
         mw["since"] = max(mw["since"], start)
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
+        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if v["at"] >= mw["since"]}   # it landed no later than it merged
 
     def run(self):
         if self.paused:
