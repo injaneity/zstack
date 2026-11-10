@@ -29,6 +29,7 @@ FAKE_PI = """#!/bin/bash
 if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "claude-code m"; exit 0; fi
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
 printf '%s\\n' "$@" > "$T/args"
+echo "${PI_RUN_DRAIN-unset}" > "$T/drain"
 echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
 ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake" 2>/dev/null
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
@@ -407,6 +408,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(args[args.index("--session-id") + 1], "lim")
         self.assertEqual(args[args.index("--name") + 1], "role:coding")
         self.assertEqual(args[-1], pr.RESUME)
+        self.assertEqual((self.t / "drain").read_text().strip(), "unset")   # the drain's mark never reaches the session
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)   # the first brief, kept
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
 
@@ -470,6 +472,46 @@ class Launcher(unittest.TestCase):
         self.pi_run("collect", "qa")
         r = self.pi_run("qa", "coding", str(self.t / "brief.md"))   # a start after collected: a retry is a fresh id
         self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: qa: attempt 1 was collected; a retry is a fresh id"))
+
+    def test_a_paused_run_from_the_old_code_becomes_a_queued_continuation(self):
+        d = self.t / "root" / "review" / "old-pause"
+        d.mkdir(parents=True)
+        (d / "brief.full.md").write_text("task\n")
+        (d / "run.json").write_text(json.dumps({**Step.R(Step(), "paused", rc=1, start="Tue Nov 10 04:53:24 2026"), "pid": 99999999,
+                                                "resume_at": "2026-11-10T06:00:00Z", "role": "coding", "extra": []}))
+        self.assertEqual(self.pi_run("list").stdout,
+                         "old-pause queued attempt=1 rc=1 since=2026-11-10T04:53:24Z resume_at=2026-11-10T06:00:00Z\n")
+        self.assertEqual(self.pi_run("old-pause", "coding", str(self.t / "brief.md")).returncode, 3)   # only the drain resumes it
+        r = self.pi_run("old-pause", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("resumed old-pause attempt 1", r.stdout)
+
+    def test_a_drain_that_set_up_a_fresh_start_refuses_a_run_that_became_a_continuation_meanwhile(self):
+        d = self.t / "root" / "review" / "race"
+        d.mkdir(parents=True)
+        q = {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
+             "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "coding"}
+        (d / "run.json").write_text(json.dumps(q))
+        # the fake pi's --list-models is the setup window: another launcher's run hits a 429 there and is queued again
+        cont = {**q, "attempt": 1, "rc": 1, "resume_at": "2026-11-10T02:00:00Z", "extra": []}
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace('if [ "$1" = --list-models ]; then',
+                                                           f'if [ "$1" = --list-models ]; then echo {json.dumps(json.dumps(cont))} > "{d}/run.json";'))
+        r = self.pi_run("race", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("its state changed during setup; nothing started", r.stderr)
+        self.assertEqual(self.run_json("race"), cont)
+        self.assertFalse((d / "brief.full.md").exists())
+
+    def test_a_resume_uses_the_role_it_started_with(self):
+        (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete)\n")
+        self.start("rr", rc=1)
+        self.assertTrue(wait_for(lambda: (self.run_json("rr") or {}).get("state") == "queued"))
+        run = self.run_json("rr")
+        (self.t / "root/review/rr/run.json").write_text(json.dumps({**run, "resume_at": "2000-01-01T00:00:00Z"}))
+        (self.t / "say").unlink()
+        r = self.pi_run("rr", "verifier", str(self.t / "brief.md"), PI_RUN_DRAIN="1")   # the brief's role changed since
+        self.assertEqual(r.returncode, 0, r.stderr)   # verifier's provider has no credential here: coding's is used
+        self.assertIn("as role coding: claude-code", r.stdout)
 
     def test_a_live_queued_marker_becomes_a_queued_run_with_its_place(self):
         """The QUEUED files before run.json had the queue: migrated, not deleted (ci-times-72h and lint-audit, 10 Nov)."""

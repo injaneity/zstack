@@ -326,6 +326,14 @@ class Hourly(unittest.TestCase):
         self.assertEqual((local / "review" / "back" / "brief.full.md").read_text(), "task back\n")   # the brief it started with
         self.assertIn("as role coding", r.stdout)
 
+    def test_only_the_drain_resumes_a_429d_run_even_when_the_callers_env_says_drain(self):
+        self.queued(self.t / "root", "back", 900, resume_in=-60)
+        for argv in (("launch", "back", "local", "chat"), ("recv", "back")):   # a direct hourly launch is not the drain
+            r = self.sh("hourly", *argv, stdin="", PI_RUN_DRAIN="1")
+            self.assertEqual(r.returncode, 3, argv)
+            self.assertIn("queued after a 429", r.stderr)
+        self.assertEqual(json.loads((self.review("back") / "run.json").read_text())["state"], "queued")
+
     def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
         shutil.rmtree(self.t / "root")
         self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue", PI_RUN_DRY="1"))

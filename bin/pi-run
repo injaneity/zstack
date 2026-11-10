@@ -34,6 +34,7 @@ model through bin/model-for. onigiri-mode's Hard rules (skills/onigiri-mode/hard
 prompt as that file. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
 then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
 """
+import calendar
 import fcntl
 import json
 import os
@@ -281,15 +282,11 @@ def start(sid, role, brief, extra):
 
 def launch(sid, role, brief, extra):
     """Start pi for a new attempt, or (from the hourly drain only) continue a 429'd attempt's pi session with RESUME."""
-    pm = subprocess.run([os.path.join(PKG, "bin", "model-for"), role], capture_output=True, text=True)
-    if pm.returncode:
-        die(2, pm.stderr.strip())
-    provider, model = pm.stdout.split()
     env, root = host_env("dry" if os.environ.get("PI_RUN_DRY") else "start")
     d, f = os.path.join(root, sid), dict(drain=os.environ.get("PI_RUN_DRAIN") == "1", now=utc())
     migrate(root)
     run = read_json(os.path.join(d, "run.json"))
-    cont = bool(run and run["state"] == "queued" and run.get("resume_at"))
+    cont = continuation(run)
     if cont:   # the same session goes on: its role, pi args and brief are the ones it started with
         role, extra, text = run.get("role") or role, run.get("extra") or [], RESUME
         with open(os.path.join(d, "brief.full.md")) as fh:
@@ -297,6 +294,10 @@ def launch(sid, role, brief, extra):
     else:
         prefix = env.get("ONIGIRI_BRIEF_PREFIX")
         text = brief_text = "".join(open(x).read() for x in (prefix, brief) if x)
+    pm = subprocess.run([os.path.join(PKG, "bin", "model-for"), role], capture_output=True, text=True)
+    if pm.returncode:
+        die(2, pm.stderr.strip())
+    provider, model = pm.stdout.split()
     check(d, sid, run, **f)   # refuse before setup; checked again under the lock below
     try:   # pi lists a provider's models only when it has a credential (a model missing from pi's catalog still runs)
         ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
@@ -318,6 +319,8 @@ def launch(sid, role, brief, extra):
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check(d, sid, r.run, **f)
+        if continuation(r.run) != cont:   # another launcher started it and it hit a 429 meanwhile: the setup above is stale
+            die(3, f"{sid}: its state changed during setup; nothing started")
         if not cont:
             with open(os.path.join(d, "brief.full.md"), "w") as fh:
                 fh.write(text)
@@ -356,11 +359,25 @@ def collect(sid):
     return 0
 
 
+def continuation(run):
+    """The run is a 429's continuation waiting in the queue."""
+    return bool(run and run["state"] == "queued" and run.get("resume_at"))
+
+
 def migrate(root):
     """The queue before run.json had the state: a review dir with a QUEUED marker and no run.json becomes a queued run
-    (since = the marker's time, role = the marker's text or the brief's `role:` line), and the marker goes."""
+    (since = the marker's time, role = the marker's text or the brief's `role:` line), and the marker goes. A run.json
+    the old code left `paused` becomes the queued continuation it now is, with since = its attempt's start time."""
     for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         d, mark = os.path.join(root, sid), os.path.join(root, sid, "QUEUED")
+        if (read_json(os.path.join(d, "run.json")) if os.path.isfile(os.path.join(d, "run.json")) else {}).get("state") == "paused":
+            with Run(d) as r:
+                if r.run["state"] == "paused":
+                    try:
+                        since = utc(calendar.timegm(time.strptime(r.run["start"], "%a %b %d %H:%M:%S %Y")))   # ps lstart, UTC
+                    except (TypeError, ValueError):
+                        since = r.run["resume_at"]
+                    r.write({**r.run, "state": "queued", "since": r.run.get("since") or since})
         if not os.path.isfile(mark):
             continue
         with Run(d) as r:
