@@ -4,7 +4,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## Machines
 
-- **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key and `~/onigiri-vm/vm`.
+- **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key. Its ssh wrapper is `hosts/mini/vm`, and `~/onigiri-vm/vm` is a symlink to it.
 - Reach the VM from the box with `HOME=/home/box /srv/onigiri/tools/cua-main-88e6d9f do --no-record shell '~/onigiri-vm/vm "..."'`. For anything longer than a line, base64 a script over and run it as `bash /tmp/x.sh`. If the VM is unreachable, stop and ask Zane. Never do the work in the chat instead.
 - `pi list` on the VM shows `git:github.com/injaneity/zstack`, checked out at `/home/box/.pi/agent/git/github.com/injaneity/zstack`. `/home/box/.pi/agent/skills/` is empty by design.
 
@@ -21,7 +21,7 @@ Every entry point (`bin/*`, `hosts/check-parity`, `hosts/vm/merge_job.py`, `wake
 
 ## Holds file
 
-`/srv/onigiri/hold-prs.txt`, one row per line. Only Zane edits it. The merge job reads three kinds: `hold | <PR> | <rules> | <note>`, `preapprove | #<PR> | <rules> | <40-char head sha> | <source>`, and `hands-off-path | <file name> | <rules> | <note>`, which holds every PR that changes a file of that name (the job waits with `who=zane`). To stop one PR, add a `hold` row. A malformed one, or a row of any other kind that names a PR number, makes the file unreadable, and then every PR counts as held. Rows about a login (`skip-author`, `review-only`) steer the hourly pickup and the merge job does not read them: `skip-author` (bots) is never picked up or reviewed, and `review-only` (teammates) gets a first review and nothing else, so a review task for one is filed, never cancelled. The mini reads a copy synced at launch.
+`/srv/onigiri/hold-prs.txt`, one row per line. Only Zane edits it. The merge job reads three kinds: `hold | <PR> | <rules> | <note>`, `preapprove | #<PR> | <rules> | <40-char head sha> | <source>`, and `hands-off-path | <file name> | <rules> | <note>`, which holds every PR that changes a file of that name (the job waits with `who=zane`). To stop one PR, add a `hold` row. A malformed one, or a row of any other kind that names a PR number, makes the file unreadable, and then every PR counts as held. Rows about a login (`skip-author`, `review-only`) steer the hourly pickup and the merge job does not read them: `skip-author` (bots) is never picked up or reviewed, and `review-only` (teammates) gets a first review and nothing else, so a review task for one is filed, never cancelled. The mini reads a copy, `~/onigiri/sync/hold-prs.txt`, that `hosts/mini/sync-from-vm.sh` refreshes at every launch. Each run fetches into its own temp file under a lock, so launches that start together do not race and a slower fetch never replaces a newer one.
 
 ## Launching
 
@@ -32,6 +32,16 @@ Every entry point (`bin/*`, `hosts/check-parity`, `hosts/vm/merge_job.py`, `wake
 - The agents list FFF's search tools, which come from a separate package: `pi install npm:@ff-labs/pi-fff@0.11.0`, once per host. Without it pi skips those tools.
 - Wakes POST to the urgent-wake webhook with the key in `~/.config/onigiri-urgent-webhook`. Only Zane places that file, mode 0600, on each host. A host without it logs `webhook not configured`.
 - `gh` runs as injaneity with `GH_CONFIG_DIR=/home/box/.config/gh HOME=/home/box`. Upstream or public posts go only through dumpling.
+
+## Outside the package
+
+The hourly, the launches, the merge job and collect read only these files outside zstack. Everything else they run is in `hosts/`.
+
+- Both hosts: the credentials file (`~/onigiri/env.sh` on the mini, `~/.profile` on the VM), `~/.config/onigiri/host`, pi's `<agent dir>/auth.json`, `gh`'s login in `GH_CONFIG_DIR`, and `~/.config/onigiri-urgent-webhook`.
+- The mini: the VM's ssh key `~/.ssh/onigiri_vm_ed25519` and `~/onigiri-vm/known_hosts`.
+- The VM: the merge job's crontab line (in The merge job below).
+
+Tools come from each host's install (`pi`, `gh`, `git`, `python3`, cargo's `~/.cargo/env`, the mini's micromamba bash). Data lives in `<root>`: `review/`, `pickup.log`, `events.log`, `tick/` and the cua clone.
 
 ## Disk
 
