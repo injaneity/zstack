@@ -216,15 +216,16 @@ def drain():
     dry = bool(os.environ.get("PI_RUN_DRY"))
     hosts = all_facts()
     running, auto = slots(hosts)
-    for h, f in hosts.items():
-        if "error" in f:
-            print(f"host {h}: unreachable, its queue waits: {f['error']}")
+    blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free
+    for h in blind:
+        print(f"host {h}: unreachable, so every queue waits: {hosts[h]['error']}")
     queued = sorted((r.get("since", ""), h, sid, r["auto"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
                     if r["state"] == "queued")
     rc = 0
     for since, h, sid, is_auto in queued:
         f = hosts[h]
-        why = f"slots full: running {running}/{TOTAL}, auto {auto}/{AUTO}" if running >= TOTAL or (is_auto and auto >= AUTO) else \
+        why = f"{', '.join(blind)} unreachable, slots unknown" if blind else \
+            f"slots full: running {running}/{TOTAL}, auto {auto}/{AUTO}" if running >= TOTAL or (is_auto and auto >= AUTO) else \
             "not at main" if h != SELF and not f["at_main"] else f"{f['free_gb']}G free, under {FLOOR_GB}G" if h != SELF and \
             f["free_gb"] < FLOOR_GB else ""
         if why:

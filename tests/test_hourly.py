@@ -263,7 +263,12 @@ class Hourly(unittest.TestCase):
         self.assertTrue((vm / "review" / "v" / "QUEUED").exists())
         (self.t / "dead").write_text("#!/bin/bash\necho 'ssh: connect timed out' >&2; exit 255\n")
         (self.t / "dead").chmod(0o755)
-        self.assertIn("host vm: unreachable, its queue waits: ssh: connect timed out", self.hourly("queue", ONIGIRI_PEERS=f"vm={self.t}/dead"))
+        self.queued(self.t / "root", "here", 50)   # the peer may hold every slot, so a local run waits too
+        out = self.hourly("queue", ONIGIRI_PEERS=f"vm={self.t}/dead")
+        self.assertIn("host vm: unreachable, so every queue waits: ssh: connect timed out", out)
+        self.assertIn("wait local here: vm unreachable, slots unknown", out)
+        self.assertTrue((self.review("here") / "QUEUED").exists())
+        self.assertFalse((self.review("here") / "run.json").exists())
 
     def test_every_entry_point_prints_the_sha_it_runs(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
