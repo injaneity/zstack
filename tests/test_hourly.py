@@ -118,16 +118,12 @@ class Hourly(unittest.TestCase):
         bots = json.loads((self.t / "others.json").read_text()) + [{"number": 4, "author": {"login": "app/x", "is_bot": True}}]
         (self.t / "others.json").write_text(json.dumps(bots))
         self.assertIn("skip:", self.hourly())                                             # a bot PR is not
-        legacy = self.review("old")
+        legacy = self.review("old")   # a run.rc dir from before run.json is nobody's state: nothing reads it
         legacy.mkdir()
         (legacy / "run.rc").write_text("0\n")
-        self.assertIn("legacy   old run.rc=0", self.hourly())
-        self.hourly("done")
-        self.assertIn("legacy   old", self.hourly())                                      # actionable: never skipped
-        self.assertEqual(self.sh("hourly", "processed", "old").returncode, 0)
-        self.assertTrue((legacy / "processed").exists())
-        self.hourly("done")
         self.assertIn("skip:", self.hourly())
+        self.assertEqual(self.sh("hourly", "processed", "old").returncode, 2)
+        self.assertNotIn("legacy", json.loads(self.hourly("facts")))
 
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
@@ -135,7 +131,7 @@ class Hourly(unittest.TestCase):
                         "'dry-run cua#7145 872f49fb0 wait who=zane: declared deep: needs Zane (no preapprove row)' "
                         "'dry-run cua#7185 96f2fa0ea wait who=session: red after rerun: ci-gate' "
                         "'dry-run cua#7190 3c4132d84 merge: green, ci-gate SUCCESS, risk standard' 'dry-run cua#7191 1 wait: draft';;\n"
-                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "legacy": []}\';; esac\n')
+                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}}\';; esac\n')
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
         self.assertIn("merge job needs-Zane: 1\n  cua#7145 872f49fb0: declared deep: needs Zane (no preapprove row)\n"
@@ -183,7 +179,7 @@ class Hourly(unittest.TestCase):
     def test_slots_and_launch_host_follow_the_peer(self):
         peer = self.t / "peer"
         peer.write_text("#!/bin/bash\n" + 'echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": '
-                        '{"v1": {"state": "running", "auto": true, "idle_min": 200}}, "legacy": []}\'\n')
+                        '{"v1": {"state": "running", "auto": true, "idle_min": 200}}}\'\n')
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: zstack s at main, free 25G", out)
@@ -288,8 +284,7 @@ class Hourly(unittest.TestCase):
     def test_a_429d_run_frees_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
         def peer(free, runs):
             f = self.t / "facts"
-            f.write_text("#!/bin/bash\necho '" + json.dumps({"sha": "s", "at_main": True, "parity": [], "free_gb": free, "runs": runs,
-                                                            "legacy": []}) + "'\n")
+            f.write_text("#!/bin/bash\necho '" + json.dumps({"sha": "s", "at_main": True, "parity": [], "free_gb": free, "runs": runs}) + "'\n")
             f.chmod(0o755)
             return f"vm={f}"
         q = {"state": "queued", "auto": False, "since": "2026-11-10T00:00:00Z"}
