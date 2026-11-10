@@ -25,7 +25,7 @@ Exit codes: 0 done, 2 usage, 3 refused by the state, 4 setup failed. PI_RUN_DRY=
 $ONIGIRI_HOST when set, else the name in ~/.config/onigiri/host, names hosts/<name>/host.sh, sourced with the subcommand as $1
 for the host's paths and env (ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief), so
 a launch from any shell (nohup, ssh, cron) loads it. A start or resume then asks pi for the role's model in that env and
-exits 4, before any run state or wake, when the provider has no credential there. The role picks provider and
+exits 4, before any run state or wake, when pi lists none of the provider's models there (no credential). The role picks provider and
 model through bin/model-for. onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md) are appended to the system
 prompt as that file. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
 then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
@@ -291,12 +291,12 @@ def launch(sid, role, brief, extra, now):
         prefix = env.get("ONIGIRI_BRIEF_PREFIX")
         text = brief_text = "".join(open(f).read() for f in (prefix, brief) if f)
     check(d, sid, event, now)   # refuse before setup; checked again under the lock below
-    try:   # pi lists a model only when its provider has a credential: the 13:04 10 Nov "No API key" runs fail here
-        ls = subprocess.run(["pi", "--list-models", model, "--provider", provider], env=env, capture_output=True, text=True).stdout
+    try:   # pi lists a provider's models only when it has a credential (a model missing from pi's catalog still runs)
+        ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
     except OSError as e:
         die(4, f"{sid}: cannot run pi in the launch env: {e}")
-    if not any(x.split()[:2] == [provider, model] for x in ls.splitlines()):
-        die(4, f"{sid}: no {provider} credential in the launch env: `pi --list-models {model}` does not list {provider} {model} "
+    if not any(x.split()[:1] == [provider] for x in ls.splitlines()):   # the 13:04 10 Nov "No API key" runs stop here
+        die(4, f"{sid}: no {provider} credential in the launch env: `pi --list-models` lists no {provider} model "
                f"(host file: {env.get('ONIGIRI_HOST') or 'none'}). Log in, or name the host file that loads it with ONIGIRI_HOST "
                "or ~/.config/onigiri/host. Nothing started.")
     if os.environ.get("PI_RUN_DRY"):

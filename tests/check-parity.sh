@@ -67,8 +67,8 @@ check "only the agents line fails" "$(fails)" 1
 
 # a launch through a host file starts nothing on a host that differs, and starts on one that does not
 echo task > "$tmp/brief.md"
-# a pi that lists every model, as one with the provider logged in does
-mkdir "$tmp/bin"; printf '#!/bin/sh\necho "$4 $2"\n' > "$tmp/bin/pi"; chmod +x "$tmp/bin/pi"; export PATH="$tmp/bin:$PATH"
+# a pi with claude-code logged in
+mkdir "$tmp/bin"; printf '#!/bin/sh\necho "claude-code m"\n' > "$tmp/bin/pi"; chmod +x "$tmp/bin/pi"; export PATH="$tmp/bin:$PATH"
 launch() { out=$(PI_RUN_DRY=1 ONIGIRI_HOST=h ONIGIRI_ROOT="$tmp/root" PI_CODING_AGENT_DIR="$tmp/agent" "$tmp/pkg/bin/pi-run" s coding "$tmp/brief.md" 2>&1); rc=$?; }
 launch; check "pi-run refuses to launch on a host that differs" "$rc" 4
 has "the launch shows the failing line" "$out" "FAIL  agents:"

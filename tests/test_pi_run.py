@@ -22,11 +22,11 @@ pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
 RULES = PKG / "skills" / "onigiri-mode" / "hard-rules.md"
-# fake pi: `--list-models <model> --provider <p>` lists the model only when $TEST_TOKEN (the provider credential) is set.
+# fake pi: `--list-models` lists a claude-code model only when $TEST_TOKEN (its credential) is set, and never openai-codex.
 # A run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
 # pi does, so a forwarded signal is visible.
 FAKE_PI = """#!/bin/bash
-if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "$4 $2"; exit 0; fi
+if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "claude-code m"; exit 0; fi
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
 printf '%s\\n' "$@" > "$T/args"
 echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
@@ -341,7 +341,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 4, r.stderr)
         self.assertIn("cannot run pi in the launch env", r.stderr)
         self.assertIsNone(self.run_json("nopi"))
-        (self.t / "bin" / "pi").write_text('#!/bin/bash\necho "$4 $2"; rm "$0"\n')   # answers the check, then is gone
+        (self.t / "bin" / "pi").write_text('#!/bin/bash\necho "claude-code m"; rm "$0"\n')   # answers the check, then is gone
         self.start("nopi")
         run = self.finished("nopi")
         self.assertEqual(run["rc"], 127)
@@ -457,6 +457,9 @@ class Launcher(unittest.TestCase):
             self.assertEqual(r.returncode, 4, r.stderr)
             self.assertIn("pi-run: nokey: no claude-code credential in the launch env", r.stderr)
             self.assertIn("Nothing started.", r.stderr)
+        r = self.pi_run("nokey", "verifier", str(self.t / "brief.md"), PI_RUN_DRY="1")   # the role's own provider is checked
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn("no openai-codex credential", r.stderr)
         self.assertFalse((self.t / "root").exists())   # no run.json, so no exit and no wake
         self.assertFalse((self.t / "args").exists())   # pi never ran a session
 

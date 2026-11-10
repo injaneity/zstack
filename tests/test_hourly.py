@@ -13,7 +13,7 @@ from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
 BIN = PKG / "bin"
-FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo \"$4 $2\" && exit 0\n" \
+FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\n" \
     "printf '%s\\n' \"$@\" > \"$T/args\"\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
 # gh pr list: our PRs from $T/ours.json, everyone else's from $T/others.json
 FAKE_GH = "#!/bin/bash\ncase \"$*\" in *--author*) cat \"$T/ours.json\";; *) cat \"$T/others.json\";; esac\n"
