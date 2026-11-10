@@ -270,6 +270,10 @@ class Hourly(unittest.TestCase):
         self.assertIn("wait vm v: slots full: running 5/5", out)   # the paused run's resume needs its slot
         self.assertIn("slots: running 5/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": {"state": "paused", "auto": False}, **held})))
 
+    def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
+        shutil.rmtree(self.t / "root")
+        self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue"))
+
     def test_a_second_queue_pass_launches_nothing_while_one_runs(self):
         self.queued(self.t / "root", "solo", 10)
         with open(self.t / "root" / "hourly-queue.lock", "w") as f:

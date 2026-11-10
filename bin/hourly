@@ -220,6 +220,7 @@ def drain():
     One that cannot start yet gets a `wait` row. PI_RUN_DRY=1 prints the plan and launches and logs nothing."""
     dry = bool(os.environ.get("PI_RUN_DRY"))
     if not dry:   # two passes counting the same free slot would both fill it; the lock is held until exit
+        os.makedirs(root(), exist_ok=True)
         lock = os.open(os.path.join(root(), "hourly-queue.lock"), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
