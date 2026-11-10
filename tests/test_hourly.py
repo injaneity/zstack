@@ -166,6 +166,32 @@ class Hourly(unittest.TestCase):
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: unreachable: ssh: connect timed out", out)
         self.assertIn("launch host: local", out)
+        self.hourly("done", ONIGIRI_PEERS=f"vm={peer}")
+        self.assertNotIn("skip:", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))   # its runs are unknown, not idle
+
+    def test_a_brief_queued_on_the_peer_launches_from_the_peers_copy(self):
+        peer_root = self.t / "peer-root"
+        (peer_root / "review" / "v9").mkdir(parents=True)
+        (peer_root / "review" / "v9" / "brief.md").write_text("task\nrole: research\n")
+        # the peer command runs the line it is given in a shell with the peer's root, like ssh to the VM
+        peer = self.t / "peer"
+        peer.write_text(f'#!/bin/bash\nexport ONIGIRI_ROOT={peer_root} HOME={self.t}/peer-home\neval "$1"\n')
+        peer.chmod(0o755)
+        home = self.t / "peer-home" / ".pi/agent/git/github.com/injaneity"
+        home.mkdir(parents=True)
+        (home / "zstack").symlink_to(PKG)
+        host = PKG / "hosts" / "test-peer"   # a host file with no parity check, as tests/test_pi_run.py does
+        host.mkdir()
+        self.addCleanup(lambda: [p.unlink() for p in host.iterdir()] and host.rmdir())
+        (host / "host.sh").write_text("")
+        (self.t / "hang").touch()
+        r = self.sh("hourly", "launch", "v9", "test-peer", "chat", "queue", ONIGIRI_PEERS=f"test-peer={peer}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("started v9 attempt 1", r.stdout)
+        self.assertTrue((peer_root / "review" / "v9" / "run.json").exists())
+        self.assertFalse(self.review("v9").exists())
+        row = (self.t / "root" / "pickup.log").read_text().splitlines()[-1].split("\t")
+        self.assertEqual(row[1:5], ["test-peer", "launch", "v9", "research; chat queue"])
 
     def test_every_entry_point_prints_the_sha_it_runs(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()

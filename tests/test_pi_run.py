@@ -395,6 +395,14 @@ class Launcher(unittest.TestCase):
             self.start(sid, rc=1)
             self.assertEqual(self.finished(sid)["wake"], "failed", sid)
 
+    def test_a_pi_killed_by_a_signal_after_a_429_line_is_a_failure(self):
+        (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete)\n")
+        self.start("sig", hang=True)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        os.kill(int((self.t / "pi-pid").read_text()), signal.SIGKILL)
+        run = self.finished("sig")
+        self.assertEqual((run["state"], run["rc"], run["wake"]), ("exited", 137, "failed"))
+
     def test_queue_shows_in_list_oldest_first_and_a_start_clears_it(self):
         for sid in ("qa", "qb"):
             d = self.t / "root" / "review" / sid

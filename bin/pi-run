@@ -202,9 +202,9 @@ def supervise(d, sid, cmd, env):
             proc.send_signal(got[0])
     if rc is None:
         rc = 128 + got[0] if proc is None else proc.wait()
-    rc = 128 - rc if rc < 0 else rc
+    killed, rc = rc < 0, 128 - rc if rc < 0 else rc   # a signal-killed pi is a failure, whatever it printed last
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
-        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=limit_until(d, r.run["attempt"], rc, got))
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=limit_until(d, r.run["attempt"], rc, got or killed))
         if done["state"] == "paused":
             print(f"pi-run: paused on an upstream limit; resume at {done['resume_at']} with pi-run resume {sid}", flush=True)
         if done.get("wake"):

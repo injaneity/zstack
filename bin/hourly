@@ -203,7 +203,7 @@ def main(argv):
             write(fpath, {"ts": now(), "fp": fp})
             return print(f"hourly done: fingerprint {fp} stored") or 0
         acts = s["batch_due"] or s["errors"] or \
-            any(f.get("legacy") or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
+            any("error" in f or f.get("legacy") or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
         if fp == last.get("fp") and not acts:
             return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
         return report(s, fp, last) or 0
@@ -218,26 +218,31 @@ def main(argv):
         return p.returncode
     if cmd == "launch" and len(rest) >= 3 and pr.ID.fullmatch(rest[0]):
         sid, host, d = rest[0], rest[1], os.path.join(root(), "review", rest[0])
-        text = open(os.path.join(d, "brief.md")).read()
-        q = open(os.path.join(d, "QUEUED")).read().strip() if os.path.exists(os.path.join(d, "QUEUED")) else ""
-        role = next((x.split(":", 1)[1].strip() for x in text.splitlines() if x.startswith("role:")), q if q and q != "next" else "coding")
-        p = on(host, ["bin/hourly", "recv", sid, role], stdin=text)
+        here = os.path.join(d, "brief.md")   # a brief queued on the peer itself is read there, so none is sent
+        p = on(host, ["bin/hourly", "recv", sid], stdin=open(here).read() if host != SELF and os.path.exists(here) else "")
         sys.stdout.write(p.stdout)
         sys.stderr.write(p.stderr)
         if p.returncode == 0:
             if host != SELF and os.path.exists(os.path.join(d, "QUEUED")):
                 os.unlink(os.path.join(d, "QUEUED"))
+            role = p.stdout.rsplit(" as role ", 1)[-1].split(":")[0] if " as role " in p.stdout else "?"
             log(host, "launch", sid, f"{role}; {' '.join(rest[2:])}")
         return p.returncode
-    if cmd == "recv" and len(rest) == 2 and pr.ID.fullmatch(rest[0]):
+    if cmd == "recv" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
         d = os.path.join(root(), "review", rest[0])
-        os.makedirs(d, exist_ok=True)
-        text = sys.stdin.read()
-        if os.path.exists(os.path.join(d, "brief.md")) and open(os.path.join(d, "brief.md")).read() != text:
+        brief, text = os.path.join(d, "brief.md"), sys.stdin.read()
+        if text and os.path.exists(brief) and open(brief).read() != text:
             pr.die(3, f"{rest[0]}: review/{rest[0]}/brief.md here differs from the brief sent")
-        with open(os.path.join(d, "brief.md"), "w") as f:
-            f.write(text)
-        os.execv(os.path.join(PKG, "bin", "pi-run"), ["pi-run", rest[0], rest[1], os.path.join(d, "brief.md")])
+        if text:
+            os.makedirs(d, exist_ok=True)
+            with open(brief, "w") as f:
+                f.write(text)
+        if not os.path.exists(brief):
+            pr.die(2, f"{rest[0]}: no review/{rest[0]}/brief.md on {SELF}; write it with bin/new-brief")
+        text = open(brief).read()
+        q = open(os.path.join(d, "QUEUED")).read().strip() if os.path.exists(os.path.join(d, "QUEUED")) else ""
+        role = next((x.split(":", 1)[1].strip() for x in text.splitlines() if x.startswith("role:")), q if q and q != "next" else "coding")
+        os.execv(os.path.join(PKG, "bin", "pi-run"), ["pi-run", rest[0], role, brief])
     if cmd in ("report", "processed") and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
         d = os.path.join(root(), "review", rest[0])
         if cmd == "processed":
