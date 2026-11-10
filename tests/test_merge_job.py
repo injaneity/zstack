@@ -248,7 +248,7 @@ class Stage(unittest.TestCase):
         k.start()
         self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
-        self.lists = []
+        self.lists, self.reads = [], []
         self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
@@ -256,12 +256,40 @@ class Stage(unittest.TestCase):
                        "mergeable": mergeable, "state": "OPEN", "mergedAt": None, "files": [{"path": x} for x in files],
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
 
+    def node(self, n, files=None, checks=None):
+        """PR n as GitHub's GraphQL returns it, 100 files and 100 checks a page (files/checks: the page's cursor, or None)."""
+        p = self.prs[n]
+        mergeable = p["mergeable"]
+        if self.unknown.get(n):   # GitHub has not computed it yet: UNKNOWN for this many reads
+            self.unknown[n] -= 1
+            mergeable = "UNKNOWN"
+        self.reads.append(n)
+
+        def page(items, after):
+            i = int(after or 0)
+            return {"totalCount": len(items), "nodes": items[i:i + 100],
+                    "pageInfo": {"hasNextPage": i + 100 < len(items), "endCursor": str(i + 100)}}
+        checks_ = [{**({k: v for k, v in c.items() if k != "workflowName"}),
+                    **({"checkSuite": {"workflowRun": {"workflow": {"name": c["workflowName"]}}}} if c["__typename"] == "CheckRun" else {})}
+                   for c in p["statusCheckRollup"]]
+        return {"number": n, "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
+                "mergeable": mergeable, "labels": {"nodes": [{"name": x} for x in p["labels"]]},
+                "files": page(p["files"], files), "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page(checks_, checks)}}}]}}
+
     def gh(self, args):
         if args[:2] == ["api", "graphql"]:
-            n = int(args[args.index("-F") + 1].split("=", 1)[1])
-            return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
-        if args[:2] == ["pr", "list"] and "open" in args:
-            return [{k: p[k] for k in args[-1].split(",")} for p in self.prs.values() if p["state"] == "OPEN"]
+            query = args[-1].split("=", 1)[1]
+            kv = dict(a.split("=", 1) for a in args[2:-1] if "=" in a)
+            if "search(" in query:
+                return {"data": {"search": {"nodes": [self.node(n) for n, p in self.prs.items() if p["state"] == "OPEN"],
+                                            "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+            n = int(kv["n"])
+            if "mergeQueueEntry" in query:
+                return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
+            node = self.node(n, kv.get("files"), kv.get("checks"))
+            if "@include" in query:   # MORE: only the connections asked for
+                node = {k: node[k] for k in (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
+            return {"data": {"repository": {"pullRequest": node}}}
         if args[:2] == ["pr", "list"]:
             self.lists.append(args)
             return self.merged
@@ -470,6 +498,33 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
+    def test_one_search_reads_every_pr_and_only_one_with_more_than_a_page_reads_again(self):
+        """Before: one `pr list` plus one `pr view` per PR. Now: one search, and a follow-up only past 100 files or checks."""
+        self.add(6350)
+        self.add(6351, rollup=[cr(f"lane {i}") for i in range(230)] + [cr("ci-gate")], files=[f"f{i}.rs" for i in range(120)])
+        self.add(6352, rollup=[cr(f"lane {i}") for i in range(99)] + [cr("ci-gate", conclusion="FAILURE")])   # 100: one page
+        seen = []
+        real = self.gh
+        with patch.object(mj, "gh_json", lambda a: seen.append(a) or real(a)):
+            self.run_(dry=True)
+        reads = [a for a in seen if a[:2] != ["pr", "list"]]   # merge-watch's list is not the PR read
+        self.assertEqual(sum("search(" in a[-1] for a in reads), 1)
+        self.assertEqual([dict(x.split("=", 1) for x in a[2:-1] if "=" in x)["n"] for a in reads if "@include" in a[-1]], ["6351", "6351"])
+        self.assertFalse([a for a in reads if a[:2] == ["pr", "view"]])
+        self.assertEqual({c[3] for c in self.of(["gh", "pr", "merge"])}, set())   # dry
+        job = mj.Job(dry=True)
+        with patch.object(mj, "gh_json", real):
+            p = mj.from_graphql(mj.read_rest(self.node(6351)))
+        self.assertEqual((len(p["statusCheckRollup"]), len(p["files"])), (231, 120))
+        self.assertEqual(job.evaluate(p, FIX)[0], [])   # green: every one of the 231 checks was read, ci-gate last
+
+    def test_a_count_that_does_not_match_what_was_read_raises(self):
+        self.add(6360)
+        n = self.node(6360)
+        n["files"]["totalCount"] = 2
+        with self.assertRaisesRegex(RuntimeError, "read 1 of 2 files"):
+            mj.from_graphql(n)
+
     def test_an_unchanged_decision_is_logged_once(self):
         self.add(6302, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
         self.run_()
@@ -520,18 +575,18 @@ class Stage(unittest.TestCase):
                          ["cua#6970", "cua#6970", "cua#7035", "cua#7035", "cua#7050", "cua#7050"])
 
     def test_one_prs_failure_does_not_skip_the_rest(self):
-        self.add(6323)
+        self.add(6323, rollup=[cr(f"lane {i}") for i in range(150)] + [cr("ci-gate")])   # past one page: a second read
         self.add(6324)
         real = self.gh
 
         def flaky(args):
-            if args[:3] == ["pr", "view", "6323"]:
-                raise RuntimeError("gh pr view 6323: HTTP 502")
+            if "@include" in args[-1] and "n=6323" in args:
+                raise RuntimeError("gh api graphql: HTTP 502")
             return real(args)
         with patch.object(mj, "gh_json", flaky):
             self.run_()
         self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6324"])
-        self.assertIn("error cua#6323 merge: RuntimeError: gh pr view 6323: HTTP 502", self.events())
+        self.assertIn("error cua#6323 merge: RuntimeError: gh api graphql: HTTP 502", self.events())
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
 
     def test_each_urgent_kind_posts_once_across_two_passes_and_a_closed_pr_none(self):
@@ -823,7 +878,12 @@ class Cli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "h").write_text(HOLDS)
             p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "injaneity"}, title="t")
-            gh = lambda args: {k: p[k] for k in args[-1].split(",")}   # noqa: E731
+            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable")}, "labels": {"nodes": []},
+                    "files": {"totalCount": 1, "nodes": [{"path": "README.md"}], "pageInfo": {"hasNextPage": False}},
+                    "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"totalCount": 0, "nodes": [],
+                                                                                          "pageInfo": {"hasNextPage": False}}}}}]}}
+            gh = lambda args: {"data": {"repository": {"pullRequest": node}}} if args[:2] == ["api", "graphql"] else \
+                {k: p[k] for k in args[-1].split(",")}   # noqa: E731
             with patch.multiple(mj, STATE=f"{d}/s", EVENTS=f"{d}/e", PAUSED=f"{d}/P", HOLDS_FILE=f"{d}/h",
                                 gh_json=gh, sh=Mock(side_effect=AssertionError("no sh"))), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
