@@ -25,8 +25,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
-          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief bin/queue bin/model-for tests/ensure-package-main.sh tests/pirun-model.sh tests/models.sh
+          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly bin/PiRun.mutants.py model
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief bin/queue bin/model-for tests/ensure-package-main.sh tests/pirun-model.sh tests/zstack-model.sh tests/models.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -49,6 +49,8 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
           TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
+      - name: TLC passes model/Zstack.tla, every mutant fails on its rule, and the Race.cfg probe still breaks
+        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/zstack-model.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0

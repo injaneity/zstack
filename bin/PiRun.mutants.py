@@ -18,12 +18,14 @@ M = [
     ("lost-run-sends-no-wake", "a lost run's collect sends nothing (bin/pi-run collect before)",
      [("wake' = IF Lost THEN \"failed\" ELSE wake", "wake' = wake")], "LostWakesAtCollect"),
     ("retry-reuses-id", "a start from collected reopens the same session (step() before)",
-     [("  /\\ state \\in {\"absent\", \"queued\"} /\\ ~cont\n", "  /\\ state \\in {\"absent\", \"queued\", \"collected\"} /\\ ~cont\n")], "CollectedIsFinal"),
+     [("  /\\ state \\in {\"absent\", \"queued\"} /\\ ~cont\n",
+       "  /\\ state \\in {\"absent\", \"queued\", \"collected\"} /\\ ~cont\n")], "CollectedIsFinal"),
     ("continuation-never-drained", "the drain never resumes a 429'd run",
      [("/\\ WF_vars(Resume) ", "")], "a temporal property"),
     ("pause-wakes", "a 429 sends a failed wake",
      [("/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by>>",
-       "/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE /\\ wake' = \"failed\"\n  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by>>")], "PauseIsSilent"),
+       "/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE /\\ wake' = \"failed\"\n"
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by>>")], "PauseIsSilent"),
 ]
 
 
