@@ -543,7 +543,7 @@ class Stage(unittest.TestCase):
                     for kind in mj.URGENT:
                         job.wake(kind, "cua#1", H, "why")
                     self.prs[1]["state"] = "CLOSED"
-                    self.assertFalse(job.wake("merge-failed", "cua#1", H2, "closed meanwhile"))
+                    self.assertTrue(job.wake("merge-failed", "cua#1", H2, "closed meanwhile"))   # handled: nothing to send
                     with self.assertRaises(AssertionError):
                         job.wake("merge-blocked", "cua#1", H, "not a wake any more")
                 job.run()
@@ -562,6 +562,21 @@ class Stage(unittest.TestCase):
                 (self.d / "tick/PAUSED").unlink(missing_ok=True)
         self.assertEqual([x for x in self.events() if x.startswith("urgent cua#1 ") and not x.startswith("urgent cua#1 merge-failed:")],
                          ["urgent cua#1 not sent: paused", "urgent cua#1 webhook failed: OSError", "urgent cua#1 webhook sent (200)"])
+
+    def test_an_unexpected_merge_whose_wake_failed_is_sent_on_a_later_pass_even_after_the_window_moves(self):
+        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-05T00:00:00+08:00"}}))
+        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "app/cua-agents"}, "mergedAt": "2026-11-05T01:00:00Z",
+                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        got = iter(["webhook failed: HTTP 502", "webhook sent (200)"])
+        with patch.object(mj, "post_webhook", lambda *a: next(got)):
+            self.run_()
+            st = json.loads((self.d / "tick/state.json").read_text())   # unsent: the window stays at the merge, and it is not seen
+            self.assertEqual((st["merges"]["since"], st["merges"]["seen"]), ("2026-11-05T09:00:00+08:00", {}))
+            self.run_()
+            self.run_()
+        self.assertEqual([x for x in self.events() if x.startswith("urgent cua#10 ") and "unexpected-merge:" not in x],
+                         ["urgent cua#10 webhook failed: HTTP 502", "urgent cua#10 webhook sent (200)"])
+        self.assertGreater(json.loads((self.d / "tick/state.json").read_text())["merges"]["since"], "2026-11-06")   # sent: it moves on
 
     def test_the_old_buffers_urgent_keys_carry_over_and_the_rest_is_dropped(self):
         key = f"unexpected-merge|cua#10|{'c' * 40}"

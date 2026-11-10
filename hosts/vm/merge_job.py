@@ -353,11 +353,11 @@ class Job:
 
     def wake(self, kind, ident, head, reason):
         """POST one urgent wake for this kind, id and head (or hour, or window), once it is sent: a failed, paused or dry
-        POST is tried again next pass. Returns whether it counts as sent."""
+        POST is tried again next pass. Returns whether it is handled: sent now or before, or not needed (the PR closed)."""
         assert kind in URGENT, kind
         key = f"{kind}|{ident}|{head or '-'}"
         if key in self.s["woken"]:
-            return False
+            return True
         m = re.fullmatch(rf"{SHORT}#(\d+)", ident or "")
         if m and kind != "unexpected-merge":   # re-read: a PR can merge or close mid-run (#6026)
             try:
@@ -366,7 +366,7 @@ class Job:
                 st = None   # unknown counts as open, so no alert is lost
             if st in ("CLOSED", "MERGED"):
                 self.decide("skipped", ident, head, f"{kind}: PR {st.lower()}, no alert")
-                return False
+                return True
         self.event("urgent", ident, f"{kind}: {reason}")
         sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
         self.event("urgent", ident, sent)
@@ -485,7 +485,8 @@ class Job:
         """Urgent unexpected-merge wake for a trycua/cua PR by ME that this job did not merge, whoever merged it. The heads
         in state.json landed and queued are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
         up to WATCH_OVERLAP_S before this run only after a fetch that was not cut short, so no merge falls between two
-        windows; merges.seen keeps the ones already handled inside the overlap."""
+        windows; merges.seen keeps the ones already handled inside the overlap. A merge whose wake was not sent (paused, or
+        the POST failed) is not seen, and the window does not move past it, so the next pass sends it."""
         mw = self.s["merges"]
         known = mw.setdefault("seen", {})
         if not mw.get("since"):
@@ -499,19 +500,22 @@ class Job:
         by_n = {p["number"]: p for p in merged if at_of(p) >= since}
         heads = {int(k): v["head"] for k, v in self.s["landed"].items()}
         heads.update({int(k.split("#")[1]): v["head"] for k, v in self.s["queued"].items()})
+        unsent = []
         for n, by in merge_audit(list(by_n.values()), heads, known):
             p, ident = by_n[n], f"{SHORT}#{n}"
             at = at_of(p).astimezone(SGT).isoformat(timespec="seconds")
             sha = (p.get("mergeCommit") or {}).get("oid") or "-"
             why = f"merged by {by} at {at} as {sha[:9]}, not by the tick: {(p.get('title') or '')[:100]}"
-            self.wake("unexpected-merge", ident, sha, why)
-            known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
+            if self.wake("unexpected-merge", ident, sha, why):
+                known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
+            else:
+                unsent.append(at)
         if len(merged) >= WATCH_LIMIT:   # merges past the page are unseen: keep the window and wake a person, once per window
             self.errors += 1
             why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges of PRs by {ME} by hand, then move merges.since"
             self.event("error", "merge-watch", why)
             return self.wake("merge-watch-overflow", "merge-watch", mw["since"], why)
-        mw["since"] = max(mw["since"], start)
+        mw["since"] = max(mw["since"], min([start, *unsent]))
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
         self.s["landed"] = {k: v for k, v in self.s["landed"].items() if v["at"] >= mw["since"]}   # it landed no later than it merged
 
