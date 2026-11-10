@@ -10,5 +10,6 @@ export const step = (action: string, from: any, to: any) => {
 		const w = to.wake[to.attempt];
 		return w === "failed" ? "pi exits rc != 0" : w === "done" ? "pi exits rc 0 [brief has wake: finish]" : "pi exits rc 0 [no wake: finish]";
 	}
-	return ({ Start: "pi-run <id> <role> <brief>", Kill: "KILL or OOM", Collect: "pi-run collect <id>", Done: null } as Record<string, string | null>)[action] ?? action;
+	return ({ Start: "pi-run <id> <role> <brief>", Kill: "KILL or OOM", Collect: "pi-run collect <id>", Limit: "pi stops on an upstream 429",
+		Resume: "pi-run resume <id> [after resume_at]", Done: null } as Record<string, string | null>)[action] ?? action;
 };

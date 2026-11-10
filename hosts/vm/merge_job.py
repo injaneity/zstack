@@ -246,8 +246,8 @@ def merge_audit(merged, job_merged, known, me=ME):
 
 
 def job_merges(events):
-    """PR numbers this job (or the tick before it) merged: its `merged cua#N` events."""
-    return {int(m.group(1)) for x in events if (m := re.search(r"^\S+ merged cua#(\d+) ", x))}
+    """PR numbers this job (or the tick before it) merged or asked GitHub to merge: its `merged` and `merge-queued` events."""
+    return {int(m.group(1)) for x in events if (m := re.search(r"^\S+ (?:merged|merge-queued) cua#(\d+) ", x))}
 
 
 # ---------------- side effects ----------------
@@ -275,6 +275,11 @@ def post_webhook(kind, ident, reason):
                      attempts=1, timeout=8)
 
 
+def sha():
+    """The zstack commit this run is on; last-run and stderr (cron's tick.log) carry it."""
+    return subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
+
+
 def parity_problem():
     """Why this host is not merged main and nothing else (hosts/check-parity's FAIL lines), or None."""
     try:
@@ -291,7 +296,7 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
-        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges")}
+        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges", "queued")}
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -359,6 +364,12 @@ class Job:
         return reasons + stop, notes
 
     def merges(self, holds):
+        for ident in list(self.s["queued"]):   # merges requested by an earlier run that have since left the queue
+            try:
+                self.landed(ident)
+            except Exception as e:
+                self.errors += 1
+                self.event("error", ident, f"queued merge: {type(e).__name__}: {str(e)[:150]}")
         prs = gh_json(["pr", "list", "-R", REPO, "--state", "open", "--author", ME, "--limit", "100",
                        "--json", "number,headRefOid,isDraft,labels,body,title"]) or []
         for p in prs:
@@ -389,7 +400,30 @@ class Job:
         rc, _, err = sh(["gh", "pr", "merge", str(n), "-R", REPO, "--squash", "--match-head-commit", head], timeout=180)
         if rc:
             return self.buffer("merge-failed", ident, head, f"gh pr merge: {err.strip()[:200]}")
-        return self.event("merged", ident, f"squash at {head[:9]}: {why}")
+        # trycua/cua has a merge queue: gh exits 0 when it only queued, so `merged` waits for GitHub's MERGED
+        if self.s["queued"].get(ident, {}).get("head") != head:
+            self.s["queued"][ident] = {"head": head, "why": why}
+            self.once("merge-queued", ident, head, f"squash at {head[:9]}: {why}")
+        self.landed(ident)
+
+    def once(self, kind, ident, head, reason):
+        """Log `kind` for this PR and head unless events.log has it: a run that died before saving state logs it once."""
+        mark = f" {kind} {ident} squash at {head[:9]}"
+        if not os.path.exists(EVENTS) or not any(mark in x for x in read(EVENTS).splitlines()):
+            self.event(kind, ident, reason)
+
+    def landed(self, ident):
+        """Log `merged` once GitHub says a requested merge is MERGED, with its mergedAt; drop it when GitHub closed it."""
+        q = self.s["queued"][ident]
+        st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
+        if st.get("state") == "MERGED":
+            head = st.get("headRefOid") or q["head"]
+            self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
+        elif st.get("state") == "CLOSED":
+            self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
+        else:
+            return
+        del self.s["queued"][ident]
 
     def merge_watch(self):
         """Urgent unexpected-merge wake for a trycua/cua PR merged as ME that this job did not merge. Its `merged
@@ -449,7 +483,7 @@ class Job:
             json.dump(self.s, f, indent=1, sort_keys=True)
         os.replace(tmp, STATE)
         with open(LAST, "w") as f:
-            f.write(f"{now()} {'ok' if not self.errors else f'{self.errors} error(s)'}{' paused' if self.paused else ''}\n")
+            f.write(f"{now()} zstack {sha()} {'ok' if not self.errors else f'{self.errors} error(s)'}{' paused' if self.paused else ''}\n")
 
     def explain(self, n):
         """--explain N: every reason for one PR and the action a run would take. Records nothing."""
@@ -501,4 +535,5 @@ def run_on_main():
 if __name__ == "__main__":
     if len(sys.argv) == 1:
         run_on_main()
+    print(f"zstack {sha()}", file=sys.stderr)
     main()

@@ -9,7 +9,7 @@ EXTENDS Naturals
 CONSTANT MaxAttempt
 
 VARIABLES
-  state,      \* run.json state: "absent" (no file), "running", "exited", "collected"
+  state,      \* run.json state: "absent" (no file), "running", "paused", "exited", "collected"
   attempt,    \* run.json attempt
   live,       \* live[a]: attempt a's supervisor or its process group still exists
   exited,     \* exited[a]: attempt a's pi has ended (exit or kill), so it has a result to take
@@ -43,6 +43,19 @@ Exit ==
   /\ state' = "exited" /\ live' = [live EXCEPT ![attempt] = FALSE] /\ exited' = [exited EXCEPT ![attempt] = TRUE]
   /\ UNCHANGED <<attempt, collects, finish>>
 
+\* pi stops on an upstream 429 (Claude Code or ChatGPT): the supervisor records a pause, sends no wake, and the attempt
+\* has no result yet.
+Limit ==
+  /\ state = "running" /\ live[attempt]
+  /\ state' = "paused" /\ live' = [live EXCEPT ![attempt] = FALSE]
+  /\ UNCHANGED <<attempt, exited, collects, finish, wake>>
+
+\* The hourly pass's `pi-run resume <id>` once resume_at has passed: the same attempt continues its pi session.
+Resume ==
+  /\ state = "paused"
+  /\ state' = "running" /\ live' = [live EXCEPT ![attempt] = TRUE]
+  /\ UNCHANGED <<attempt, exited, collects, finish, wake>>
+
 \* KILL or OOM: the supervisor and pi die and run.json still says running.
 Kill ==
   /\ state = "running" /\ live[attempt]
@@ -57,8 +70,8 @@ Collect ==
 
 Done == state = "collected" /\ attempt = MaxAttempt /\ UNCHANGED vars
 
-Next == Start \/ Exit \/ Kill \/ Collect \/ Done
-Spec == Init /\ [][Next]_vars /\ WF_vars(Exit) /\ WF_vars(Collect)
+Next == Start \/ Exit \/ Limit \/ Resume \/ Kill \/ Collect \/ Done
+Spec == Init /\ [][Next]_vars /\ WF_vars(Exit) /\ WF_vars(Collect) /\ WF_vars(Resume)
 
 \* At most one attempt of an id is alive at a time.
 OneLiveRun == \A a, b \in A : live[a] /\ live[b] => a = b
@@ -74,6 +87,8 @@ DoneOnlyWhenAsked == \A a \in A : wake[a] = "done" => finish[a]
 AskedExitWakes == state = "exited" /\ finish[attempt] => wake[attempt] # "none"
 \* A run that did not ask wakes only on failure, as before.
 DefaultIsFailuresOnly == state = "exited" /\ ~finish[attempt] => wake[attempt] \in {"none", "failed"}
+\* A pause is never a failure: it sends no wake and leaves nothing to collect, and its pi is not running.
+PauseIsSilent == state = "paused" => wake[attempt] = "none" /\ ~exited[attempt] /\ ~live[attempt]
 \* Every attempt that ends is collected.
 EveryExitCollected == \A a \in A : exited[a] ~> collects[a] = 1
 ====

@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""hourly: the facts and bookkeeping of the onigiri hourly pass. The pass itself is skills/onigiri-mode/playbooks/hourly.md.
+
+  hourly [--linear CUA-1,CUA-2]   STEP 0: this host's and its peers' runs, slots, launch host and the fingerprint.
+                                  Prints one `skip:` line and nothing else when nothing changed since `hourly done`.
+  hourly done [--linear ...]      after the pass: store the fingerprint and the snapshot status answers come from
+  hourly log <host> <action> <item> <reason...>   append one pickup.log row (ts_sgt host action item reason free_gb)
+  hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host>, then log the launch
+  hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
+  hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
+  hourly processed <id>           mark a legacy review dir (run.rc, no run.json) processed
+  hourly facts | recv <id> <role> what a peer is asked for over `on`: this host's facts as JSON; a brief on stdin
+
+The host running it is $ONIGIRI_HOST (hosts/<name>/host.sh); its peers are $ONIGIRI_PEERS, `name=<command>` words where
+<command> runs one shell line on the peer (the mini's is the VM's ssh wrapper). pickup.log and the fingerprint live in
+this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
+"""
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+_l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi-run"))
+pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
+_l.exec_module(pr)
+SGT = ZoneInfo("Asia/Singapore")
+TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
+SELF = os.environ.get("ONIGIRI_HOST") or "local"   # the name pickup.log rows and `on` use for this host
+PEER_PKG = ".pi/agent/git/github.com/injaneity/zstack"   # where `pi install git:github.com/injaneity/zstack` puts it
+HEAD = "# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:\n# ts_sgt\thost\taction\titem\treason\tfree_gb\n"
+
+
+def now():
+    return datetime.now(SGT).isoformat(timespec="minutes")
+
+
+HOST = []
+
+
+def root():
+    """This host's $ONIGIRI_ROOT, from its host file like bin/pi-run's."""
+    HOST or HOST.extend(pr.host_env("list"))
+    return HOST[1].rsplit("/review", 1)[0]
+
+
+def peers():
+    """$ONIGIRI_PEERS from the host file: {name: command that runs one shell line there}."""
+    root()
+    return dict(w.split("=", 1) for w in HOST[0].get("ONIGIRI_PEERS", "").split() if "=" in w)
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def on(host, args, stdin=None):
+    """Run a package file on `host`: here when it is this host, else through the peer's command."""
+    if host == SELF:
+        return run([os.path.join(PKG, args[0]), *args[1:]], input=stdin)
+    if host not in peers():
+        pr.die(2, f"no host {host}: this is {SELF}, peers {' '.join(peers()) or 'none'}")
+    line = f"ONIGIRI_HOST={shlex.quote(host)} ~/{PEER_PKG}/{shlex.quote(args[0])} " + " ".join(map(shlex.quote, args[1:]))
+    return run([*shlex.split(peers()[host]), line], input=stdin)
+
+
+def activity_min(d):
+    """Minutes since the run's log or its pi session last changed: a running run idle this long may be hung."""
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    sess = os.path.join(agent, "sessions", "--" + d.strip("/").replace("/", "-") + "--")
+    paths = [os.path.join(d, "run.log")] + [os.path.join(sess, f) for f in (os.listdir(sess) if os.path.isdir(sess) else [])]
+    return int((time.time() - max([os.path.getmtime(p) for p in paths if os.path.exists(p)] or [0])) // 60)
+
+
+def facts():
+    """This host: zstack sha and parity, free disk, every run not collected, legacy dirs waiting to be processed."""
+    r, out = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"]).stdout
+    parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
+    runs = {}
+    for line in out.splitlines():
+        sid, state, *kv = line.split()
+        if state == "collected":
+            continue
+        d, f = os.path.join(r, "review", sid), dict(x.split("=", 1) for x in kv)
+        brief = open(os.path.join(d, "brief.md"), errors="replace").read() if os.path.exists(os.path.join(d, "brief.md")) else ""
+        f.update(state=state, auto="source: auto" in brief.splitlines() or "uto-picked" in brief)
+        if state == "running":
+            f["idle_min"] = activity_min(d)
+        runs[sid] = f
+    rev = os.path.join(r, "review")
+    legacy = sorted(s for s in (os.listdir(rev) if os.path.isdir(rev) else []) if os.path.exists(os.path.join(rev, s, "run.rc"))
+                    and not os.path.exists(os.path.join(rev, s, "run.json")) and not os.path.exists(os.path.join(rev, s, "processed")))
+    return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
+            "free_gb": shutil.disk_usage(r).free // 2**30, "runs": runs, "legacy": legacy}
+
+
+def batch_due(r):
+    """The daily preapprove batch: due from 08:00 SGT until a pickup.log row records today's."""
+    t = datetime.now(SGT)
+    rows = open(os.path.join(r, "pickup.log")).read().splitlines() if os.path.exists(os.path.join(r, "pickup.log")) else []
+    done = any(x.startswith(t.date().isoformat()) and x.split("\t")[2:3] in (["preapprove-batch"], ["step9"]) for x in rows)
+    return t.hour >= 8 and not done
+
+
+def snapshot(linear):
+    hosts = {SELF: facts()}
+    for h in peers():
+        p = on(h, ["bin/hourly", "facts"])
+        try:
+            hosts[h] = json.loads(p.stdout)
+        except ValueError:
+            hosts[h] = {"error": (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:200]}
+    def gh(*a):
+        p = run(["gh", "pr", "list", "-R", "trycua/cua", "--state", "open", "--limit", "2000", *a])
+        if p.returncode:
+            errors.append(f"gh pr list {a[0]} {a[1]}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
+        return json.loads(p.stdout) if not p.returncode and p.stdout.strip() else []
+    errors = []
+    ours = gh("--author", "injaneity", "--json", "number,headRefOid")
+    others = gh("--search", "-author:injaneity", "--json", "number,author")
+    bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
+    return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors,
+            "ours": sorted(f"{p['number']}:{p['headRefOid'][:9]}" for p in ours),   # a push to ours is work: merge, unstick
+            "others": sorted(f"{p['number']}:{p['author']['login']}" for p in others if not bot(p["author"]))}   # new or closed
+
+
+def due(f, h):
+    return f["state"] in ("exited", "lost", "queued") or f.get("idle_min", 0) >= HUNG_MIN or \
+        (f["state"] == "paused" and f.get("resume_at", "~") <= pr.utc())
+
+
+def fingerprint(s):
+    """What a pass acts on: run states, legacy dirs, parity, the floor, PR heads, Linear Todo, the batch. Not ages or exact disk."""
+    keep = {h: {"runs": {k: (v["state"], v.get("idle_min", 0) >= HUNG_MIN) for k, v in f.get("runs", {}).items()},
+                "legacy": f.get("legacy"), "at_main": f.get("at_main"), "floor": f.get("free_gb", 0) >= FLOOR_GB, "error": "error" in f}
+            for h, f in s["hosts"].items()}
+    return hashlib.sha256(json.dumps([keep, s["linear"], s["ours"], s["others"], s["batch_due"]], sort_keys=True).encode()).hexdigest()[:16]
+
+
+def report(s, fp, last):
+    print(f"hourly {now()} fingerprint {fp} (last {last.get('fp', 'none')} at {last.get('ts', 'never')})")
+    running = auto = 0
+    for h, f in s["hosts"].items():
+        if "error" in f:
+            print(f"host {h}: unreachable: {f['error']}")
+            continue
+        print(f"host {h}: zstack {f['sha'][:9]} {'at main' if f['at_main'] else 'NOT at main: ' + '; '.join(f['parity'])}, free {f['free_gb']}G")
+        for sid, r in sorted(f["runs"].items(), key=lambda x: (x[1]["state"], x[1].get("since", ""))):
+            running += r["state"] == "running"
+            auto += r["state"] == "running" and r["auto"]
+            extra = " ".join(f"{k}={r[k]}" for k in ("rc", "since", "resume_at", "idle_min") if k in r and r[k] != "None")
+            print(f"  {r['state']:<8} {sid} {'auto ' if r['auto'] else ''}{extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}"
+                  f"{'  DUE' if r['state'] == 'paused' and due(r, h) else ''}")
+        for sid in f["legacy"]:
+            print(f"  legacy   {sid} run.rc={open(os.path.join(root(), 'review', sid, 'run.rc')).read().strip() if h == SELF else '?'}")
+    vm = [h for h, f in s["hosts"].items() if h != SELF and f.get("at_main") and f.get("free_gb", 0) >= FLOOR_GB]
+    print(f"slots: running {running}/{TOTAL}, auto {auto}/{AUTO}: free {max(0, TOTAL - running)}, auto {max(0, min(TOTAL - running, AUTO - auto))}")
+    print(f"launch host: {vm[0] if vm else SELF} (a peer only at main with {FLOOR_GB}G free)")
+    for e in s["errors"]:
+        print(f"error: {e}: the PR lists are unknown this pass")
+    print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
+    print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
+    print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
+
+
+def log(host, action, item, reason):
+    """One pickup.log row; free_gb is the host's from this pass's snapshot (this host's is read now)."""
+    try:
+        free = json.load(open(os.path.join(root(), "hourly-snapshot.json")))["hosts"][host]["free_gb"]
+    except (OSError, ValueError, KeyError):
+        free = "-"
+    free = shutil.disk_usage(root()).free // 2**30 if host == SELF else free
+    with open(os.path.join(root(), "pickup.log"), "a") as f:
+        f.write((HEAD if not f.tell() else "") + "\t".join([now(), host, action, item, " ".join(reason.split()), str(free)]) + "\n")
+
+
+def write(p, obj):
+    with open(p + ".tmp", "w") as f:
+        json.dump(obj, f, indent=1)
+    os.replace(p + ".tmp", p)
+
+
+def main(argv):
+    print(f"zstack {pr.sha()}", file=sys.stderr)
+    cmd = argv[0] if argv and not argv[0].startswith("--") else "pass"
+    rest = argv[1:] if cmd != "pass" else argv
+    if cmd in ("pass", "done"):
+        if cmd == "pass":
+            pr.on_main(argv, __file__)
+        linear = rest[1].split(",") if rest[:1] == ["--linear"] and len(rest) > 1 else []
+        s, fpath = snapshot(linear), os.path.join(root(), "hourly-fingerprint.json")
+        fp, last = fingerprint(s), json.load(open(fpath)) if os.path.exists(fpath) else {}
+        write(os.path.join(root(), "hourly-snapshot.json"), {"ts": now(), **s})   # status answers read the last one
+        if cmd == "done":
+            write(fpath, {"ts": now(), "fp": fp})
+            return print(f"hourly done: fingerprint {fp} stored") or 0
+        acts = s["batch_due"] or s["errors"] or \
+            any("error" in f or f.get("legacy") or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
+        if fp == last.get("fp") and not acts:
+            return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
+        return report(s, fp, last) or 0
+    if cmd == "facts":
+        return print(json.dumps(facts())) or 0
+    if cmd == "log" and len(rest) >= 4:
+        return log(rest[0], rest[1], rest[2], " ".join(rest[3:])) or 0
+    if cmd == "on" and len(rest) >= 2:
+        p = on(rest[0], rest[1:])
+        sys.stdout.write(p.stdout)
+        sys.stderr.write(p.stderr)
+        return p.returncode
+    if cmd == "launch" and len(rest) >= 3 and pr.ID.fullmatch(rest[0]):
+        sid, host, d = rest[0], rest[1], os.path.join(root(), "review", rest[0])
+        here = os.path.join(d, "brief.md")   # a brief queued on the peer itself is read there, so none is sent
+        p = on(host, ["bin/hourly", "recv", sid], stdin=open(here).read() if host != SELF and os.path.exists(here) else "")
+        sys.stdout.write(p.stdout)
+        sys.stderr.write(p.stderr)
+        if p.returncode == 0:
+            if host != SELF and os.path.exists(os.path.join(d, "QUEUED")):
+                os.unlink(os.path.join(d, "QUEUED"))
+            role = p.stdout.rsplit(" as role ", 1)[-1].split(":")[0] if " as role " in p.stdout else "?"
+            log(host, "launch", sid, f"{role}; {' '.join(rest[2:])}")
+        return p.returncode
+    if cmd == "recv" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
+        d = os.path.join(root(), "review", rest[0])
+        brief, text = os.path.join(d, "brief.md"), sys.stdin.read()
+        if text and os.path.exists(brief) and open(brief).read() != text:
+            pr.die(3, f"{rest[0]}: review/{rest[0]}/brief.md here differs from the brief sent")
+        if text:
+            os.makedirs(d, exist_ok=True)
+            with open(brief, "w") as f:
+                f.write(text)
+        if not os.path.exists(brief):
+            pr.die(2, f"{rest[0]}: no review/{rest[0]}/brief.md on {SELF}; write it with bin/new-brief")
+        text = open(brief).read()
+        q = open(os.path.join(d, "QUEUED")).read().strip() if os.path.exists(os.path.join(d, "QUEUED")) else ""
+        role = next((x.split(":", 1)[1].strip() for x in text.splitlines() if x.startswith("role:")), q if q and q != "next" else "coding")
+        os.execv(os.path.join(PKG, "bin", "pi-run"), ["pi-run", rest[0], role, brief])
+    if cmd in ("report", "processed") and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
+        d = os.path.join(root(), "review", rest[0])
+        if cmd == "processed":
+            if not os.path.exists(os.path.join(d, "run.rc")):
+                pr.die(3, f"{rest[0]}: not a legacy run.rc dir")
+            open(os.path.join(d, "processed"), "a").close()
+            return 0
+        p = os.path.join(d, "report.md")
+        lines = open(p if os.path.exists(p) else os.path.join(d, "run.log"), errors="replace").read().splitlines()
+        return print("\n".join(x for x in (lines if os.path.exists(p) else lines[-80:]) if "TOKEN" not in x)) or 0
+    pr.die(2, __doc__.split("\n\n")[1])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

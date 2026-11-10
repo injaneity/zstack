@@ -73,7 +73,7 @@ class Wake(unittest.TestCase):
         self.assertEqual({k: body[k] for k in ("kind", "reason", "id", "pr", "source")},
                          {"kind": "blocked", "reason": "need a key on the mini", "id": "cua-1", "pr": 31, "source": "pi"})
         self.assertEqual((self.sent[1][1]["kind"], self.sent[1][1]["id"], self.sent[1][1]["pr"]), ("failed", "cua-2", None))
-        self.assertEqual(err.strip(), "wake: blocked webhook sent (200)")
+        self.assertEqual(err.strip().splitlines()[-1], "wake: blocked webhook sent (200)")
         self.assertNotIn("sekrit", out + err)
 
     def test_done_carries_rc_report_and_pr_links(self):
@@ -106,7 +106,7 @@ class Wake(unittest.TestCase):
         with self.urlopen():
             code, _, err = run("blocked", "which branch?")
         self.assertEqual((code, self.sent), (0, []))
-        self.assertEqual(err.strip(), "wake: blocked webhook not configured")
+        self.assertEqual(err.strip().splitlines()[-1], "wake: blocked webhook not configured")
 
     def test_dry_prints_the_body_and_posts_nothing(self):
         self.key.write_text("sekrit")

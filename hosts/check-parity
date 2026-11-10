@@ -16,6 +16,7 @@ fail() { echo "FAIL  $1"; rc=1; }
 g() { git -C "$pkg" "$@"; }
 
 head=$(g rev-parse HEAD 2>/dev/null) || head=
+echo "zstack ${head:-unknown}"
 if [ -z "$head" ]; then fail "package: $pkg is not a git checkout"
 elif ! g fetch --quiet origin refs/heads/main:refs/remotes/origin/main 2>/dev/null; then fail "package: cannot fetch origin main in $pkg"
 else

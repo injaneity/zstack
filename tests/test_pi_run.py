@@ -52,10 +52,11 @@ class Step(unittest.TestCase):
 
     def test_start_from_nothing_or_collected_opens_the_next_attempt(self):
         self.assertEqual(pr.step(None, "start", pid=5, start="s", wake_finish=True),
-                         {"state": "running", "attempt": 1, "pid": 5, "start": "s", "rc": None, "wake_finish": True, "wake": None})
+                         {"state": "running", "attempt": 1, "pid": 5, "start": "s", "rc": None, "wake_finish": True, "wake": None, "resume_at": None})
         # a relaunch takes the new brief's choice and clears the last attempt's wake
         self.assertEqual(pr.step(self.R("collected", rc=0, wake_finish=True, wake="done"), "start", pid=6, start="u", wake_finish=False),
-                         {"state": "running", "attempt": 2, "pid": 6, "start": "u", "rc": None, "wake_finish": False, "wake": None})
+                         {"state": "running", "attempt": 2, "pid": 6, "start": "u", "rc": None, "wake_finish": False, "wake": None,
+                          "resume_at": None})
 
     def test_start_is_refused_until_the_last_result_is_collected(self):
         for run, alive, why in ((self.R("running"), True, "already running"), (self.R("exited", rc=0), False, "not collected"),
@@ -72,6 +73,18 @@ class Step(unittest.TestCase):
     def test_exit_wakes_on_failure_always_and_on_finish_only_when_asked(self):
         for wake_finish, rc, want in ((False, 0, None), (False, 3, "failed"), (True, 0, "done"), (True, 3, "failed")):
             self.assertEqual(pr.step(self.R("running", wake_finish=wake_finish), "exit", pid=10, rc=rc)["wake"], want, (wake_finish, rc))
+
+    def test_an_upstream_limit_pauses_without_a_wake_and_resumes_the_same_attempt_after_resume_at(self):
+        paused = pr.step(self.R("running", wake_finish=True), "exit", pid=10, rc=1, resume_at="2026-11-10T05:00:00Z")
+        self.assertEqual((paused["state"], paused["wake"], paused["resume_at"]), ("paused", None, "2026-11-10T05:00:00Z"))
+        for event, f in (("start", dict(pid=7, start="v", wake_finish=False)), ("collect", {}),
+                         ("resume", dict(pid=7, start="v", now="2026-11-10T04:59:59Z"))):
+            with self.assertRaisesRegex(pr.Refused, "paused"):
+                pr.step(paused, event, **f)
+        back = pr.step(paused, "resume", pid=8, start="w", now="2026-11-10T05:00:00Z")
+        self.assertEqual((back["state"], back["attempt"], back["pid"], back["rc"], back["resume_at"]), ("running", 1, 8, None, None))
+        # rc 0 is never a pause, whatever the log said
+        self.assertEqual(pr.step(self.R("running"), "exit", pid=10, rc=0, resume_at="x")["state"], "exited")
 
     def test_collect_takes_an_exited_or_lost_run_once(self):
         self.assertEqual(pr.step(self.R("exited", rc=0), "collect")["state"], "collected")
@@ -103,8 +116,8 @@ class Model(unittest.TestCase):
                 return "no run"
             if run["state"] == "running":
                 return "running" if alive else "lost"
-            return {"exited": f"exited, {run['wake'] or 'no'} wake", "collected": "collected"}[run["state"]]
-        start, collect = "pi-run <id> <role> <brief>", "pi-run collect <id>"
+            return {"exited": f"exited, {run['wake'] or 'no'} wake", "collected": "collected", "paused": "paused"}[run["state"]]
+        start, collect, resume = "pi-run <id> <role> <brief>", "pi-run collect <id>", "pi-run resume <id> [after resume_at]"
         edges, seen, todo = {("[*]", name(None, False), "")}, set(), [(None, False)]
         while todo:
             run, alive = todo.pop()
@@ -114,10 +127,11 @@ class Model(unittest.TestCase):
             seen.add(key)
             asked = "brief has wake: finish" if key[1] else "no wake: finish"
             moves = [(start, "start", dict(pid=1, start="t", wake_finish=wf), True) for wf in (False, True)]
-            moves += [(collect, "collect", {}, False)]
+            moves += [(collect, "collect", {}, False), (resume, "resume", dict(pid=2, start="u", now="9"), True)]
             if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
                 moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3), False),
-                          (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0), False)]
+                          (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0), False),
+                          ("pi stops on an upstream 429", "exit", dict(pid=run["pid"], rc=1, resume_at="5"), False)]
                 edges.add((key[0], "lost", "KILL or OOM"))
                 todo.append((run, False))
             for label, event, fields, alive_after in moves:
@@ -266,7 +280,7 @@ class Launcher(unittest.TestCase):
         self.start("s", rc=2)
         self.finished("s")
         r = self.pi_run("s", "coding", str(self.t / "brief.md"))
-        self.assertEqual((r.returncode, r.stderr.strip()), (3, "pi-run: s: attempt 1 exited rc=2 and is not collected"))
+        self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: s: attempt 1 exited rc=2 and is not collected"))
         self.assertEqual(self.pi_run("collect", "s").stdout, "s attempt=1 rc=2\n")
         self.assertEqual(self.pi_run("collect", "s").returncode, 3)
         self.assertEqual(self.pi_run("list", "exited", "lost").stdout, "")
@@ -307,7 +321,7 @@ class Launcher(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "oom lost attempt=1 rc=None\n"))
         self.assertEqual(self.run_json("oom")["state"], "running")   # nothing wrote it: lost is derived
         r = self.pi_run("oom", "coding", str(self.t / "brief.md"))
-        self.assertEqual((r.returncode, r.stderr.strip()), (3, "pi-run: oom: attempt 1 was lost and is not collected"))
+        self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: oom: attempt 1 was lost and is not collected"))
         self.assertEqual(self.pi_run("collect", "oom").stdout, "oom attempt=1 lost\n")
         self.start("oom")
         self.assertEqual(self.finished("oom")["attempt"], 2)
@@ -335,6 +349,80 @@ class Launcher(unittest.TestCase):
             self.start(sid, brief=brief, **env)
             self.finished(sid)
             self.assertEqual((self.t / "ready").read_text().strip(), want, sid)
+
+    def test_an_upstream_429_pauses_with_no_wake_and_resume_continues_the_same_session(self):
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: "
+                                    "This request would exceed your account's rate limit. Please try again later.)\n")
+        self.start("lim", rc=1, brief="w.md")
+        self.assertTrue(wait_for(lambda: (self.run_json("lim") or {}).get("state") == "paused"), self.run_json("lim"))
+        run = self.run_json("lim")
+        self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None))
+        self.assertNotIn("wake:", self.log("lim"))   # no failed wake
+        self.assertEqual(self.pi_run("list", "paused").stdout, f"lim paused attempt=1 rc=1 resume_at={run['resume_at']}\n")
+        self.assertEqual(self.pi_run("list", "exited", "lost").stdout, "")   # nothing for the pickup to collect
+        self.assertEqual(self.pi_run("collect", "lim").returncode, 3)
+        self.assertEqual(self.pi_run("lim", "coding", str(self.t / "w.md")).returncode, 3)
+        (self.t / "say").unlink()
+        (self.t / "rc").write_text("0")
+        r = self.pi_run("resume", "lim")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = self.finished("lim")
+        self.assertEqual((run["attempt"], run["rc"], run["wake"], run["resumes"]), (1, 0, "done", 1))
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual(args[args.index("--session-id") + 1], "lim")
+        self.assertEqual(args[args.index("--name") + 1], "role:coding")
+        self.assertEqual(args[-1], pr.RESUME)
+        self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
+        self.assertEqual(self.pi_run("resume", "lim").returncode, 3)   # only a paused run resumes
+
+    def test_a_chatgpt_limit_resumes_after_the_wait_it_names_and_not_before(self):
+        (self.t / "say").write_text("You have hit your ChatGPT usage limit (pro plan). Try again in ~42 min.\n")
+        before = time.time()
+        self.start("cx", rc=1)
+        self.assertTrue(wait_for(lambda: (self.run_json("cx") or {}).get("state") == "paused"))
+        at = time.mktime(time.strptime(self.run_json("cx")["resume_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+        self.assertAlmostEqual(at - before, 42 * 60, delta=30)
+        r = self.pi_run("resume", "cx")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("paused until", r.stderr)
+
+    def test_a_run_that_only_quotes_a_429_is_a_plain_failure(self):
+        for sid, say in (("q1", "Incomplete Claude Code upstream response (status 429, x)\nreport done\n"),
+                         ("q2", "Task failed; quoted: Incomplete Claude Code upstream response (status 429, example)\n"),
+                         ("q3", "Incomplete Claude Code upstream response (status 200, capture incomplete)\n")):
+            (self.t / "say").write_text(say)
+            self.start(sid, rc=1)
+            self.assertEqual(self.finished(sid)["wake"], "failed", sid)
+
+    def test_a_pi_killed_by_a_signal_after_a_429_line_is_a_failure(self):
+        (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete)\n")
+        self.start("sig", hang=True)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        os.kill(int((self.t / "pi-pid").read_text()), signal.SIGKILL)
+        run = self.finished("sig")
+        self.assertEqual((run["state"], run["rc"], run["wake"]), ("exited", 137, "failed"))
+
+    def test_queue_shows_in_list_oldest_first_and_a_start_clears_it(self):
+        for sid in ("qa", "qb"):
+            d = self.t / "root" / "review" / sid
+            d.mkdir(parents=True)
+            (d / "brief.md").write_text("task\nrole: research\n")
+        self.assertEqual(self.pi_run("queue", "qa").returncode, 0)
+        self.assertEqual(self.pi_run("queue", "qb").returncode, 0)
+        self.assertEqual((self.t / "root/review/qa/QUEUED").read_text(), "research\n")
+        lines = self.pi_run("list", "queued").stdout.splitlines()
+        self.assertEqual([x.split()[:3] for x in lines], [["qa", "queued", "attempt=0"], ["qb", "queued", "attempt=0"]])
+        self.assertRegex(lines[0], r" since=\d{4}-\d\d-\d\dT")
+        self.start("qa", brief="root/review/qa/brief.md")
+        self.assertFalse((self.t / "root/review/qa/QUEUED").exists())
+        self.assertEqual(self.pi_run("list", "queued").stdout.split()[:1], ["qb"])
+        self.assertEqual(self.pi_run("queue", "nobrief").returncode, 2)
+
+    def test_every_entry_point_prints_its_zstack_sha(self):
+        sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        for argv in (["list"], ["--help"], ["collect", "none"]):
+            self.assertEqual(self.pi_run(*argv).stderr.splitlines()[0], f"zstack {sha}", argv)
 
     def test_dry_run_and_bad_input_change_nothing(self):
         r = self.pi_run("dry", "coding", str(self.t / "brief.md"), PI_RUN_DRY="1")

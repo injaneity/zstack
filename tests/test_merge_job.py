@@ -244,16 +244,16 @@ class Stage(unittest.TestCase):
         k = patch.object(wake, "KEY_FILE", str(d / "no-key"))
         k.start()
         self.addCleanup(k.stop)
-        self.d, self.prs, self.calls, self.merged = d, {}, [], []
+        self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
         self.prs[n] = {"number": n, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
-                       "mergeable": mergeable, "state": "OPEN", "files": [{"path": x} for x in files],
+                       "mergeable": mergeable, "state": "OPEN", "mergedAt": None, "files": [{"path": x} for x in files],
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
 
     def gh(self, args):
         if args[:2] == ["pr", "list"] and "open" in args:
-            return [{k: p[k] for k in args[-1].split(",")} for p in self.prs.values()]
+            return [{k: p[k] for k in args[-1].split(",")} for p in self.prs.values() if p["state"] == "OPEN"]
         if args[:2] == ["pr", "list"]:
             return self.merged
         if args[:2] == ["pr", "view"]:
@@ -269,8 +269,8 @@ class Stage(unittest.TestCase):
         self.calls.append(args)
         assert args[:3] in (["gh", "pr", "merge"], ["gh", "run", "rerun"], ["gh", "pr", "ready"]), args
         assert "--auto" not in args, args
-        if args[:3] == ["gh", "pr", "merge"]:
-            self.prs[int(args[3])]["state"] = "MERGED"
+        if args[:3] == ["gh", "pr", "merge"] and not self.queue:
+            self.prs[int(args[3])].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
         return 0, "", ""
 
     def run_(self, dry=False):
@@ -293,8 +293,45 @@ class Stage(unittest.TestCase):
         self.add(6301)
         self.run_()
         self.assertEqual(self.calls, [["gh", "pr", "merge", "6301", "-R", "trycua/cua", "--squash", "--match-head-commit", H]])
-        self.assertIn(f"merged cua#6301 squash at {H[:9]}: green, ci-gate SUCCESS, risk light", self.events())
+        self.assertEqual(self.events(), [f"merge-queued cua#6301 squash at {H[:9]}: green, ci-gate SUCCESS, risk light",
+                                         f"merged cua#6301 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
+
+    def test_a_queued_merge_is_logged_merged_once_only_when_github_says_merged(self):
+        """cua#7082: gh pr merge exits 0 when the merge queue only took it, and the job logged `merged` three runs running."""
+        self.queue = True
+        self.add(7082)
+        for _ in range(3):
+            self.run_()
+        self.assertEqual(len(self.of(["gh", "pr", "merge"])), 3)   # asked again each run, logged once at this head
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7082"]])
+        self.prs[7082].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
+        self.run_()
+        self.run_()
+        ev = [x for x in self.events() if x.startswith("merged ")]
+        self.assertEqual(ev, [f"merged cua#7082 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
+        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["queued"], {})
+
+    def test_a_run_that_died_before_saving_state_does_not_log_merged_twice(self):
+        self.add(7083)
+        self.run_()
+        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"cua#7083": {"head": H, "why": "green"}}}))   # the lost save
+        self.run_()
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7083"], ["merged", "cua#7083"]])
+
+    def test_a_new_head_while_queued_is_queued_again_and_a_close_drops_it(self):
+        self.queue = True
+        self.add(7090)
+        self.run_()
+        self.add(7090, head="b" * 40)
+        self.run_()
+        self.run_()
+        self.prs[7090]["state"] = "CLOSED"
+        self.run_()
+        self.run_()
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()],
+                         [["merge-queued", "cua#7090"], ["merge-queued", "cua#7090"], ["merge-dropped", "cua#7090"]])
+        self.assertIn("at bbbbbbbbb", self.events()[1])
 
     def test_red_is_rerun_once_then_buffered_once(self):
         self.add(6308, rollup=self.RED)

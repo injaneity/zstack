@@ -1,0 +1,4 @@
+#!/bin/bash
+# queue <id>: put review/<id>/brief.md (bin/new-brief writes it) in the chat queue. The next hourly pass launches
+# queued runs before Linear picks, oldest first; `pi-run list queued` shows them.
+exec "$(dirname "$0")/pi-run" queue "$@"
