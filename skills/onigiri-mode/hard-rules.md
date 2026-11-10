@@ -21,10 +21,6 @@
 - New files carry the repository's SPDX/FSL header where neighbouring files do.
 - Write the plan and proof as if they become the PR body. Call the checks "the scoped repository checks" and never write local machine paths.
 
-### Size
-
-- Production lines, tests and docs excluded, aim for add<=200 and net<=100. When over, put a one-line size-limit reason in the PR body. No justification block.
-
 ### Checks
 
 - You write the code and a short test plan. Verification is the `verifier` subagent's alone, end to end: what it owns is in `agents/verifier.md`. The verification comment states only what actually ran and names anything skipped.

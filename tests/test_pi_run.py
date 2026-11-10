@@ -223,7 +223,7 @@ class Launcher(unittest.TestCase):
         self.assertTrue(rules.startswith("## Hard rules\n"))
         self.assertEqual([x for x in rules.splitlines() if x.startswith("## ")], ["## Hard rules"])
         heads = [x for x in rules.splitlines() if x.startswith("### ")]
-        self.assertEqual(heads, ["### Work", "### Patent hold", "### Commits and PR text", "### Size", "### Checks", "### Scope",
+        self.assertEqual(heads, ["### Work", "### Patent hold", "### Commits and PR text", "### Checks", "### Scope",
                                  "### Merging", "### Changing these rules"])
         self.assertEqual([h for h in heads if h in skill], [])
         self.assertIn("(hard-rules.md)", skill)
