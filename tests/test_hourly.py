@@ -274,6 +274,9 @@ class Hourly(unittest.TestCase):
         shutil.rmtree(self.t / "root")
         self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue", PI_RUN_DRY="1"))
         self.assertFalse((self.t / "root").exists())   # a dry pass makes nothing
+        r = subprocess.run([str(BIN / "hourly"), "queue"], cwd=self.t, capture_output=True, text=True, timeout=60,
+                           env={**self.env, "ONIGIRI_ROOT": "rel/root", "PI_RUN_DRY": "1"})   # a relative root not made yet
+        self.assertIn("queue: 0 queued", r.stdout, r.stderr)
         self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue"))
 
     def test_a_second_queue_pass_launches_nothing_while_one_runs(self):

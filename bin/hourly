@@ -110,6 +110,7 @@ def facts():
 
 def free_gb(p):
     """Free GiB on the disk that holds p; a root not made yet is on its nearest existing parent's disk."""
+    p = os.path.abspath(p)
     while not os.path.exists(p):
         p = os.path.dirname(p)
     return shutil.disk_usage(p).free // 2**30
