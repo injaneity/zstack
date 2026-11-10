@@ -27,6 +27,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -42,6 +43,8 @@ _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
 TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
 MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
+# merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
+LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
 SELF = pr.host_name() or "local"   # the name pickup.log rows and `on` use for this host
 PEER_PKG = ".pi/agent/git/github.com/injaneity/zstack"   # where `pi install git:github.com/injaneity/zstack` puts it
 HEAD = "# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:\n# ts_sgt\thost\taction\titem\treason\tfree_gb\n"
@@ -114,8 +117,12 @@ def facts():
             f["idle_min"] = activity_min(d)
         runs[sid] = f
     last = os.path.join(r, "tick", "last-run")   # the merge job's host only: its last finished run
+    try:
+        merge = {"merge_last": open(last, errors="replace").read().strip()} if os.path.exists(last) else {}
+    except OSError as e:
+        merge = {"merge_last": f"unreadable: {e}"}
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": free_gb(r), "runs": runs, **({"merge_last": open(last).read().strip()} if os.path.exists(last) else {})}
+            "free_gb": free_gb(r), "runs": runs, **merge}
 
 
 def free_gb(p):
@@ -176,12 +183,14 @@ def merge_health(line):
     its 40-minute kill (docs/HOST.md's cron line), so the job is not running."""
     if not line:
         return "no last-run", "no tick/last-run on the merge host"
+    m = LAST_RUN.fullmatch(line)
     try:
-        age = int((time.time() - datetime.fromisoformat(line.split()[0]).timestamp()) // 60)
-    except (ValueError, IndexError):
+        age = int((time.time() - datetime.fromisoformat(m[1]).timestamp()) // 60) if m else None
+    except ValueError:
+        age = None
+    if age is None or age < -5:   # not merge_job.py's line, or a clock it cannot have written: never trusted as ok
         return "unreadable", line
-    end = line.split()[3:]
-    state = "paused" if end[-1:] == ["paused"] else "not ok" if end[:1] != ["ok"] else "stale" if age > MERGE_STALE_MIN else "ok"
+    state = "paused" if m[3] else "not ok" if m[2] != "ok" else "stale" if age > MERGE_STALE_MIN else "ok"
     return state, f"{line} ({age}m ago)"
 
 

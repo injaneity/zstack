@@ -133,7 +133,7 @@ class Hourly(unittest.TestCase):
                         "'dry-run cua#7185 96f2fa0ea wait who=session: red after rerun: ci-gate' "
                         "'dry-run cua#7190 3c4132d84 merge: green, ci-gate SUCCESS, risk standard' 'dry-run cua#7191 1 wait: draft';;\n"
                         '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "merge_last": '
-                        f'"{datetime.now(timezone.utc).isoformat(timespec="seconds")} zstack s ok"}}\';; esac\n')
+                        f'"{datetime.now(timezone.utc).isoformat(timespec="seconds")} zstack {"a" * 40} ok"}}\';; esac\n')
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
         self.assertIn("merge job needs-Zane: 1\n  cua#7145 872f49fb0: declared deep: needs Zane (no preapprove row)\n"
@@ -178,14 +178,18 @@ class Hourly(unittest.TestCase):
             peer.chmod(0o755)
             return self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
         at = lambda m: datetime.fromtimestamp(time.time() - 60 * m, timezone.utc).isoformat(timespec="seconds")  # noqa: E731
-        self.assertRegex(facts(f"{at(3)} zstack s ok"), r"\nmerge job: ok: \S+ zstack s ok \(\d+m ago\)\n")
+        sha = "a" * 40
+        self.assertRegex(facts(f"{at(3)} zstack {sha} ok"), r"\nmerge job: ok: \S+ zstack a{40} ok \(\d+m ago\)\n")
         self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
-        if "preapprove batch: due" in facts(f"{at(3)} zstack s ok"):
+        if "preapprove batch: due" in facts(f"{at(3)} zstack {sha} ok"):
             self.hourly("log", "local", "preapprove-batch", "-", "none")
             self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
-        self.assertIn("skip:", facts(f"{at(4)} zstack s ok"))   # a newer healthy run is not news
-        for last, state in ((f"{at(56)} zstack s ok", "stale"), (f"{at(3)} zstack s 2 error(s)", "not ok"),
-                            (f"{at(3)} zstack s ok paused", "paused"), (None, "no last-run")):
+        self.assertIn("skip:", facts(f"{at(4)} zstack {sha} ok"))   # a newer healthy run is not news
+        for last, state in ((f"{at(56)} zstack {sha} ok", "stale"), (f"{at(3)} zstack {sha} 2 error(s)", "not ok"),
+                            (f"{at(3)} zstack {sha} ok paused", "paused"), (None, "no last-run"),
+                            (f"{at(-600)} zstack {sha} ok", "unreadable"),          # a future run cannot vouch for now
+                            (f"{at(3)} zstack {sha} ok and more", "unreadable"),    # not the merge job's line
+                            (f"{at(3)} zstack s ok", "unreadable"), ("garbage", "unreadable")):
             out = facts(last)
             self.assertIn(f"\nmerge job: {state}: ", out)
             self.assertNotIn("skip:", out)
@@ -195,7 +199,7 @@ class Hourly(unittest.TestCase):
         r = self.sh("hourly", "report", "empty")
         self.assertEqual(r.returncode, 2)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("empty: no report.md or run.log in review/empty", r.stderr)
+        self.assertEqual(r.stderr.splitlines()[1:], ["pi-run: empty: no report.md or run.log in review/empty on local"])
 
     def test_a_failed_pr_query_is_reported_and_never_skips(self):
         self.hourly("done")
