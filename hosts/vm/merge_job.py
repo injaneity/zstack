@@ -9,7 +9,9 @@ For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-
 risk tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED). A mergeability GitHub has not computed yet (UNKNOWN) is read again in the
 same run when it is the only thing in the way. next_action() turns both into one action: merge, rerun a red
-ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. A draft is a skip: draft means not ready, and
+ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. The job's own entry in GitHub's merge queue
+(state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
+entry is left alone; its merge wakes through the merge watch. A draft is a skip: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
 urgent unexpected-merge wake for a merge as ME that this job did not make.
 
@@ -232,6 +234,22 @@ def next_action(reasons, notes, pr, rerun_head=None):
     return "wait", why
 
 
+DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused"}   # off the gate, or PAUSED
+QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
+               "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
+DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
+
+
+def should_dequeue(reasons, queued, entry, head, me=ME):
+    """True when GitHub's queue holds the job's own entry for this head and a gate reason or PAUSED now stands against it.
+    queued is state.json's queued record for the PR; entry is the PR's mergeQueueEntry, None when it is not queued."""
+    if not entry or not queued or queued.get("head") != head:
+        return False
+    if (entry.get("enqueuer") or {}).get("login") != me or (entry.get("headCommit") or {}).get("oid") != head:
+        return False
+    return bool({r.code for r in reasons} & DEQUEUE_CODES)
+
+
 def merge_audit(merged, job_merged, known, me=ME):
     """Merges this job did not make -> [(n, alert|log|ignore, by)]: alert for one as `me` (a hand merge or GitHub
     auto-merge), log for another human, ignore a bot."""
@@ -377,12 +395,29 @@ class Job:
             try:
                 reasons, notes = self.evaluate(p, holds)
                 act, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
+                if ident in self.s["queued"]:
+                    self.dequeue(ident, p["number"], p["headRefOid"], reasons, why)
                 if self.dry:   # one line per PR, even when the decision has not changed since the last run
                     print(f"dry-run {ident} {p['headRefOid'][:9]} {act}: {why}"[:400])
                 self.apply(ident, p["number"], p["headRefOid"], act, why)
             except Exception as e:   # one PR's failure must not skip the rest
                 self.errors += 1
                 self.event("error", ident, f"merge: {type(e).__name__}: {str(e)[:150]}")
+
+    def dequeue(self, ident, n, head, reasons, why):
+        """Take the job's own merge-queue entry out when the gate no longer passes (a hold row came, PAUSED, no tier)."""
+        q = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_ENTRY}"]) or {}
+        pull = ((q.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+        if not should_dequeue(reasons, self.s["queued"][ident], pull.get("mergeQueueEntry"), head):
+            return
+        if self.dry:
+            return self.decide("would-dequeue", ident, head, why)
+        rc, _, err = sh(["gh", "api", "graphql", "-f", f"id={pull['id']}", "-f", f"query={DEQUEUE}"])
+        if rc:
+            self.errors += 1
+            return self.event("error", ident, f"dequeue at {head[:9]}: {err.strip()[:150]}")
+        del self.s["queued"][ident]
+        self.event("merge-dequeued", ident, f"at {head[:9]}: {why}")
 
     def apply(self, ident, n, head, act, why):
         if act in ("skip", "wait"):
