@@ -405,7 +405,9 @@ class Job:
                 self.event("error", ident, f"merge: {type(e).__name__}: {str(e)[:150]}")
 
     def dequeue(self, ident, n, head, reasons, why):
-        """Take the job's own merge-queue entry out when the gate no longer passes (a hold row came, PAUSED, no tier)."""
+        """Take the job's own merge-queue entry out when the gate no longer passes (a hold row came, PAUSED, no tier).
+        dequeuePullRequest takes only the PR id, so an entry another actor makes between the read and the call would be
+        dequeued too; GitHub has no conditional form."""
         q = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_ENTRY}"]) or {}
         pull = ((q.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
         if not should_dequeue(reasons, self.s["queued"][ident], pull.get("mergeQueueEntry"), head):
