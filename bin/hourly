@@ -6,15 +6,18 @@
   hourly done [--linear ...]      after the pass: store the fingerprint and the snapshot status answers come from
   hourly log <host> <action> <item> <reason...>   append one pickup.log row (ts_sgt host action item reason free_gb)
   hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host>, then log the launch
+  hourly queue                    launch every host's QUEUED runs on that host, oldest first, while slots are free
+                                  (PI_RUN_DRY=1: print the plan only)
   hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
   hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
   hourly processed <id>           mark a legacy review dir (run.rc, no run.json) processed
   hourly facts | recv <id> <role> what a peer is asked for over `on`: this host's facts as JSON; a brief on stdin
 
-The host running it is $ONIGIRI_HOST (hosts/<name>/host.sh); its peers are $ONIGIRI_PEERS, `name=<command>` words where
-<command> runs one shell line on the peer (the mini's is the VM's ssh wrapper). pickup.log and the fingerprint live in
-this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
+The host running it is $ONIGIRI_HOST, else ~/.config/onigiri/host (hosts/<name>/host.sh, as bin/pi-run); its peers are
+$ONIGIRI_PEERS, `name=<command>` words where <command> runs one shell line on the peer (the mini's is the VM's ssh
+wrapper). pickup.log and the fingerprint live in this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
 """
+import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -34,7 +37,7 @@ pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
 TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
-SELF = os.environ.get("ONIGIRI_HOST") or "local"   # the name pickup.log rows and `on` use for this host
+SELF = pr.host_name() or "local"   # the name pickup.log rows and `on` use for this host
 PEER_PKG = ".pi/agent/git/github.com/injaneity/zstack"   # where `pi install git:github.com/injaneity/zstack` puts it
 HEAD = "# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:\n# ts_sgt\thost\taction\titem\treason\tfree_gb\n"
 
@@ -82,7 +85,10 @@ def activity_min(d):
 
 def facts():
     """This host: zstack sha and parity, free disk, every run not collected, legacy dirs waiting to be processed."""
-    r, out = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"]).stdout
+    r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
+    if ls.returncode:   # runs unknown: report the host as an error, which every pass and the queue treat as unknown slots
+        return {"error": "pi-run list: " + (ls.stderr.strip().splitlines() or [f"exit {ls.returncode}"])[-1][:200]}
+    out = ls.stdout
     parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     runs = {}
     for line in out.splitlines():
@@ -99,7 +105,15 @@ def facts():
     legacy = sorted(s for s in (os.listdir(rev) if os.path.isdir(rev) else []) if os.path.exists(os.path.join(rev, s, "run.rc"))
                     and not os.path.exists(os.path.join(rev, s, "run.json")) and not os.path.exists(os.path.join(rev, s, "processed")))
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": shutil.disk_usage(r).free // 2**30, "runs": runs, "legacy": legacy}
+            "free_gb": free_gb(r), "runs": runs, "legacy": legacy}
+
+
+def free_gb(p):
+    """Free GiB on the disk that holds p; a root not made yet is on its nearest existing parent's disk."""
+    p = os.path.abspath(p)
+    while not os.path.exists(p):
+        p = os.path.dirname(p)
+    return shutil.disk_usage(p).free // 2**30
 
 
 def batch_due(r):
@@ -110,7 +124,7 @@ def batch_due(r):
     return t.hour >= 8 and not done
 
 
-def snapshot(linear):
+def all_facts():
     hosts = {SELF: facts()}
     for h in peers():
         p = on(h, ["bin/hourly", "facts"])
@@ -118,6 +132,18 @@ def snapshot(linear):
             hosts[h] = json.loads(p.stdout)
         except ValueError:
             hosts[h] = {"error": (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:200]}
+    return hosts
+
+
+def slots(hosts):
+    """(running, auto running) across every host: the 5 total and 3 auto slots are shared. A paused run keeps its slot
+    for its resume (playbook step 2), so it counts as running here."""
+    rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] in ("running", "paused")]
+    return len(rs), sum(r["auto"] for r in rs)
+
+
+def snapshot(linear):
+    hosts = all_facts()
     def gh(*a):
         p = run(["gh", "pr", "list", "-R", "trycua/cua", "--state", "open", "--limit", "2000", *a])
         if p.returncode:
@@ -147,15 +173,13 @@ def fingerprint(s):
 
 def report(s, fp, last):
     print(f"hourly {now()} fingerprint {fp} (last {last.get('fp', 'none')} at {last.get('ts', 'never')})")
-    running = auto = 0
+    running, auto = slots(s["hosts"])
     for h, f in s["hosts"].items():
         if "error" in f:
             print(f"host {h}: unreachable: {f['error']}")
             continue
         print(f"host {h}: zstack {f['sha'][:9]} {'at main' if f['at_main'] else 'NOT at main: ' + '; '.join(f['parity'])}, free {f['free_gb']}G")
         for sid, r in sorted(f["runs"].items(), key=lambda x: (x[1]["state"], x[1].get("since", ""))):
-            running += r["state"] == "running"
-            auto += r["state"] == "running" and r["auto"]
             extra = " ".join(f"{k}={r[k]}" for k in ("rc", "since", "resume_at", "idle_min") if k in r and r[k] != "None")
             print(f"  {r['state']:<8} {sid} {'auto ' if r['auto'] else ''}{extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}"
                   f"{'  DUE' if r['state'] == 'paused' and due(r, h) else ''}")
@@ -180,6 +204,62 @@ def log(host, action, item, reason):
     free = shutil.disk_usage(root()).free // 2**30 if host == SELF else free
     with open(os.path.join(root(), "pickup.log"), "a") as f:
         f.write((HEAD if not f.tell() else "") + "\t".join([now(), host, action, item, " ".join(reason.split()), str(free)]) + "\n")
+
+
+def launch(sid, host, reason, send=True):
+    """Start review/<id>/brief.md on `host` and log it. With `send`, a brief here goes to a peer host; else the host's own is read."""
+    d = os.path.join(root(), "review", sid)
+    here = os.path.join(d, "brief.md")
+    send = send and host != SELF and os.path.exists(here)
+    p = on(host, ["bin/hourly", "recv", sid], stdin=open(here).read() if send else "")
+    sys.stdout.write(p.stdout)
+    sys.stderr.write(p.stderr)
+    if p.returncode == 0:
+        if send and os.path.exists(os.path.join(d, "QUEUED")):
+            os.unlink(os.path.join(d, "QUEUED"))
+        role = p.stdout.rsplit(" as role ", 1)[-1].split(":")[0] if " as role " in p.stdout else "?"
+        log(host, "launch", sid, f"{role}; {reason}")
+    return p.returncode
+
+
+def drain():
+    """Every host's queue the same way: its QUEUED runs start on that host, oldest since= first across all hosts, while the
+    shared slots allow (an auto brief also needs an auto slot), and a peer only at main with the floor free (playbook step 4).
+    One that cannot start yet gets a `wait` row. PI_RUN_DRY=1 prints the plan and launches and logs nothing."""
+    dry = bool(os.environ.get("PI_RUN_DRY"))
+    if not dry:   # two passes counting the same free slot would both fill it; the lock is held until exit
+        os.makedirs(root(), exist_ok=True)
+        lock = os.open(os.path.join(root(), "hourly-queue.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pr.die(3, "queue: another hourly queue pass is running; nothing launched")
+    hosts = all_facts()
+    running, auto = slots(hosts)
+    blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free
+    for h in blind:
+        print(f"host {h}: runs unknown, so every queue waits: {hosts[h]['error']}")
+    queued = sorted((r.get("since", ""), h, sid, r["auto"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
+                    if r["state"] == "queued")
+    rc = 0
+    for since, h, sid, is_auto in queued:
+        f = hosts[h]
+        why = f"{', '.join(blind)} runs unknown" if blind else \
+            f"slots full: running {running}/{TOTAL}, auto {auto}/{AUTO}" if running >= TOTAL or (is_auto and auto >= AUTO) else \
+            "not at main" if h != SELF and not f["at_main"] else f"{f['free_gb']}G free, under {FLOOR_GB}G" if h != SELF and \
+            f["free_gb"] < FLOOR_GB else ""
+        if why:
+            print(f"wait {h} {sid}: {why}; queued since {since}")
+            dry or log(h, "wait", sid, f"{why}; queued since {since}")
+        elif dry:
+            print(f"would launch {h} {sid}: queued since {since}")
+            running, auto = running + 1, auto + is_auto
+        elif launch(sid, h, "chat queue", send=False) == 0:
+            running, auto = running + 1, auto + is_auto
+        else:
+            rc = 1
+    print(f"queue: {len(queued)} queued, slots now running {running}/{TOTAL}, auto {auto}/{AUTO}")
+    return rc
 
 
 def write(p, obj):
@@ -217,17 +297,9 @@ def main(argv):
         sys.stderr.write(p.stderr)
         return p.returncode
     if cmd == "launch" and len(rest) >= 3 and pr.ID.fullmatch(rest[0]):
-        sid, host, d = rest[0], rest[1], os.path.join(root(), "review", rest[0])
-        here = os.path.join(d, "brief.md")   # a brief queued on the peer itself is read there, so none is sent
-        p = on(host, ["bin/hourly", "recv", sid], stdin=open(here).read() if host != SELF and os.path.exists(here) else "")
-        sys.stdout.write(p.stdout)
-        sys.stderr.write(p.stderr)
-        if p.returncode == 0:
-            if host != SELF and os.path.exists(os.path.join(d, "QUEUED")):
-                os.unlink(os.path.join(d, "QUEUED"))
-            role = p.stdout.rsplit(" as role ", 1)[-1].split(":")[0] if " as role " in p.stdout else "?"
-            log(host, "launch", sid, f"{role}; {' '.join(rest[2:])}")
-        return p.returncode
+        return launch(rest[0], rest[1], " ".join(rest[2:]))
+    if cmd == "queue" and not rest:   # each launch's bin/pi-run moves its host's package to main first
+        return drain()
     if cmd == "recv" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
         d = os.path.join(root(), "review", rest[0])
         brief, text = os.path.join(d, "brief.md"), sys.stdin.read()
