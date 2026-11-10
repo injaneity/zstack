@@ -129,6 +129,21 @@ class Hourly(unittest.TestCase):
         self.hourly("done")
         self.assertIn("skip:", self.hourly())
 
+    def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
+        peer = self.t / "mj"
+        peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' "
+                        "'dry-run cua#7145 872f49fb0 wait who=zane: declared deep: needs Zane (no preapprove row)' "
+                        "'dry-run cua#7185 96f2fa0ea wait who=session: red after rerun: ci-gate' "
+                        "'dry-run cua#7190 3c4132d84 merge: green, ci-gate SUCCESS, risk standard' 'dry-run cua#7191 1 wait: draft';;\n"
+                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "legacy": []}\';; esac\n')
+        peer.chmod(0o755)
+        out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        self.assertIn("merge job needs-Zane: 1\n  cua#7145 872f49fb0: declared deep: needs Zane (no preapprove row)\n"
+                      "merge job unstick: 1\n  cua#7185 96f2fa0ea: red after rerun: ci-gate\n", out)
+        self.assertNotIn("7190", out)
+        self.assertNotIn("7191", out)
+        self.assertNotIn("merge job", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))   # no merge host: nothing asked
+
     def test_a_failed_pr_query_is_reported_and_never_skips(self):
         self.hourly("done")
         (self.t / "bin" / "gh").write_text("#!/bin/bash\necho 'HTTP 502' >&2; exit 1\n")

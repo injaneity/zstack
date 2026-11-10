@@ -15,7 +15,9 @@
 
 The host running it is $ONIGIRI_HOST, else ~/.config/onigiri/host (hosts/<name>/host.sh, as bin/pi-run); its peers are
 $ONIGIRI_PEERS, `name=<command>` words where <command> runs one shell line on the peer (the mini's is the VM's ssh
-wrapper). pickup.log and the fingerprint live in this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
+wrapper). $ONIGIRI_MERGE_HOST names the host that runs hosts/vm/merge_job.py: a report runs its --dry-run there and
+prints each PR it waits on with who=zane under needs-Zane and who=session under unstick. pickup.log and the fingerprint
+live in this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
 """
 import fcntl
 import hashlib
@@ -192,7 +194,24 @@ def report(s, fp, last):
         print(f"error: {e}: the PR lists are unknown this pass")
     print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
+    merge_waits()
     print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
+
+
+def merge_waits():
+    """The merge job's --dry-run on $ONIGIRI_MERGE_HOST: the PRs it waits on someone for, grouped by who."""
+    h = HOST[0].get("ONIGIRI_MERGE_HOST")
+    if not h:
+        return
+    p = on(h, ["hosts/vm/merge_job.py", "--dry-run"])
+    lines = [x.split(" ", 1)[1] for x in p.stdout.splitlines() if x.startswith("dry-run ")]
+    if p.returncode or not lines and p.stderr.strip():
+        print(f"error: merge job dry run on {h}: {(p.stderr.strip().splitlines() or [f'exit {p.returncode}'])[-1][:200]}")
+    for head, who in (("needs-Zane", "zane"), ("unstick", "session")):
+        hits = [x for x in lines if f" wait who={who}: " in x]
+        print(f"merge job {head}: {len(hits) or 'none'}")
+        for x in hits:
+            print(f"  {x.replace(f' wait who={who}', '')}")
 
 
 def log(host, action, item, reason):

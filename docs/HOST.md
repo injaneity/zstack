@@ -21,7 +21,7 @@ Every entry point (`bin/*`, `hosts/check-parity`, `hosts/vm/merge_job.py`, `wake
 
 ## Holds file
 
-`/srv/onigiri/hold-prs.txt`, one row per line. Only Zane edits it. The merge job reads three kinds: `hold | <PR> | <rules> | <note>`, `preapprove | #<PR> | <rules> | <40-char head sha> | <source>`, and `hands-off-path | <file name> | <rules> | <note>`, which buffers every PR that changes a file of that name. To stop one PR, add a `hold` row. A malformed one, or a row of any other kind that names a PR number, makes the file unreadable, and then every PR counts as held. Rows about a login (`skip-author`, `review-only`) steer the hourly pickup and the merge job does not read them: `skip-author` (bots) is never picked up or reviewed, and `review-only` (teammates) gets a first review and nothing else, so a review task for one is filed, never cancelled. The mini reads a copy synced at launch.
+`/srv/onigiri/hold-prs.txt`, one row per line. Only Zane edits it. The merge job reads three kinds: `hold | <PR> | <rules> | <note>`, `preapprove | #<PR> | <rules> | <40-char head sha> | <source>`, and `hands-off-path | <file name> | <rules> | <note>`, which holds every PR that changes a file of that name (the job waits with `who=zane`). To stop one PR, add a `hold` row. A malformed one, or a row of any other kind that names a PR number, makes the file unreadable, and then every PR counts as held. Rows about a login (`skip-author`, `review-only`) steer the hourly pickup and the merge job does not read them: `skip-author` (bots) is never picked up or reviewed, and `review-only` (teammates) gets a first review and nothing else, so a review task for one is filed, never cancelled. The mini reads a copy synced at launch.
 
 ## Launching
 
@@ -46,5 +46,5 @@ Every entry point (`bin/*`, `hosts/check-parity`, `hosts/vm/merge_job.py`, `wake
 ```
 
 - trycua/cua merges through a merge queue, so `gh pr merge` can succeed before anything merged. The job logs `merge-queued cua#N` once per head, and `merged cua#N … mergedAt <time>` once GitHub says MERGED.
-- Outputs: `/srv/onigiri/events.log`, `/srv/onigiri/buffer.jsonl`, and `state.json`, `last-run`, `cron.log` and `tick.log` in `/srv/onigiri/tick/`, which holds data only. `/srv/onigiri/tick/PAUSED` stops merges and reruns.
+- Outputs: `/srv/onigiri/events.log`, and `state.json`, `last-run`, `cron.log` and `tick.log` in `/srv/onigiri/tick/`, which holds data only. There is no buffer. The five urgent kinds (`unexpected-merge`, `parity`, `holds-unreadable`, `merge-watch-overflow`, `merge-failed`) POST the webhook once per key. Every other reason is a `wait` with `who=zane`, `who=session` or none, which `--dry-run` prints and `bin/hourly` shows under needs-Zane and unstick (`ONIGIRI_MERGE_HOST`). The patent hook sends a `blocked` wake for a held push, once per branch and head. `/srv/onigiri/tick/PAUSED` stops merges and reruns.
 - Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.
