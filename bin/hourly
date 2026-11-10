@@ -7,6 +7,7 @@
   hourly log <host> <action> <item> <reason...>   append one pickup.log row (ts_sgt host action item reason free_gb)
   hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host>, then log the launch
   hourly queue                    launch every host's QUEUED runs on that host, oldest first, while slots are free
+                                  (PI_RUN_DRY=1: print the plan only)
   hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
   hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
   hourly processed <id>           mark a legacy review dir (run.rc, no run.json) processed
@@ -211,7 +212,8 @@ def launch(sid, host, reason, send=True):
 def drain():
     """Every host's queue the same way: its QUEUED runs start on that host, oldest since= first across all hosts, while the
     shared slots allow (an auto brief also needs an auto slot), and a peer only at main with the floor free (playbook step 4).
-    One that cannot start yet gets a `wait` row."""
+    One that cannot start yet gets a `wait` row. PI_RUN_DRY=1 prints the plan and launches and logs nothing."""
+    dry = bool(os.environ.get("PI_RUN_DRY"))
     hosts = all_facts()
     running, auto = slots(hosts)
     for h, f in hosts.items():
@@ -227,7 +229,10 @@ def drain():
             f["free_gb"] < FLOOR_GB else ""
         if why:
             print(f"wait {h} {sid}: {why}; queued since {since}")
-            log(h, "wait", sid, f"{why}; queued since {since}")
+            dry or log(h, "wait", sid, f"{why}; queued since {since}")
+        elif dry:
+            print(f"would launch {h} {sid}: queued since {since}")
+            running, auto = running + 1, auto + is_auto
         elif launch(sid, h, "chat queue", send=False) == 0:
             running, auto = running + 1, auto + is_auto
         else:

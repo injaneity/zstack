@@ -231,6 +231,12 @@ class Hourly(unittest.TestCase):
         self.queued(local, "c", 300, "auto")   # auto slots full: waits
         self.queued(vm, "d", 200)   # the fifth slot
         self.queued(local, "e", 100)   # every slot full: waits
+        dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
+        self.assertEqual([x.split(":")[0] for x in dry.splitlines()],
+                         ["would launch local a", "would launch test-vm b", "wait local c", "would launch test-vm d", "wait local e",
+                          "queue"])
+        self.assertFalse((local / "pickup.log").exists())   # a dry pass logs and starts nothing
+        self.assertFalse((vm / "review" / "b" / "run.json").exists())
         r = self.sh("hourly", "queue", ONIGIRI_PEERS=peers)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         rows = [x.split("\t")[1:5] for x in (local / "pickup.log").read_text().splitlines()[2:]]
