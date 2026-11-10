@@ -314,6 +314,9 @@ DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk
 QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
                "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
+LAST_ENQUEUE = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { "
+                "timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) { nodes { ... on AddedToMergeQueueEvent { "
+                "enqueuer { login } } } } } } }")
 
 
 def should_dequeue(reasons, queued, entry, head, me=ME):
@@ -545,13 +548,21 @@ class Job:
             self.event(kind, ident, reason)
 
     def landed(self, ident):
-        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, with its mergedAt. A merge
-        at another head (a push dropped the job's entry, then someone else merged) is not the job's: the record goes and
-        merge-watch wakes for it. Drop it too when GitHub closed it."""
-        q = self.s["queued"][ident]
-        st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
-        if st.get("state") == "MERGED" and (st.get("headRefOid") or q["head"]) != q["head"]:
-            self.event("merge-dropped", ident, f"merged at {st['headRefOid'][:9]}, not at the queued {q['head'][:9]}: not the job's merge")
+        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, from a queue entry ME made
+        (the PR's last AddedToMergeQueueEvent), with its mergedAt. Any other merge (a push dropped the job's entry, then
+        someone else merged or queued it) is not the job's: the record goes and merge-watch wakes for it. Drop it too when
+        GitHub closed it. The job runs as ME, so ME re-queueing the same head by hand after GitHub dropped the job's entry
+        reads as the job's; GitHub keeps nothing that tells the two apart."""
+        q, n = self.s["queued"][ident], ident.split("#")[1]
+        st = gh_json(["pr", "view", n, "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
+        by = None
+        if st.get("state") == "MERGED":
+            items = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={LAST_ENQUEUE}"]) or {}).get("data") or {})
+                     .get("repository") or {}).get("pullRequest", {}).get("timelineItems", {}).get("nodes") or [{}]
+            by = (items[-1].get("enqueuer") or {}).get("login")
+        if st.get("state") == "MERGED" and ((st.get("headRefOid") or q["head"]) != q["head"] or by != ME):
+            self.event("merge-dropped", ident, f"merged at {(st.get('headRefOid') or q['head'])[:9]} from {by or 'no'} queue entry, "
+                                               f"the job queued {q['head'][:9]}: not the job's merge")
         elif st.get("state") == "MERGED":
             head = q["head"]
             self.s["landed"][ident.split("#")[1]] = {"head": head, "at": now()}
