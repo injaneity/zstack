@@ -662,6 +662,25 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.woken(), [])
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")
 
+    def test_a_seeded_merge_does_not_wake_while_it_is_still_in_the_window(self):
+        """cua#7145: the job queued it at 12:32:07 and GitHub merged it at 12:35:44. The seed stamps the queue time, so the
+        18:32 run pruned it while its merge was still inside the next window, and the 18:47 run woke on it."""
+        head = "872f49fb0bc3" + "0" * 28
+        (self.d / "events.log").write_text(f"2026-11-10T12:32:07+08:00 merged cua#7145 squash at {head[:9]}: green, risk deep\n")
+        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T12:00:00+08:00"}}))
+        self.merged = [{"number": 7145, "headRefOid": head, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-10T04:35:44Z",
+                        "title": "t", "mergeCommit": {"oid": "e730ff4cb65e" + "0" * 28}}]
+        tick = datetime(2026, 11, 10, 12, 47, 31, tzinfo=mj.SGT)
+        while tick <= datetime(2026, 11, 10, 19, 2, 31, tzinfo=mj.SGT):   # every 15-minute tick until the merge is out of the window
+            with patch.object(mj.time, "time", return_value=tick.timestamp()), \
+                    patch.object(mj, "now", return_value=tick.isoformat(timespec="seconds")):
+                self.run_()
+            self.assertEqual(self.woken(), [], tick)
+            tick += timedelta(minutes=15)
+        st = json.loads((self.d / "tick/state.json").read_text())
+        self.assertGreater(st["merges"]["since"], "2026-11-10T12:35:44+08:00")   # the merge has left the window
+        self.assertEqual(st["landed"], {})                                         # and so has its entry
+
     def test_the_seed_takes_the_queued_head_over_a_later_merged_line(self):
         """Queued at A, pushed to B and merged by hand, and the run died before saving: the merged line names B."""
         ev = [f"2026-11-10T12:00:00+08:00 merge-queued cua#7240 squash at {H[:9]}: green",
