@@ -3,6 +3,7 @@ They run the real scripts against a temp root, a fake `pi`, a fake `gh` and a fa
 Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,8 @@ from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
 BIN = PKG / "bin"
-FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo \"$4 $2\" && exit 0\nprintf '%s\\n' \"$@\" > \"$T/args\"\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo \"$4 $2\" && exit 0\n" \
+    "printf '%s\\n' \"$@\" > \"$T/args\"\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
 # gh pr list: our PRs from $T/ours.json, everyone else's from $T/others.json
 FAKE_GH = "#!/bin/bash\ncase \"$*\" in *--author*) cat \"$T/ours.json\";; *) cat \"$T/others.json\";; esac\n"
 TASK = "Fix the thing in trycua/cua.\n"
@@ -192,6 +194,70 @@ class Hourly(unittest.TestCase):
         self.assertFalse(self.review("v9").exists())
         row = (self.t / "root" / "pickup.log").read_text().splitlines()[-1].split("\t")
         self.assertEqual(row[1:5], ["test-peer", "launch", "v9", "research; chat queue"])
+
+    def peer_pkg(self, name, root):
+        """A peer: its own copy of the package (parity stubbed ok) under its own HOME, reached by a command that runs one
+        shell line there, like the VM's ssh wrapper."""
+        home = self.t / f"{name}-home"
+        pkg = home / ".pi/agent/git/github.com/injaneity/zstack"
+        for sub in ("bin", "hosts", "config", "skills/onigiri-mode"):
+            shutil.copytree(PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("playbooks", "test-*"))
+        (pkg / "hosts" / "check-parity").write_text("#!/bin/bash\necho ok\n")
+        (pkg / "hosts" / name).mkdir()
+        (pkg / "hosts" / name / "host.sh").write_text("")
+        cmd = self.t / f"{name}-cmd"
+        cmd.write_text(f'#!/bin/bash\nexport ONIGIRI_ROOT={root} HOME={home}\neval "$1"\n')
+        cmd.chmod(0o755)
+        return f"{name}={cmd}"
+
+    def queued(self, root, sid, age, source="chat"):
+        d = root / "review" / sid
+        d.mkdir(parents=True)
+        (d / "brief.md").write_text(f"task {sid}\nrole: coding\nsource: {source}\n")
+        (d / "QUEUED").write_text("coding\n")
+        t = time.time() - age
+        os.utime(d / "QUEUED", (t, t))
+
+    def test_queue_launches_every_hosts_queue_on_that_host_oldest_first_under_the_shared_slots(self):
+        local, vm = self.t / "root", self.t / "vm-root"
+        peers = self.peer_pkg("test-vm", vm)
+        (self.t / "hang").touch()
+        for sid in ("p1", "p2"):   # two auto runs already hold slots: 2/5 running, 2/3 auto
+            self.queued(local, sid, 1000, "auto")
+            (local / "review" / sid / "QUEUED").unlink()
+            self.assertEqual(self.sh("pi-run", sid, "coding", str(local / "review" / sid / "brief.md")).returncode, 0)
+        self.queued(local, "a", 500)
+        self.queued(vm, "b", 400, "auto")   # takes the last auto slot
+        self.queued(local, "c", 300, "auto")   # auto slots full: waits
+        self.queued(vm, "d", 200)   # the fifth slot
+        self.queued(local, "e", 100)   # every slot full: waits
+        r = self.sh("hourly", "queue", ONIGIRI_PEERS=peers)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rows = [x.split("\t")[1:5] for x in (local / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual([x[:3] for x in rows], [["local", "launch", "a"], ["test-vm", "launch", "b"], ["local", "wait", "c"],
+                                                 ["test-vm", "launch", "d"], ["local", "wait", "e"]])
+        self.assertIn("slots full: running 4/5, auto 3/3", rows[2][3])
+        self.assertIn("slots full: running 5/5, auto 3/3", rows[4][3])
+        for root_, sid in ((local, "a"), (vm, "b"), (vm, "d")):   # each started on the host whose queue held it
+            self.assertTrue((root_ / "review" / sid / "run.json").exists(), sid)
+            self.assertFalse((root_ / "review" / sid / "QUEUED").exists(), sid)
+        self.assertFalse((local / "review" / "b").exists())
+        for sid in ("c", "e"):
+            self.assertTrue((local / "review" / sid / "QUEUED").exists(), sid)
+        self.assertIn("queue: 5 queued, slots now running 5/5, auto 3/3", r.stdout)
+
+    def test_a_peers_queue_waits_while_it_is_off_main_or_under_the_floor_or_unreachable(self):
+        vm = self.t / "vm-root"
+        peers = self.peer_pkg("test-vm", vm)
+        self.queued(vm, "v", 100)
+        parity = self.t / "test-vm-home/.pi/agent/git/github.com/injaneity/zstack/hosts/check-parity"
+        parity.write_text("#!/bin/bash\necho 'FAIL  package: old'; exit 1\n")
+        out = self.hourly("queue", ONIGIRI_PEERS=peers)
+        self.assertIn("wait test-vm v: not at main", out)
+        self.assertTrue((vm / "review" / "v" / "QUEUED").exists())
+        (self.t / "dead").write_text("#!/bin/bash\necho 'ssh: connect timed out' >&2; exit 255\n")
+        (self.t / "dead").chmod(0o755)
+        self.assertIn("host vm: unreachable, its queue waits: ssh: connect timed out", self.hourly("queue", ONIGIRI_PEERS=f"vm={self.t}/dead"))
 
     def test_every_entry_point_prints_the_sha_it_runs(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
