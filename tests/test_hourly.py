@@ -158,10 +158,11 @@ class Hourly(unittest.TestCase):
         hidden = self.t / "hidden"   # gh only where the host file's PATH says, as on the mini (env.sh)
         hidden.mkdir()
         (self.t / "bin" / "gh").rename(hidden / "gh")
-        r = self.sh("hourly")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("error: gh pr list --author injaneity: gh: not found on PATH (set it in the host file)", r.stdout)
+        if not shutil.which("gh", path="/usr/bin:/bin"):   # a runner with a system gh cannot lose it
+            r = self.sh("hourly")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertIn("error: gh pr list --author injaneity: gh: not found on PATH (set it in the host file)", r.stdout)
         host = PKG / "hosts" / "test-env"
         host.mkdir()
         self.addCleanup(lambda: [p.unlink() for p in host.iterdir()] and host.rmdir())
