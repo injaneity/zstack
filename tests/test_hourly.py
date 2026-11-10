@@ -126,6 +126,14 @@ class Hourly(unittest.TestCase):
         self.hourly("done")
         self.assertIn("skip:", self.hourly())
 
+    def test_a_failed_pr_query_is_reported_and_never_skips(self):
+        self.hourly("done")
+        (self.t / "bin" / "gh").write_text("#!/bin/bash\necho 'HTTP 502' >&2; exit 1\n")
+        for _ in range(2):
+            out = self.hourly()
+            self.assertIn("error: gh pr list --author injaneity: HTTP 502: the PR lists are unknown this pass", out)
+            self.hourly("done")
+
     def test_an_exited_run_is_reported_until_collected_and_the_report_drops_token_lines(self):
         self.sh("new-brief", "e1", "coding", stdin=TASK)
         r = self.sh("pi-run", "e1", "coding", str(self.review("e1") / "brief.md"))

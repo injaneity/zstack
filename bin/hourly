@@ -118,11 +118,16 @@ def snapshot(linear):
             hosts[h] = json.loads(p.stdout)
         except ValueError:
             hosts[h] = {"error": (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:200]}
-    gh = lambda *a: json.loads(run(["gh", "pr", "list", "-R", "trycua/cua", "--state", "open", "--limit", "2000", *a]).stdout or "[]")  # noqa: E731
+    def gh(*a):
+        p = run(["gh", "pr", "list", "-R", "trycua/cua", "--state", "open", "--limit", "2000", *a])
+        if p.returncode:
+            errors.append(f"gh pr list {a[0]} {a[1]}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
+        return json.loads(p.stdout) if not p.returncode and p.stdout.strip() else []
+    errors = []
     ours = gh("--author", "injaneity", "--json", "number,headRefOid")
     others = gh("--search", "-author:injaneity", "--json", "number,author")
     bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
-    return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()),
+    return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors,
             "ours": sorted(f"{p['number']}:{p['headRefOid'][:9]}" for p in ours),   # a push to ours is work: merge, unstick
             "others": sorted(f"{p['number']}:{p['author']['login']}" for p in others if not bot(p["author"]))}   # new or closed
 
@@ -159,6 +164,8 @@ def report(s, fp, last):
     vm = [h for h, f in s["hosts"].items() if h != SELF and f.get("at_main") and f.get("free_gb", 0) >= FLOOR_GB]
     print(f"slots: running {running}/{TOTAL}, auto {auto}/{AUTO}: free {max(0, TOTAL - running)}, auto {max(0, min(TOTAL - running, AUTO - auto))}")
     print(f"launch host: {vm[0] if vm else SELF} (a peer only at main with {FLOOR_GB}G free)")
+    for e in s["errors"]:
+        print(f"error: {e}: the PR lists are unknown this pass")
     print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
     print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
@@ -195,7 +202,8 @@ def main(argv):
         if cmd == "done":
             write(fpath, {"ts": now(), "fp": fp})
             return print(f"hourly done: fingerprint {fp} stored") or 0
-        acts = s["batch_due"] or any(f.get("legacy") or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
+        acts = s["batch_due"] or s["errors"] or \
+            any(f.get("legacy") or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
         if fp == last.get("fp") and not acts:
             return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
         return report(s, fp, last) or 0
