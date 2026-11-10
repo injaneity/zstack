@@ -151,7 +151,7 @@ class Hourly(unittest.TestCase):
         self.assertEqual(self.hourly("report", "e1"), "did it\nfollow-ups: none\n")
         self.assertEqual(self.sh("pi-run", "collect", "e1").returncode, 0)
         self.hourly("done")
-        self.assertNotIn("e1", self.hourly())
+        self.assertNotRegex(self.hourly(), r"(?m)^  \w+ +e1 ")
 
     def test_slots_and_launch_host_follow_the_peer(self):
         peer = self.t / "peer"
@@ -272,6 +272,8 @@ class Hourly(unittest.TestCase):
 
     def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
         shutil.rmtree(self.t / "root")
+        self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue", PI_RUN_DRY="1"))
+        self.assertFalse((self.t / "root").exists())   # a dry pass makes nothing
         self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue"))
 
     def test_a_second_queue_pass_launches_nothing_while_one_runs(self):

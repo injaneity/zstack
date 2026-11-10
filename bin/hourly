@@ -105,7 +105,14 @@ def facts():
     legacy = sorted(s for s in (os.listdir(rev) if os.path.isdir(rev) else []) if os.path.exists(os.path.join(rev, s, "run.rc"))
                     and not os.path.exists(os.path.join(rev, s, "run.json")) and not os.path.exists(os.path.join(rev, s, "processed")))
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": shutil.disk_usage(r).free // 2**30, "runs": runs, "legacy": legacy}
+            "free_gb": free_gb(r), "runs": runs, "legacy": legacy}
+
+
+def free_gb(p):
+    """Free GiB on the disk that holds p; a root not made yet is on its nearest existing parent's disk."""
+    while not os.path.exists(p):
+        p = os.path.dirname(p)
+    return shutil.disk_usage(p).free // 2**30
 
 
 def batch_due(r):
