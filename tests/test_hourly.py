@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
@@ -131,7 +132,8 @@ class Hourly(unittest.TestCase):
                         "'dry-run cua#7145 872f49fb0 wait who=zane: declared deep: needs Zane (no preapprove row)' "
                         "'dry-run cua#7185 96f2fa0ea wait who=session: red after rerun: ci-gate' "
                         "'dry-run cua#7190 3c4132d84 merge: green, ci-gate SUCCESS, risk standard' 'dry-run cua#7191 1 wait: draft';;\n"
-                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}}\';; esac\n')
+                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "merge_last": '
+                        f'"{datetime.now(timezone.utc).isoformat(timespec="seconds")} zstack s ok"}}\';; esac\n')
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
         self.assertIn("merge job needs-Zane: 1\n  cua#7145 872f49fb0: declared deep: needs Zane (no preapprove row)\n"
@@ -151,6 +153,49 @@ class Hourly(unittest.TestCase):
         self.assertIn("merge job unstick: 2\n", out)
         peer.write_text(peer.read_text().replace("*merge_job.py*) printf", "*merge_job.py*) exit 1; printf"))
         self.assertIn("error: merge job dry run on vm: exit 1", self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm"))
+
+    def test_the_host_file_puts_gh_on_path_and_a_missing_gh_is_an_error_line(self):
+        hidden = self.t / "hidden"   # gh only where the host file's PATH says, as on the mini (env.sh)
+        hidden.mkdir()
+        (self.t / "bin" / "gh").rename(hidden / "gh")
+        r = self.sh("hourly")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("error: gh pr list --author injaneity: gh: not found on PATH (set it in the host file)", r.stdout)
+        host = PKG / "hosts" / "test-env"
+        host.mkdir()
+        self.addCleanup(lambda: [p.unlink() for p in host.iterdir()] and host.rmdir())
+        (host / "host.sh").write_text(f'export PATH="{hidden}:$PATH"\n')
+        out = self.hourly(ONIGIRI_HOST="test-env")
+        self.assertNotIn("error:", out)
+        self.assertIn("prs: ours 1 open, others 1 open", out)
+
+    def test_the_merge_jobs_last_run_is_shown_and_a_stale_or_failed_one_never_skips(self):
+        peer = self.t / "mj"
+        def facts(last):
+            peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) ;;\n*) echo '" + json.dumps(
+                {"sha": "s", "at_main": True, "parity": [], "free_gb": 25, "runs": {}, "merge_last": last}) + "';; esac\n")
+            peer.chmod(0o755)
+            return self.hourly(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        at = lambda m: datetime.fromtimestamp(time.time() - 60 * m, timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+        self.assertRegex(facts(f"{at(3)} zstack s ok"), r"\nmerge job: ok: \S+ zstack s ok \(\d+m ago\)\n")
+        self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        if "preapprove batch: due" in facts(f"{at(3)} zstack s ok"):
+            self.hourly("log", "local", "preapprove-batch", "-", "none")
+            self.hourly("done", ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        self.assertIn("skip:", facts(f"{at(4)} zstack s ok"))   # a newer healthy run is not news
+        for last, state in ((f"{at(56)} zstack s ok", "stale"), (f"{at(3)} zstack s 2 error(s)", "not ok"),
+                            (f"{at(3)} zstack s ok paused", "paused"), (None, "no last-run")):
+            out = facts(last)
+            self.assertIn(f"\nmerge job: {state}: ", out)
+            self.assertNotIn("skip:", out)
+
+    def test_a_report_for_an_id_with_nothing_is_one_error_line(self):
+        self.review("empty").mkdir()
+        r = self.sh("hourly", "report", "empty")
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("empty: no report.md or run.log in review/empty", r.stderr)
 
     def test_a_failed_pr_query_is_reported_and_never_skips(self):
         self.hourly("done")
