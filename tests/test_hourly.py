@@ -252,7 +252,23 @@ class Hourly(unittest.TestCase):
             self.assertTrue((local / "review" / sid / "QUEUED").exists(), sid)
         self.assertIn("queue: 5 queued, slots now running 5/5, auto 3/3", r.stdout)
 
-    def test_a_peers_queue_waits_while_it_is_off_main_or_under_the_floor_or_unreachable(self):
+    def test_a_paused_run_keeps_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
+        def peer(free, runs):
+            f = self.t / "facts"
+            f.write_text("#!/bin/bash\necho '" + json.dumps({"sha": "s", "at_main": True, "parity": [], "free_gb": free, "runs": runs,
+                                                            "legacy": []}) + "'\n")
+            f.chmod(0o755)
+            return f"vm={f}"
+        q = {"state": "queued", "auto": False, "since": "2026-11-10T00:00:00Z"}
+        held = {f"r{i}": {"state": "running", "auto": False} for i in range(4)}
+        out = self.hourly("queue", ONIGIRI_PEERS=peer(19, {"v": q, **held}))
+        self.assertIn("wait vm v: 19G free, under 20G", out)
+        self.assertIn("slots: running 4/5", self.hourly(ONIGIRI_PEERS=peer(25, held)))
+        out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": {"state": "paused", "auto": False}, **held}))
+        self.assertIn("wait vm v: slots full: running 5/5", out)   # the paused run's resume needs its slot
+        self.assertIn("slots: running 5/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": {"state": "paused", "auto": False}, **held})))
+
+    def test_a_peers_queue_waits_while_it_is_off_main_or_its_runs_are_unknown(self):
         vm = self.t / "vm-root"
         peers = self.peer_pkg("test-vm", vm)
         self.queued(vm, "v", 100)

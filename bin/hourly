@@ -127,8 +127,9 @@ def all_facts():
 
 
 def slots(hosts):
-    """(running, auto running) across every host: the 5 total and 3 auto slots are shared."""
-    rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] == "running"]
+    """(running, auto running) across every host: the 5 total and 3 auto slots are shared. A paused run keeps its slot
+    for its resume (playbook step 2), so it counts as running here."""
+    rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] in ("running", "paused")]
     return len(rs), sum(r["auto"] for r in rs)
 
 
