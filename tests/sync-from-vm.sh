@@ -35,7 +35,8 @@ check "no temp file is left behind" "$(cd "$d" && echo .[!.]* *)" ".lock hold-pr
 
 # a slow launch reads the file, Zane edits it, a fast launch reads the edit: the slow one's older read must not win
 DELAY=1.5 READ_MARK="$tmp/slow-read" sync 2>"$tmp/err.slow" & slow=$!
-while [ ! -e "$tmp/slow-read" ]; do sleep 0.05; done; printf 'hold | 3 | all | z\n' >> "$tmp/vm/hold-prs.txt"
+while [ ! -e "$tmp/slow-read" ]; do kill -0 "$slow" 2>/dev/null || { echo "FAIL  the slow sync exited before its read: $(cat "$tmp/err.slow")"; exit 1; }; sleep 0.05; done
+printf 'hold | 3 | all | z\n' >> "$tmp/vm/hold-prs.txt"
 DELAY=0 sync 2>"$tmp/err.fast"; wait "$slow"
 check "a slower launch that read earlier leaves the newer copy" "$(cat "$d/hold-prs.txt")" "$(cat "$tmp/vm/hold-prs.txt")"
 
