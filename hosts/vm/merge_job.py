@@ -5,17 +5,19 @@ hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge s
 A bare run first moves the package checkout to origin/main (bin/ensure-package-main) and restarts on it, then runs
 hosts/check-parity: a host whose package, hook or agents differ from main raises an urgent parity wake.
 
-For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a
-risk tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
-conflict, mergeability not MERGEABLE, PAUSED). A mergeability GitHub has not computed yet (UNKNOWN) is read again in the
-same run when it is the only thing in the way. next_action() turns both into one action: merge, rerun a red
-ci-gate's failed runs once per head, or wait, with who must act: zane (a hold, PAUSED, a hands-off path, a deep/human
-tier with no preapproval at the head), session (no tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue
-(state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
-entry is left alone; its merge wakes through the merge watch. A draft is a wait: draft means not ready, and
-only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
-urgent unexpected-merge wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a
-teammate, a bot or an app). The job's own merges are the heads in state.json landed and queued.
+For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
+tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
+conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
+of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
+mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
+next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
+must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
+tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue (state.json queued,
+enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's entry is left alone;
+its merge wakes through the merge watch. A draft is a wait: draft means not ready, and only a person or the session
+that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an urgent unexpected-merge
+wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a teammate, a bot or
+an app). The job's own merges are the heads in state.json landed and queued.
 
   merge_job.py             one real run (cron, under flock)
   merge_job.py --dry-run   decide every PR, print would-<action>, change and write nothing
@@ -242,7 +244,73 @@ def next_action(reasons, notes, pr, rerun_head=None):
     return "wait", "none", why
 
 
-DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused"}   # off the gate, or PAUSED
+CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
+          "... on StatusContext { context state createdAt }")
+PAGE = "totalCount pageInfo { hasNextPage endCursor }"
+PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
+             f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
+             f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
+             f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
+OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE, first: 25, after: $after) { "
+            f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
+ONE_PR = f"query($n: Int!) {{ repository(owner: \"trycua\", name: \"cua\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
+MORE = ("query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) { repository(owner: \"trycua\", name: \"cua\") { "
+        f"pullRequest(number: $n) {{ files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
+        f"commits(last: 1) @include(if: $c) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100, after: $checks) {{ {PAGE} "
+        f"nodes {{ __typename {CHECKS} }} }} }} }} }} }} }} }} }}")
+
+
+def contexts_of(node):
+    return (((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
+
+
+def read_rest(node):
+    """Page the PR's files and checks past the first 100 each (MORE), in place, until GitHub says there are no more."""
+    files = node["files"]
+    checks = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False}}
+    while files["pageInfo"]["hasNextPage"] or checks["pageInfo"]["hasNextPage"]:
+        f, c = files["pageInfo"]["hasNextPage"], checks["pageInfo"]["hasNextPage"]
+        page = gh_json(["api", "graphql", "-F", f"n={node['number']}", "-F", f"f={str(f).lower()}", "-F", f"c={str(c).lower()}",
+                        *(["-f", f"files={files['pageInfo']['endCursor']}"] if f else []),
+                        *(["-f", f"checks={checks['pageInfo']['endCursor']}"] if c else []),
+                        "-f", f"query={MORE}"])["data"]["repository"]["pullRequest"]
+        if f:
+            files["nodes"] += page["files"]["nodes"]
+            files["pageInfo"] = page["files"]["pageInfo"]
+        if c:
+            more = contexts_of(page)["contexts"]
+            checks["nodes"] += more["nodes"]
+            checks["pageInfo"] = more["pageInfo"]
+    return node
+
+
+def from_graphql(node):
+    """One PullRequest node (with read_rest() done) as the fields gate(), blockers() and next_action() read, in
+    `gh pr view --json` shape. A count that does not match what was read raises, so the job never decides on a partial list
+    (a PR with more than 100 labels is an error for that PR, never a merge)."""
+    files = node["files"]
+    contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
+    labels = node["labels"]   # a risk:<tier> label is a gate input, so a partial list is never decided on either
+    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]) or \
+            labels["totalCount"] != len(labels["nodes"]):
+        raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
+                           f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
+                           f"{len(labels['nodes'])} of {labels['totalCount']} labels")
+    checks = []
+    for c in contexts["nodes"]:
+        if c["__typename"] == "CheckRun":
+            wf = ((c.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}
+            checks.append({"__typename": "CheckRun", "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
+                           "startedAt": c["startedAt"], "detailsUrl": c["detailsUrl"], "workflowName": wf.get("name") or ""})
+        else:
+            checks.append({"__typename": "StatusContext", "context": c["context"], "state": c["state"], "createdAt": c["createdAt"]})
+    return {"number": node["number"], "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
+            "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in labels["nodes"]],
+            "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
+
+
+DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused", "unreadable"}   # off the gate, PAUSED
+# or the PR's gate inputs could not be read in full
 QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
                "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
@@ -385,11 +453,8 @@ class Job:
             return None
 
     def evaluate(self, p, holds):
-        """(reasons, notes) for one PR: gate() then blockers(). The run and --explain both call this."""
+        """(reasons, notes) for one PR (from_graphql's shape): gate() then blockers(). The run and --explain both call this."""
         n = p["number"]
-        p["labels"] = [x["name"] if isinstance(x, dict) else x for x in p.get("labels") or []]
-        p.update(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "mergeable,statusCheckRollup,files"]) or {})
-        p["files"] = [f["path"] if isinstance(f, dict) else f for f in p.get("files") or []]
         notes = []
         reasons = gate(p, holds, notes)
         stop = blockers(p, self.paused)
@@ -408,11 +473,23 @@ class Job:
             except Exception as e:
                 self.errors += 1
                 self.event("error", ident, f"queued merge: {type(e).__name__}: {str(e)[:150]}")
-        prs = gh_json(["pr", "list", "-R", REPO, "--state", "open", "--author", ME, "--limit", "100",
-                       "--json", "number,headRefOid,isDraft,labels,body,title"]) or []
-        for p in prs:
-            ident = f"{SHORT}#{p['number']}"
+        nodes, after = [], None
+        while True:   # one search, a page per 50 PRs
+            page = gh_json(["api", "graphql", "-f", f"q=repo:{REPO} is:pr is:open author:{ME}", "-f", f"query={OPEN_PRS}",
+                            *(["-f", f"after={after}"] if after else [])])["data"]["search"]
+            nodes += [x for x in page["nodes"] if x]
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        for node in nodes:
+            ident = f"{SHORT}#{node['number']}"
             try:
+                try:
+                    p = from_graphql(read_rest(node))
+                except Exception as e:   # the gate cannot be read, so the job's own queue entry for this head comes out
+                    if ident in self.s["queued"]:
+                        self.dequeue(ident, node["number"], node["headRefOid"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
+                    raise
                 reasons, notes = self.evaluate(p, holds)
                 act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
                 if ident in self.s["queued"]:
@@ -548,7 +625,8 @@ class Job:
 
     def explain(self, n):
         """--explain N: every reason for one PR and the action a run would take. Records nothing."""
-        p = gh_json(["pr", "view", str(n), "-R", REPO, "--json", "number,headRefOid,isDraft,labels,body,title,state,author"])
+        p = gh_json(["pr", "view", str(n), "-R", REPO, "--json", "state,author"])
+        p.update(from_graphql(read_rest(gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])))
         try:
             holds = parse_holds(read(HOLDS_FILE))
         except Exception as e:
