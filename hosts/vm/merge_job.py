@@ -517,7 +517,9 @@ class Job:
             return self.wake("merge-watch-overflow", "merge-watch", mw["since"], why)
         mw["since"] = max(mw["since"], min([start, *unsent]))
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
-        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if v["at"] >= mw["since"]}   # it landed no later than it merged
+        merged_at = {str(n): at_of(p).astimezone(SGT).isoformat(timespec="seconds") for n, p in by_n.items()}
+        # a seeded entry's at is when the job queued it, before GitHub merged it: keep it while its merge is in the window
+        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if max(v["at"], merged_at.get(k, "")) >= mw["since"]}
 
     def run(self):
         if self.paused:
