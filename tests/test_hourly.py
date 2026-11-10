@@ -42,7 +42,7 @@ class Hourly(unittest.TestCase):
         (self.t / "hang").unlink(missing_ok=True)
         for p in (self.t / "root").glob("**/run.json"):
             pid = json.loads(p.read_text())["pid"]
-            for _ in range(100):
+            for _ in range(100 if pid else 0):
                 try:
                     os.kill(pid, 0)
                 except OSError:
@@ -88,7 +88,7 @@ class Hourly(unittest.TestCase):
         r = self.sh("hourly", "launch", "q1", "local", "chat", "queue")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("started q1 attempt 1", r.stdout)
-        self.assertFalse((self.review("q1") / "QUEUED").exists())
+        self.assertEqual(json.loads((self.review("q1") / "run.json").read_text())["state"], "running")
         for _ in range(200):
             if (self.t / "args").exists():
                 break
@@ -238,13 +238,18 @@ class Hourly(unittest.TestCase):
         cmd.chmod(0o755)
         return f"{name}={cmd}"
 
-    def queued(self, root, sid, age, source="chat"):
+    def queued(self, root, sid, age, source="chat", resume_in=None):
+        """A queued run.json, as `pi-run queue` writes it, `age` seconds ago; with resume_in, a run back from a 429."""
         d = root / "review" / sid
         d.mkdir(parents=True)
         (d / "brief.md").write_text(f"task {sid}\nrole: coding\nsource: {source}\n")
-        (d / "QUEUED").write_text("coding\n")
-        t = time.time() - age
-        os.utime(d / "QUEUED", (t, t))
+        utc = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))   # noqa: E731
+        run = {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
+               "resume_at": None, "since": utc(time.time() - age), "role": "coding"}
+        if resume_in is not None:
+            (d / "brief.full.md").write_text(f"task {sid}\n")
+            run.update(attempt=1, rc=1, resume_at=utc(time.time() + resume_in), extra=[])
+        (d / "run.json").write_text(json.dumps(run))
 
     def test_queue_launches_every_hosts_queue_on_that_host_oldest_first_under_the_shared_slots(self):
         local, vm = self.t / "root", self.t / "vm-root"
@@ -252,7 +257,6 @@ class Hourly(unittest.TestCase):
         (self.t / "hang").touch()
         for sid in ("p1", "p2"):   # two auto runs already hold slots: 2/5 running, 2/3 auto
             self.queued(local, sid, 1000, "auto")
-            (local / "review" / sid / "QUEUED").unlink()
             self.assertEqual(self.sh("pi-run", sid, "coding", str(local / "review" / sid / "brief.md")).returncode, 0)
         self.queued(local, "a", 500)
         self.queued(vm, "b", 400, "auto")   # takes the last auto slot
@@ -265,7 +269,7 @@ class Hourly(unittest.TestCase):
                           "queue"])
         self.assertFalse((local / "pickup.log").exists())   # a dry pass logs, locks and starts nothing
         self.assertFalse((local / "hourly-queue.lock").exists())
-        self.assertFalse((vm / "review" / "b" / "run.json").exists())
+        self.assertEqual(json.loads((vm / "review" / "b" / "run.json").read_text())["state"], "queued")
         r = self.sh("hourly", "queue", ONIGIRI_PEERS=peers)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         rows = [x.split("\t")[1:5] for x in (local / "pickup.log").read_text().splitlines()[2:]]
@@ -273,15 +277,15 @@ class Hourly(unittest.TestCase):
                                                  ["test-vm", "launch", "d"], ["local", "wait", "e"]])
         self.assertIn("slots full: running 4/5, auto 3/3", rows[2][3])
         self.assertIn("slots full: running 5/5, auto 3/3", rows[4][3])
+        state = lambda r, sid: json.loads((r / "review" / sid / "run.json").read_text())["state"]   # noqa: E731
         for root_, sid in ((local, "a"), (vm, "b"), (vm, "d")):   # each started on the host whose queue held it
-            self.assertTrue((root_ / "review" / sid / "run.json").exists(), sid)
-            self.assertFalse((root_ / "review" / sid / "QUEUED").exists(), sid)
+            self.assertEqual(state(root_, sid), "running", sid)
         self.assertFalse((local / "review" / "b").exists())
         for sid in ("c", "e"):
-            self.assertTrue((local / "review" / sid / "QUEUED").exists(), sid)
+            self.assertEqual(state(local, sid), "queued", sid)
         self.assertIn("queue: 5 queued, slots now running 5/5, auto 3/3", r.stdout)
 
-    def test_a_paused_run_keeps_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
+    def test_a_429d_run_frees_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
         def peer(free, runs):
             f = self.t / "facts"
             f.write_text("#!/bin/bash\necho '" + json.dumps({"sha": "s", "at_main": True, "parity": [], "free_gb": free, "runs": runs,
@@ -293,9 +297,42 @@ class Hourly(unittest.TestCase):
         out = self.hourly("queue", ONIGIRI_PEERS=peer(19, {"v": q, **held}))
         self.assertIn("wait vm v: 19G free, under 20G", out)
         self.assertIn("slots: running 4/5", self.hourly(ONIGIRI_PEERS=peer(25, held)))
-        out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": {"state": "paused", "auto": False}, **held}))
-        self.assertIn("wait vm v: slots full: running 5/5", out)   # the paused run's resume needs its slot
-        self.assertIn("slots: running 5/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": {"state": "paused", "auto": False}, **held})))
+        back = {"state": "queued", "auto": False, "since": "2026-11-09T00:00:00Z", "resume_at": "2099-01-01T00:00:00Z"}
+        out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": back, **held}), PI_RUN_DRY="1")
+        self.assertIn("wait vm p: after a 429, not before resume_at 2099-01-01T00:00:00Z", out)   # older, but not yet
+        self.assertIn("would launch vm v", out)   # the 429'd run's slot went to the next queued run
+        self.assertIn("slots: running 4/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": back, **held})))
+
+    def test_a_429d_run_resumes_from_the_drain_in_its_own_session_at_its_first_queue_place(self):
+        local = self.t / "root"
+        self.queued(local, "back", 900, resume_in=-60)    # queued first, hit a 429, resume_at passed
+        self.queued(local, "fresh", 300)
+        self.queued(local, "later", 1200, resume_in=3600)   # oldest place, but not before its resume_at
+        for i in range(3):   # three runs hold slots: two left
+            self.queued(local, f"h{i}", 2000)
+            self.assertEqual(self.sh("pi-run", f"h{i}", "coding", str(local / "review" / f"h{i}" / "brief.md")).returncode, 0)
+        (self.t / "hang").touch()
+        self.hourly("done")
+        self.assertNotIn("skip:", self.hourly())   # a queued run whose resume_at passed is work
+        r = self.sh("hourly", "queue")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("pi-run: resumed back attempt 1", r.stdout)
+        self.assertIn("started fresh attempt 1", r.stdout)
+        self.assertIn("wait local later: after a 429, not before resume_at", r.stdout)
+        rows = [x.split("\t")[2:4] for x in (local / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual(rows, [["wait", "later"], ["resume", "back"], ["launch", "fresh"]])
+        run = json.loads((local / "review" / "back" / "run.json").read_text())
+        self.assertEqual((run["state"], run["attempt"], run["resumes"]), ("running", 1, 1))
+        self.assertEqual((local / "review" / "back" / "brief.full.md").read_text(), "task back\n")   # the brief it started with
+        self.assertIn("as role coding", r.stdout)
+
+    def test_only_the_drain_resumes_a_429d_run_even_when_the_callers_env_says_drain(self):
+        self.queued(self.t / "root", "back", 900, resume_in=-60)
+        for argv in (("launch", "back", "local", "chat"), ("recv", "back")):   # a direct hourly launch is not the drain
+            r = self.sh("hourly", *argv, stdin="", PI_RUN_DRAIN="1")
+            self.assertEqual(r.returncode, 3, argv)
+            self.assertIn("queued after a 429", r.stderr)
+        self.assertEqual(json.loads((self.review("back") / "run.json").read_text())["state"], "queued")
 
     def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
         shutil.rmtree(self.t / "root")
@@ -313,7 +350,7 @@ class Hourly(unittest.TestCase):
             r = self.sh("hourly", "queue")
             self.assertEqual(r.returncode, 3, r.stderr)
             self.assertIn("another hourly queue pass is running", r.stderr)
-        self.assertFalse((self.review("solo") / "run.json").exists())
+        self.assertEqual(json.loads((self.review("solo") / "run.json").read_text())["state"], "queued")
         (self.t / "hang").touch()
         self.assertIn("started solo", self.hourly("queue"))
 
@@ -325,7 +362,7 @@ class Hourly(unittest.TestCase):
         parity.write_text("#!/bin/bash\necho 'FAIL  package: old'; exit 1\n")
         out = self.hourly("queue", ONIGIRI_PEERS=peers)
         self.assertIn("wait test-vm v: not at main", out)
-        self.assertTrue((vm / "review" / "v" / "QUEUED").exists())
+        self.assertEqual(json.loads((vm / "review" / "v" / "run.json").read_text())["state"], "queued")
         (self.t / "dead").write_text("#!/bin/bash\necho 'ssh: connect timed out' >&2; exit 255\n")
         (self.t / "dead").chmod(0o755)
         bad = self.review("bad")   # a run.json pi-run list cannot read: this host's runs are unknown too
@@ -333,12 +370,12 @@ class Hourly(unittest.TestCase):
         (bad / "run.json").write_text("{")
         self.assertRegex(self.hourly("queue"), r"host local: runs unknown, so every queue waits: pi-run list: .*JSON")
         bad.joinpath("run.json").unlink()
+        bad.rmdir()
         self.queued(self.t / "root", "here", 50)   # the peer may hold every slot, so a local run waits too
         out = self.hourly("queue", ONIGIRI_PEERS=f"vm={self.t}/dead")
         self.assertIn("host vm: runs unknown, so every queue waits: ssh: connect timed out", out)
         self.assertIn("wait local here: vm runs unknown", out)
-        self.assertTrue((self.review("here") / "QUEUED").exists())
-        self.assertFalse((self.review("here") / "run.json").exists())
+        self.assertEqual(json.loads((self.review("here") / "run.json").read_text())["state"], "queued")
 
     def test_every_entry_point_prints_the_sha_it_runs(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
