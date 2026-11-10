@@ -719,7 +719,10 @@ class Stage(unittest.TestCase):
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7230")])
-        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7230"]["head"], H)
+        self.assertNotIn("7230", json.loads((self.d / "tick/state.json").read_text())["landed"])
+        ev = self.events()   # `merged` means the job's own entry merged (MergedEventMeansMerged): not logged for another head
+        self.assertFalse([x for x in ev if x.startswith("merged cua#7230")], ev)
+        self.assertIn(f"merge-dropped cua#7230 merged at {H2[:9]}, not at the queued {H[:9]}: not the job's merge", ev)
 
     def test_the_first_run_seeds_the_allow_list_from_events_log(self):
         at = lambda h: (datetime.now(mj.SGT) - timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731  inside the window

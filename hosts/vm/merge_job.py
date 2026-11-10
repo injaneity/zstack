@@ -545,12 +545,16 @@ class Job:
             self.event(kind, ident, reason)
 
     def landed(self, ident):
-        """Log `merged` once GitHub says a requested merge is MERGED, with its mergedAt; drop it when GitHub closed it."""
+        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, with its mergedAt. A merge
+        at another head (a push dropped the job's entry, then someone else merged) is not the job's: the record goes and
+        merge-watch wakes for it. Drop it too when GitHub closed it."""
         q = self.s["queued"][ident]
         st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
-        if st.get("state") == "MERGED":
-            head = st.get("headRefOid") or q["head"]
-            self.s["landed"][ident.split("#")[1]] = {"head": q["head"], "at": now()}   # the head it queued: another head is not the job's
+        if st.get("state") == "MERGED" and (st.get("headRefOid") or q["head"]) != q["head"]:
+            self.event("merge-dropped", ident, f"merged at {st['headRefOid'][:9]}, not at the queued {q['head'][:9]}: not the job's merge")
+        elif st.get("state") == "MERGED":
+            head = q["head"]
+            self.s["landed"][ident.split("#")[1]] = {"head": head, "at": now()}
             self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
         elif st.get("state") == "CLOSED":
             self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
