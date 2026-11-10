@@ -1,6 +1,7 @@
 """Tests for bin/hourly (the hourly pass's facts, fingerprint skip, pickup.log and launch), bin/new-brief and bin/queue.
 They run the real scripts against a temp root, a fake `pi`, a fake `gh` and a fake peer.
 Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
+import fcntl
 import json
 import os
 import shutil
@@ -267,6 +268,17 @@ class Hourly(unittest.TestCase):
         out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": {"state": "paused", "auto": False}, **held}))
         self.assertIn("wait vm v: slots full: running 5/5", out)   # the paused run's resume needs its slot
         self.assertIn("slots: running 5/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": {"state": "paused", "auto": False}, **held})))
+
+    def test_a_second_queue_pass_launches_nothing_while_one_runs(self):
+        self.queued(self.t / "root", "solo", 10)
+        with open(self.t / "root" / "hourly-queue.lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)   # a pass in progress
+            r = self.sh("hourly", "queue")
+            self.assertEqual(r.returncode, 3, r.stderr)
+            self.assertIn("another hourly queue pass is running", r.stderr)
+        self.assertFalse((self.review("solo") / "run.json").exists())
+        (self.t / "hang").touch()
+        self.assertIn("started solo", self.hourly("queue"))
 
     def test_a_peers_queue_waits_while_it_is_off_main_or_its_runs_are_unknown(self):
         vm = self.t / "vm-root"
