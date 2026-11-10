@@ -10,7 +10,7 @@ pstack splits work across agents: one model designs, a subagent implements, more
 pi install git:github.com/injaneity/zstack
 ```
 
-That is the whole install: skills, extensions and agents all load from the package. You still log in to each provider yourself. `config/models.json` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended (`bin/pi-run --help`). Its lifecycle is one state machine, `bin/PiRun.tla`, which CI model-checks and holds the launcher to. `docs/HOST.md` and `hosts/` are one example deployment.
+That is the whole install: skills, extensions and agents all load from the package. You still log in to each provider yourself. `config/models.json` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended (`bin/pi-run --help`). Its lifecycle is one state machine, `bin/PiRun.tla`, which CI model-checks and holds the launcher to. `model/Zstack.tla` is the whole flow from the chat to merged, with the merge job. CI model-checks it, and its mutants (`model/mutants.py`) each put back a bug the flow had. `docs/HOST.md` and `hosts/` are one example deployment.
 
 Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe the work and let the model route to it. The `/onigiri-mode` prompt template expands inside pi, so it works on any provider, including claude-code.
 
