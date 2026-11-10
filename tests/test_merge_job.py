@@ -245,6 +245,7 @@ class Stage(unittest.TestCase):
         k.start()
         self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
+        self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
         self.prs[n] = {"number": n, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
@@ -252,6 +253,9 @@ class Stage(unittest.TestCase):
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
 
     def gh(self, args):
+        if args[:2] == ["api", "graphql"]:
+            n = int(args[args.index("-F") + 1].split("=", 1)[1])
+            return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
         if args[:2] == ["pr", "list"] and "open" in args:
             return [{k: p[k] for k in args[-1].split(",")} for p in self.prs.values() if p["state"] == "OPEN"]
         if args[:2] == ["pr", "list"]:
@@ -267,10 +271,15 @@ class Stage(unittest.TestCase):
 
     def sh(self, args, timeout=120):
         self.calls.append(args)
-        assert args[:3] in (["gh", "pr", "merge"], ["gh", "run", "rerun"], ["gh", "pr", "ready"]), args
+        assert args[:3] in (["gh", "pr", "merge"], ["gh", "run", "rerun"], ["gh", "pr", "ready"], ["gh", "api", "graphql"]), args
         assert "--auto" not in args, args
         if args[:3] == ["gh", "pr", "merge"] and not self.queue:
             self.prs[int(args[3])].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
+        elif args[:3] == ["gh", "pr", "merge"]:
+            self.entries[int(args[3])] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": args[-1]}}
+        elif args[:3] == ["gh", "api", "graphql"]:
+            assert "dequeuePullRequest" in args[-1], args
+            self.entries.pop(int(args[4].split("_")[1]))
         return 0, "", ""
 
     def run_(self, dry=False):
@@ -332,6 +341,64 @@ class Stage(unittest.TestCase):
         self.assertEqual([x.split(" ", 2)[:2] for x in self.events()],
                          [["merge-queued", "cua#7090"], ["merge-queued", "cua#7090"], ["merge-dropped", "cua#7090"]])
         self.assertIn("at bbbbbbbbb", self.events()[1])
+
+    def dequeues(self):
+        return [c[4] for c in self.of(["gh", "api", "graphql"])]
+
+    def test_the_jobs_queue_entry_that_gets_a_hold_row_is_dequeued_once(self):
+        """A hold row added while the job's entry waits in GitHub's merge queue takes it out (the model's no-dequeue mutant)."""
+        self.queue = True
+        self.add(7200)
+        self.add(7201)
+        self.run_()
+        self.assertEqual(set(self.entries), {7200, 7201})
+        (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7200 | no | Zane stops it\n")
+        self.run_()
+        self.run_()
+        self.assertEqual(self.dequeues(), ["id=PR_7200"])   # one call, and none for the green 7201
+        self.assertEqual(set(self.entries), {7201})
+        self.assertIn("merge-dequeued cua#7200 at aaaaaaaaa: hold: #7200 has a hold row in the holds file", self.events())
+        self.assertNotIn("cua#7200", json.loads((self.d / "tick/state.json").read_text())["queued"])
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7200", "7201", "7201", "7201"])   # 7200 not asked again
+
+    def test_paused_or_unreadable_holds_dequeue_the_jobs_entry_and_a_dry_run_only_says_so(self):
+        self.queue = True
+        self.add(7210)
+        self.run_()
+        (self.d / "tick/PAUSED").write_text("manual\n")
+        out = self.run_(dry=True)
+        self.assertEqual(self.dequeues(), [])
+        self.assertIn("would-dequeue cua#7210", out)
+        self.run_()
+        self.assertEqual(self.dequeues(), ["id=PR_7210"])
+        (self.d / "tick/PAUSED").unlink()
+        self.run_()   # green again: queued again
+        (self.d / "hold-prs.txt").write_text("hodl | 1 | no | typo\n")
+        self.run_()
+        self.assertEqual(self.dequeues(), ["id=PR_7210", "id=PR_7210"])
+
+    def test_another_actors_entry_and_a_stale_head_are_left_alone(self):
+        self.queue = True
+        self.add(7220)
+        self.add(7221)
+        self.run_()
+        self.entries[7220]["enqueuer"] = {"login": "cua-agents[bot]"}   # cua#7039: an app queued it too
+        self.add(7221, head=H2)   # a push: GitHub drops the old entry with the old head
+        self.entries[7221] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
+        (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7220 | no | x\nhold | 7221 | no | x\n")
+        self.run_()
+        self.assertEqual(self.dequeues(), [])
+
+    def test_should_dequeue_needs_the_jobs_entry_at_the_head_and_an_off_gate_reason(self):
+        mine, q = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}, {"head": H}
+        hold, ci = [mj.Reason("hold", "h")], [mj.Reason("ci", "c")]
+        self.assertTrue(mj.should_dequeue(hold, q, mine, H))
+        self.assertTrue(mj.should_dequeue(ci, q, mine, H))
+        self.assertTrue(mj.should_dequeue([mj.Reason("paused", "p")], q, mine, H))
+        for reasons, queued, entry in (([], q, mine), ([mj.Reason("mergeable", "m")], q, mine), (hold, q, None), (hold, None, mine),
+                                       (hold, {"head": H2}, mine), (hold, q, {**mine, "enqueuer": {"login": "cua-agents[bot]"}}),
+                                       (hold, q, {**mine, "headCommit": {"oid": H2}})):
+            self.assertFalse(mj.should_dequeue(reasons, queued, entry, H), (reasons, queued, entry))
 
     def test_red_is_rerun_once_then_buffered_once(self):
         self.add(6308, rollup=self.RED)
