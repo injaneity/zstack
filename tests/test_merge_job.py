@@ -273,7 +273,7 @@ class Stage(unittest.TestCase):
                     **({"checkSuite": {"workflowRun": {"workflow": {"name": c["workflowName"]}}}} if c["__typename"] == "CheckRun" else {})}
                    for c in p["statusCheckRollup"]]
         return {"number": n, "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
-                "mergeable": mergeable, "labels": {"nodes": [{"name": x} for x in p["labels"]]},
+                "mergeable": mergeable, "labels": {"totalCount": len(p["labels"]), "nodes": [{"name": x} for x in p["labels"][:100]]},
                 "files": page(p["files"], files), "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page(checks_, checks)}}}]}}
 
     def gh(self, args):
@@ -524,6 +524,14 @@ class Stage(unittest.TestCase):
         n["files"]["totalCount"] = 2
         with self.assertRaisesRegex(RuntimeError, "read 1 of 2 files"):
             mj.from_graphql(n)
+
+    def test_a_pr_with_more_labels_than_one_page_is_an_error_never_a_merge(self):
+        """A risk:deep label past the first page must not let a `risk: light` body merge without its preapproval."""
+        self.add(6361)
+        self.prs[6361]["labels"] = [f"area-{i}" for i in range(100)] + ["risk:deep"]
+        self.run_()
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertIn("error cua#6361 merge: RuntimeError: cua#6361: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
 
     def test_an_unchanged_decision_is_logged_once(self):
         self.add(6302, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
@@ -878,7 +886,8 @@ class Cli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "h").write_text(HOLDS)
             p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "injaneity"}, title="t")
-            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable")}, "labels": {"nodes": []},
+            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable")},
+                    "labels": {"totalCount": 0, "nodes": []},
                     "files": {"totalCount": 1, "nodes": [{"path": "README.md"}], "pageInfo": {"hasNextPage": False}},
                     "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"totalCount": 0, "nodes": [],
                                                                                           "pageInfo": {"hasNextPage": False}}}}}]}}

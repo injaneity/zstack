@@ -247,7 +247,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
 CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
           "... on StatusContext { context state createdAt }")
 PAGE = "totalCount pageInfo { hasNextPage endCursor }"
-PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 50) { nodes { name } } "
+PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
              f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
              f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
@@ -286,12 +286,16 @@ def read_rest(node):
 
 def from_graphql(node):
     """One PullRequest node (with read_rest() done) as the fields gate(), blockers() and next_action() read, in
-    `gh pr view --json` shape. A count that does not match what was read raises, so the job never decides on a partial list."""
+    `gh pr view --json` shape. A count that does not match what was read raises, so the job never decides on a partial list
+    (a PR with more than 100 labels is an error for that PR, never a merge)."""
     files = node["files"]
     contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
-    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]):
-        raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files and "
-                           f"{len(contexts['nodes'])} of {contexts['totalCount']} checks")
+    labels = node["labels"]   # a risk:<tier> label is a gate input, so a partial list is never decided on either
+    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]) or \
+            labels["totalCount"] != len(labels["nodes"]):
+        raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
+                           f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
+                           f"{len(labels['nodes'])} of {labels['totalCount']} labels")
     checks = []
     for c in contexts["nodes"]:
         if c["__typename"] == "CheckRun":
@@ -301,7 +305,7 @@ def from_graphql(node):
         else:
             checks.append({"__typename": "StatusContext", "context": c["context"], "state": c["state"], "createdAt": c["createdAt"]})
     return {"number": node["number"], "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
-            "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in node["labels"]["nodes"]],
+            "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in labels["nodes"]],
             "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
 
 
