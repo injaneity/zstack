@@ -312,6 +312,13 @@ class Stage(unittest.TestCase):
         self.assertEqual(ev, [f"merged cua#7082 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["queued"], {})
 
+    def test_a_run_that_died_before_saving_state_does_not_log_merged_twice(self):
+        self.add(7083)
+        self.run_()
+        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"cua#7083": {"head": H, "why": "green"}}}))   # the lost save
+        self.run_()
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7083"], ["merged", "cua#7083"]])
+
     def test_a_new_head_while_queued_is_queued_again_and_a_close_drops_it(self):
         self.queue = True
         self.add(7090)

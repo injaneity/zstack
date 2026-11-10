@@ -388,9 +388,12 @@ class Launcher(unittest.TestCase):
         self.assertIn("paused until", r.stderr)
 
     def test_a_run_that_only_quotes_a_429_is_a_plain_failure(self):
-        (self.t / "say").write_text("the log said status 429 earlier\nIncomplete Claude Code upstream response (status 429, x)\nreport done\n")
-        self.start("q", rc=1)
-        self.assertEqual(self.finished("q")["wake"], "failed")
+        for sid, say in (("q1", "Incomplete Claude Code upstream response (status 429, x)\nreport done\n"),
+                         ("q2", "Task failed; quoted: Incomplete Claude Code upstream response (status 429, example)\n"),
+                         ("q3", "Incomplete Claude Code upstream response (status 200, capture incomplete)\n")):
+            (self.t / "say").write_text(say)
+            self.start(sid, rc=1)
+            self.assertEqual(self.finished(sid)["wake"], "failed", sid)
 
     def test_queue_shows_in_list_oldest_first_and_a_start_clears_it(self):
         for sid in ("qa", "qb"):
@@ -410,7 +413,8 @@ class Launcher(unittest.TestCase):
 
     def test_every_entry_point_prints_its_zstack_sha(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        self.assertEqual(self.pi_run("list").stderr.splitlines()[0], f"zstack {sha}")
+        for argv in (["list"], ["--help"], ["collect", "none"]):
+            self.assertEqual(self.pi_run(*argv).stderr.splitlines()[0], f"zstack {sha}", argv)
 
     def test_dry_run_and_bad_input_change_nothing(self):
         r = self.pi_run("dry", "coding", str(self.t / "brief.md"), PI_RUN_DRY="1")

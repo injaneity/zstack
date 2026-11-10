@@ -403,15 +403,22 @@ class Job:
         # trycua/cua has a merge queue: gh exits 0 when it only queued, so `merged` waits for GitHub's MERGED
         if self.s["queued"].get(ident, {}).get("head") != head:
             self.s["queued"][ident] = {"head": head, "why": why}
-            self.event("merge-queued", ident, f"squash at {head[:9]}: {why}")
+            self.once("merge-queued", ident, head, f"squash at {head[:9]}: {why}")
         self.landed(ident)
+
+    def once(self, kind, ident, head, reason):
+        """Log `kind` for this PR and head unless events.log has it: a run that died before saving state logs it once."""
+        mark = f" {kind} {ident} squash at {head[:9]}"
+        if not os.path.exists(EVENTS) or not any(mark in x for x in read(EVENTS).splitlines()):
+            self.event(kind, ident, reason)
 
     def landed(self, ident):
         """Log `merged` once GitHub says a requested merge is MERGED, with its mergedAt; drop it when GitHub closed it."""
         q = self.s["queued"][ident]
         st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
         if st.get("state") == "MERGED":
-            self.event("merged", ident, f"squash at {st.get('headRefOid', q['head'])[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
+            head = st.get("headRefOid") or q["head"]
+            self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
         elif st.get("state") == "CLOSED":
             self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
         else:

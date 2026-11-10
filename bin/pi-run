@@ -42,8 +42,8 @@ WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = "usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|resume|queue <id> | pi-run list [<state>...]"
-# pi's last line when the upstream refused on a usage limit: Claude Code's 429, or ChatGPT's (which names the wait)
-LIMIT = re.compile(r"Incomplete Claude Code upstream response \(status 429\b|You have hit your ChatGPT usage limit")
+# pi's whole last line when the upstream refused on a usage limit: Claude Code's 429, or ChatGPT's (which names the wait)
+LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status 429, .*\)|You have hit your ChatGPT usage limit.*)")
 RESUME = "Your run paused on an upstream rate limit and is resumed in the same session. Carry on with the task from where you stopped."
 
 
@@ -166,7 +166,7 @@ def limit_until(d, attempt, rc, got):
             last = ([x for x in f.read().split(f"== attempt {attempt}\n")[-1].splitlines() if x.strip()] or [""])[-1]
     except OSError:
         return None
-    if not rc or got or not LIMIT.search(last):
+    if not rc or got or not LIMIT.fullmatch(last.strip()):
         return None
     m = re.search(r"Try again in ~(\d+) min", last)
     return utc(time.time() + 60 * int(m.group(1)) if m else None)
@@ -367,10 +367,10 @@ def queue(sid):
 
 
 def main(argv):
+    print(f"zstack {sha()}", file=sys.stderr)
     if argv[:1] in (["-h"], ["--help"]):
         print(__doc__)
         return 0
-    print(f"zstack {sha()}", file=sys.stderr)
     if len(argv) == 2 and argv[0] in ("collect", "resume", "queue") and ID.fullmatch(argv[1]):
         return {"collect": collect, "resume": resume, "queue": queue}[argv[0]](argv[1])
     if argv[:1] == ["list"]:
