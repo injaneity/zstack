@@ -17,7 +17,8 @@
 The host running it is $ONIGIRI_HOST, else ~/.config/onigiri/host (hosts/<name>/host.sh, as bin/pi-run); its peers are
 $ONIGIRI_PEERS, `name=<command>` words where <command> runs one shell line on the peer (the mini's is the VM's ssh
 wrapper). $ONIGIRI_MERGE_HOST names the host that runs hosts/vm/merge_job.py: a report runs its --dry-run there and
-prints each PR it waits on with who=zane under needs-Zane and who=session under unstick. pickup.log and the fingerprint
+prints each PR it waits on with who=zane under needs-Zane and who=session under unstick, and its tick/last-run says
+whether the job is ok, stale, not ok or paused. The host file's env is this process's, so gh resolves. pickup.log and the fingerprint
 live in this host's $ONIGIRI_ROOT. The pass first moves the package to origin/main, like bin/pi-run.
 """
 import fcntl
@@ -26,6 +27,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -40,6 +42,9 @@ pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
 TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
+MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
+# merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
+LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
 SELF = pr.host_name() or "local"   # the name pickup.log rows and `on` use for this host
 PEER_PKG = ".pi/agent/git/github.com/injaneity/zstack"   # where `pi install git:github.com/injaneity/zstack` puts it
 HEAD = "# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:\n# ts_sgt\thost\taction\titem\treason\tfree_gb\n"
@@ -53,8 +58,11 @@ HOST = []
 
 
 def root():
-    """This host's $ONIGIRI_ROOT, from its host file like bin/pi-run's."""
-    HOST or HOST.extend(pr.host_env("list"))
+    """This host's $ONIGIRI_ROOT, from its host file like bin/pi-run's. The host file's env (PATH, GH_CONFIG_DIR) becomes
+    this process's too, so gh and the peer's command resolve from any shell, as a launch from bin/pi-run does."""
+    if not HOST:
+        HOST.extend(pr.host_env("list"))
+        os.environ.update(HOST[0])
     return HOST[1].rsplit("/review", 1)[0]
 
 
@@ -65,7 +73,11 @@ def peers():
 
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    """A command that is not installed is a failed result naming it, never a traceback."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: not found on PATH (set it in the host file)\n")
 
 
 def on(host, args, stdin=None):
@@ -104,8 +116,13 @@ def facts():
         if state == "running":
             f["idle_min"] = activity_min(d)
         runs[sid] = f
+    last = os.path.join(r, "tick", "last-run")   # the merge job's host only: its last finished run
+    try:
+        merge = {"merge_last": open(last, errors="replace").read().strip()} if os.path.exists(last) else {}
+    except OSError as e:
+        merge = {"merge_last": f"unreadable: {e}"}
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": free_gb(r), "runs": runs}
+            "free_gb": free_gb(r), "runs": runs, **merge}
 
 
 def free_gb(p):
@@ -154,9 +171,27 @@ def snapshot(linear):
     others = gh("--search", "-author:injaneity", "--json", "number,author")
     bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
     waits = merge_waits(errors)
+    mh = HOST[0].get("ONIGIRI_MERGE_HOST")
     return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors, "waits": waits,
+            "merge": merge_health(hosts[mh].get("merge_last")) if mh in hosts and "error" not in hosts[mh] else None,
             "ours": sorted(f"{p['number']}:{p['headRefOid'][:9]}" for p in ours),   # a push to ours is work: merge, unstick
             "others": sorted(f"{p['number']}:{p['author']['login']}" for p in others if not bot(p["author"]))}   # new or closed
+
+
+def merge_health(line):
+    """(status, the merge job's last-run line with its age). Stale: no run finished within one 15-minute interval plus
+    its 40-minute kill (docs/HOST.md's cron line), so the job is not running."""
+    if not line:
+        return "no last-run", "no tick/last-run on the merge host"
+    m = LAST_RUN.fullmatch(line)
+    try:
+        age = int((time.time() - datetime.fromisoformat(m[1]).timestamp()) // 60) if m else None
+    except ValueError:
+        age = None
+    if age is None or age < -5:   # not merge_job.py's line, or a clock it cannot have written: never trusted as ok
+        return "unreadable", line
+    state = "paused" if m[3] else "not ok" if m[2] != "ok" else "stale" if age > MERGE_STALE_MIN else "ok"
+    return state, f"{line} ({age}m ago)"
 
 
 def waiting(r):
@@ -173,7 +208,8 @@ def fingerprint(s):
     keep = {h: {"runs": {k: (v["state"], v.get("idle_min", 0) >= HUNG_MIN) for k, v in f.get("runs", {}).items()},
                 "at_main": f.get("at_main"), "floor": f.get("free_gb", 0) >= FLOOR_GB, "error": "error" in f}
             for h, f in s["hosts"].items()}
-    return hashlib.sha256(json.dumps([keep, s["linear"], s["ours"], s["others"], s["batch_due"], s["waits"]],
+    return hashlib.sha256(json.dumps([keep, s["linear"], s["ours"], s["others"], s["batch_due"], s["waits"],
+                                      (s.get("merge") or [None])[0]],
                                      sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -195,6 +231,8 @@ def report(s, fp, last):
         print(f"error: {e}: the PR lists are unknown this pass")
     print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
+    if s.get("merge"):
+        print(f"merge job: {s['merge'][0]}: {s['merge'][1]}")
     for head, who in (("needs-Zane", "zane"), ("unstick", "session")):
         hits = [x for x in s["waits"] if f" wait who={who}: " in x]
         print(f"merge job {head}: {len(hits) or 'none'}")
@@ -304,7 +342,7 @@ def main(argv):
         if cmd == "done":
             write(fpath, {"ts": now(), "fp": fp})
             return print(f"hourly done: fingerprint {fp} stored") or 0
-        acts = s["batch_due"] or s["errors"] or \
+        acts = s["batch_due"] or s["errors"] or (s["merge"] or ["ok"])[0] != "ok" or \
             any("error" in f or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
         if fp == last.get("fp") and not acts:
             return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
@@ -341,6 +379,8 @@ def main(argv):
     if cmd == "report" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
         d = os.path.join(root(), "review", rest[0])
         p = os.path.join(d, "report.md")
+        if not os.path.exists(p) and not os.path.exists(os.path.join(d, "run.log")):
+            pr.die(2, f"{rest[0]}: no report.md or run.log in review/{rest[0]} on {SELF}")
         lines = open(p if os.path.exists(p) else os.path.join(d, "run.log"), errors="replace").read().splitlines()
         return print("\n".join(x for x in (lines if os.path.exists(p) else lines[-80:]) if "TOKEN" not in x)) or 0
     pr.die(2, __doc__.split("\n\n")[1])
