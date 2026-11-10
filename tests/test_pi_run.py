@@ -22,9 +22,11 @@ pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
 RULES = PKG / "skills" / "onigiri-mode" / "hard-rules.md"
-# fake pi: a run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
+# fake pi: `--list-models <model> --provider <p>` lists the model only when $TEST_TOKEN (the provider credential) is set.
+# A run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
 # pi does, so a forwarded signal is visible.
 FAKE_PI = """#!/bin/bash
+if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "$4 $2"; exit 0; fi
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
 printf '%s\\n' "$@" > "$T/args"
 echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
@@ -154,7 +156,7 @@ class Launcher(unittest.TestCase):
         (self.t / "bin" / "pi").chmod(0o755)
         (self.t / "brief.md").write_text("task\n")
         self.env = {"PATH": f"{self.t}/bin:/usr/bin:/bin", "HOME": str(self.t), "T": str(self.t), "ZSTACK_ENSURED": "1",
-                    "ONIGIRI_ROOT": str(self.t / "root"), "ONIGIRI_WAKE_DRY": "1"}
+                    "ONIGIRI_ROOT": str(self.t / "root"), "ONIGIRI_WAKE_DRY": "1", "TEST_TOKEN": "t"}
         self.addCleanup(self.reap)
 
     def reap(self):
@@ -334,8 +336,13 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
         self.assertIn("wake: failed", self.log("term"))
 
-    def test_a_pi_that_cannot_start_is_a_failed_exit_not_a_loss(self):
-        self.start("nopi", PATH="/usr/bin:/bin")   # no pi on PATH
+    def test_no_pi_starts_nothing_and_a_pi_gone_after_the_check_is_a_failed_exit_not_a_loss(self):
+        r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH="/usr/bin:/bin")   # no pi on PATH
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn("cannot run pi in the launch env", r.stderr)
+        self.assertIsNone(self.run_json("nopi"))
+        (self.t / "bin" / "pi").write_text('#!/bin/bash\necho "$4 $2"; rm "$0"\n')   # answers the check, then is gone
+        self.start("nopi")
         run = self.finished("nopi")
         self.assertEqual(run["rc"], 127)
         self.assertIn("cannot start pi", self.log("nopi"))
@@ -433,6 +440,42 @@ class Launcher(unittest.TestCase):
                            (["collect", "nothing"], 3)):
             self.assertEqual(self.pi_run(*argv).returncode, code, argv)
         self.assertFalse((self.t / "root").exists())
+
+    def host(self, name, text):
+        host = PKG / "hosts" / name
+        host.mkdir()
+        self.addCleanup(lambda: [p.unlink() for p in host.iterdir()] and host.rmdir())
+        (host / "host.sh").write_text(text)
+        return host
+
+    def test_a_launch_with_no_credential_fails_fast_with_no_state_and_no_wake(self):
+        # the 13:04 10 Nov incident: pi started without the env file, so claude-code had no key
+        env = {k: v for k, v in self.env.items() if k != "TEST_TOKEN"}
+        for dry in ("", "1"):
+            r = subprocess.run([sys.executable, str(LAUNCHER), "nokey", "coding", str(self.t / "brief.md")], capture_output=True,
+                               text=True, env={**env, "PI_RUN_DRY": dry}, timeout=30)
+            self.assertEqual(r.returncode, 4, r.stderr)
+            self.assertIn("pi-run: nokey: no claude-code credential in the launch env", r.stderr)
+            self.assertIn("Nothing started.", r.stderr)
+        self.assertFalse((self.t / "root").exists())   # no run.json, so no exit and no wake
+        self.assertFalse((self.t / "args").exists())   # pi never ran a session
+
+    def test_the_host_file_named_in_config_is_loaded_without_onigiri_host(self):
+        # a bare nohup or ssh launch: no ONIGIRI_HOST and no credential in the shell; the host file holds it
+        self.host("test-cfg", 'export TEST_TOKEN=from-host-file ONIGIRI_ROOT="$HOME/root/cfg"\n')
+        env = {k: v for k, v in self.env.items() if k != "TEST_TOKEN"}
+        self.assertEqual(subprocess.run([sys.executable, str(LAUNCHER), "c", "coding", str(self.t / "brief.md")], capture_output=True,
+                                        text=True, env=env, timeout=30).returncode, 4)
+        (self.t / ".config" / "onigiri").mkdir(parents=True)
+        (self.t / ".config" / "onigiri" / "host").write_text("test-cfg\n")
+        r = subprocess.run([sys.executable, str(LAUNCHER), "c", "coding", str(self.t / "brief.md")], capture_output=True, text=True,
+                           env=env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("started c attempt 1 pid", r.stdout)
+        self.assertIn(f"in {self.t}/root/cfg/review/c ", r.stdout)
+        # ONIGIRI_HOST set, even empty, wins over the config file
+        r = subprocess.run([sys.executable, str(LAUNCHER), "list"], capture_output=True, text=True, env={**env, "ONIGIRI_HOST": ""}, timeout=30)
+        self.assertEqual(r.stdout, "")
 
     def test_a_host_file_sets_the_root_and_brief_prefix(self):
         host = PKG / "hosts" / "test-host"

@@ -7,7 +7,7 @@ fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: got '$2', want '$3'"; fail=1; fi; }
 has() { case "$2" in *"$3"*) echo "ok    $1";; *) echo "FAIL  $1: '$2' lacks '$3'"; fail=1;; esac; }
 tmp=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$tmp"' EXIT
-unset ONIGIRI_HOST
+export ONIGIRI_HOST=   # set and empty: no host file, whatever ~/.config/onigiri/host says
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 # origin.git is the remote main; seed pushes to it; pkg is a host's installed checkout; root holds the host's cua clone.
@@ -67,6 +67,8 @@ check "only the agents line fails" "$(fails)" 1
 
 # a launch through a host file starts nothing on a host that differs, and starts on one that does not
 echo task > "$tmp/brief.md"
+# a pi that lists every model, as one with the provider logged in does
+mkdir "$tmp/bin"; printf '#!/bin/sh\necho "$4 $2"\n' > "$tmp/bin/pi"; chmod +x "$tmp/bin/pi"; export PATH="$tmp/bin:$PATH"
 launch() { out=$(PI_RUN_DRY=1 ONIGIRI_HOST=h ONIGIRI_ROOT="$tmp/root" PI_CODING_AGENT_DIR="$tmp/agent" "$tmp/pkg/bin/pi-run" s coding "$tmp/brief.md" 2>&1); rc=$?; }
 launch; check "pi-run refuses to launch on a host that differs" "$rc" 4
 has "the launch shows the failing line" "$out" "FAIL  agents:"

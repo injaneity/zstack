@@ -34,7 +34,7 @@ pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
 TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
-SELF = os.environ.get("ONIGIRI_HOST") or "local"   # the name pickup.log rows and `on` use for this host
+SELF = pr.host_name() or "local"   # the name pickup.log rows and `on` use for this host
 PEER_PKG = ".pi/agent/git/github.com/injaneity/zstack"   # where `pi install git:github.com/injaneity/zstack` puts it
 HEAD = "# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:\n# ts_sgt\thost\taction\titem\treason\tfree_gb\n"
 

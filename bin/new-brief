@@ -12,7 +12,7 @@ id=$1 role=$2 source=${3:-chat}
 case "$id" in [A-Za-z0-9]*) ;; *) echo "new-brief: bad id $id" >&2; exit 2;; esac
 case "$source" in auto|chat) ;; *) echo "new-brief: source is auto or chat, not $source" >&2; exit 2;; esac
 "$pkg/bin/model-for" "$role" >/dev/null
-root=$(ONIGIRI_HOST=${ONIGIRI_HOST:-} python3 -I -c 'import importlib.machinery as m, importlib.util as u, sys
+root=$(python3 -I -c 'import importlib.machinery as m, importlib.util as u, sys
 l = m.SourceFileLoader("p", sys.argv[1]); p = u.module_from_spec(u.spec_from_loader("p", l)); l.exec_module(p)
 print(p.host_env("list")[1])' "$pkg/bin/pi-run")
 d="$root/$id"; f="$d/brief.md"
