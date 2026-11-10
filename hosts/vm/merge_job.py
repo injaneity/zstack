@@ -10,9 +10,9 @@ risk tier from TIERS, with a preapprove row pinned to the head for deep/human) a
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
 of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
 mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
-next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who must act: zane (a hold, PAUSED, a hands-off path, a deep/human
-tier with no preapproval at the head), session (no tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue
-(state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
+next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
+must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
+tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue (state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
 entry is left alone; its merge wakes through the merge watch. A draft is a wait: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
 urgent unexpected-merge wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a
