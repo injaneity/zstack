@@ -525,6 +525,16 @@ class Stage(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "read 1 of 2 files"):
             mj.from_graphql(n)
 
+    def test_a_queued_pr_whose_gate_cannot_be_read_in_full_leaves_the_queue(self):
+        self.queue = True
+        self.add(6362)
+        self.run_()
+        self.assertEqual(set(self.entries), {6362})
+        self.prs[6362]["labels"] = [f"area-{i}" for i in range(100)] + ["risk:deep"]
+        self.run_()
+        self.assertEqual(self.dequeues(), ["id=PR_6362"])
+        self.assertIn("error cua#6362 merge: RuntimeError: cua#6362: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
+
     def test_a_pr_with_more_labels_than_one_page_is_an_error_never_a_merge(self):
         """A risk:deep label past the first page must not let a `risk: light` body merge without its preapproval."""
         self.add(6361)

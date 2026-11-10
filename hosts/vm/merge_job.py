@@ -309,7 +309,8 @@ def from_graphql(node):
             "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
 
 
-DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused"}   # off the gate, or PAUSED
+DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused", "unreadable"}   # off the gate, PAUSED
+# or the PR's gate inputs could not be read in full
 QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
                "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
@@ -483,7 +484,12 @@ class Job:
         for node in nodes:
             ident = f"{SHORT}#{node['number']}"
             try:
-                p = from_graphql(read_rest(node))
+                try:
+                    p = from_graphql(read_rest(node))
+                except Exception as e:   # the gate cannot be read, so the job's own queue entry for this head comes out
+                    if ident in self.s["queued"]:
+                        self.dequeue(ident, node["number"], node["headRefOid"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
+                    raise
                 reasons, notes = self.evaluate(p, holds)
                 act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
                 if ident in self.s["queued"]:
