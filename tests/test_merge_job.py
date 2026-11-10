@@ -576,13 +576,29 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.buffered(), [])
         self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7180"], ["merged", "cua#7180"]])
 
+    def test_a_head_pushed_after_the_job_queued_it_and_merged_by_someone_else_wakes(self):
+        self.queue = True
+        self.add(7230)
+        self.run_()                                       # the job queues it at H
+        st = json.loads((self.d / "tick/state.json").read_text())
+        st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
+        (self.d / "tick/state.json").write_text(json.dumps(st))
+        self.prs[7230].update(headRefOid=H2, state="MERGED", mergedAt="2026-11-05T01:00:00Z")   # a push, then a hand merge
+        self.merged = [{"number": 7230, "headRefOid": H2, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        self.run_()
+        self.assertEqual([(b["kind"], b["id"]) for b in self.buffered()], [("unexpected-merge", "cua#7230")])
+        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7230"]["head"], H)
+
     def test_the_first_run_seeds_the_allow_list_from_events_log(self):
         with open(self.d / "events.log", "w") as e:
             e.write("2026-11-10T12:47:08+08:00 merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
+                    "2026-11-10T12:50:00+08:00 merge-queued cua#7181 squash at d18608a73: green\n"
                     "2026-11-10T13:00:00+08:00 merge-noted cua#7001 merged by f-trycua\n")
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T00:00:00+08:00"}}))
-        self.merged = [{"number": 7180, "headRefOid": "c18608a73e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
-                        "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        self.merged = [{"number": n, "headRefOid": h + "e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
+                        "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}
+                       for n, h in ((7180, "c18608a73"), (7181, "d18608a73"))]   # 7181: queued, then the run died before its state save
         self.run_()
         self.assertEqual(self.buffered(), [])
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")

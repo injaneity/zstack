@@ -264,9 +264,10 @@ def merge_audit(merged, job_heads, known):
 
 
 def seed_landed(events):
-    """state.json landed before it existed: the `merged cua#N squash at <head>` lines events.log has, with their time."""
+    """state.json landed before it existed: the heads events.log says the job queued or saw merge (`merge-queued` and
+    `merged cua#N squash at <head>`), the latest per PR, with their time."""
     return {m.group(2): {"head": m.group(3), "at": m.group(1)}
-            for x in events if (m := re.match(r"(\S+) merged cua#(\d+) squash at ([0-9a-f]+)", x))}
+            for x in events if (m := re.match(r"(\S+) (?:merged|merge-queued) cua#(\d+) squash at ([0-9a-f]+)", x))}
 
 
 # ---------------- side effects ----------------
@@ -458,7 +459,7 @@ class Job:
         st = gh_json(["pr", "view", ident.split("#")[1], "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
         if st.get("state") == "MERGED":
             head = st.get("headRefOid") or q["head"]
-            self.s["landed"][ident.split("#")[1]] = {"head": head, "at": now()}
+            self.s["landed"][ident.split("#")[1]] = {"head": q["head"], "at": now()}   # the head it queued: another head is not the job's
             self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
         elif st.get("state") == "CLOSED":
             self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
