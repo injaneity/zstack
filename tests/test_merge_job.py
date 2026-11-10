@@ -248,7 +248,7 @@ class Stage(unittest.TestCase):
         k.start()
         self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
-        self.lists, self.reads, self.enqueuer = [], [], {}
+        self.lists, self.reads, self.queue_events = [], [], {}
         self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
@@ -286,9 +286,10 @@ class Stage(unittest.TestCase):
             n = int(kv["n"])
             if "mergeQueueEntry" in query:
                 return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
-            if "AddedToMergeQueueEvent" in query:   # who made the PR's last queue entry: the job, unless a test says otherwise
-                who = self.enqueuer.get(n, "injaneity")
-                return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": [{"enqueuer": {"login": who}}] if who else []}}}}}
+            if "AddedToMergeQueueEvent" in query:   # the queue's events: the job's entry merged, unless a test says otherwise
+                ev = self.queue_events.get(n, [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
+                                               {"__typename": "RemovedFromMergeQueueEvent", "reason": "merged"}])
+                return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": ev}}}}}
             node = self.node(n, kv.get("files"), kv.get("checks"))
             if "@include" in query:   # MORE: only the connections asked for
                 node = {k: node[k] for k in (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
@@ -725,7 +726,7 @@ class Stage(unittest.TestCase):
         self.assertNotIn("7230", json.loads((self.d / "tick/state.json").read_text())["landed"])
         ev = self.events()   # `merged` means the job's own entry merged (MergedEventMeansMerged): not logged for another head
         self.assertFalse([x for x in ev if x.startswith("merged cua#7230")], ev)
-        self.assertIn(f"merge-dropped cua#7230 merged at {H2[:9]} from injaneity queue entry, the job queued {H[:9]}: not the job's merge", ev)
+        self.assertIn(f"merge-dropped cua#7230 merged at {H2[:9]} through injaneity queue entry, the job queued {H[:9]}: not the job's merge", ev)
 
     def test_another_actors_entry_at_the_job_s_own_head_is_not_the_job_s_merge(self):
         """GitHub dropped the job's entry and app/cua-agents queued the same head (#7037, #7039): its merge wakes."""
@@ -735,13 +736,40 @@ class Stage(unittest.TestCase):
         st = json.loads((self.d / "tick/state.json").read_text())
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
-        self.enqueuer[7231] = "cua-agents[bot]"
+        add, gone = "AddedToMergeQueueEvent", "RemovedFromMergeQueueEvent"
+        self.queue_events[7231] = [{"__typename": add, "enqueuer": {"login": "injaneity"}}, {"__typename": gone, "reason": "checks_timed_out"},
+                                   {"__typename": add, "enqueuer": {"login": "cua-agents[bot]"}}, {"__typename": gone, "reason": "merged"}]
         self.prs[7231].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
         self.merged = [{"number": 7231, "headRefOid": H, "mergedBy": {"login": "cua-agents[bot]"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7231")])
         self.assertFalse([x for x in self.events() if x.startswith("merged cua#7231")])
+
+    def test_a_merge_outside_the_queue_after_the_job_s_entry_dropped_is_not_the_job_s(self):
+        self.queue = True
+        self.add(7232)
+        self.run_()
+        st = json.loads((self.d / "tick/state.json").read_text())
+        st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
+        (self.d / "tick/state.json").write_text(json.dumps(st))
+        self.queue_events[7232] = [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
+                                   {"__typename": "RemovedFromMergeQueueEvent", "reason": "checks_timed_out"}]   # then a hand merge
+        self.prs[7232].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
+        self.merged = [{"number": 7232, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
+        self.run_()
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7232")])
+
+    def test_queue_merged_by_reads_the_entry_that_merged(self):
+        add = lambda who: {"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": who}}   # noqa: E731
+        gone = lambda why: {"__typename": "RemovedFromMergeQueueEvent", "reason": why}   # noqa: E731
+        # trycua/cua#7039 on 9-10 Nov: cua-agents queued, timed out, the job queued, merged
+        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("checks_timed_out"), add("injaneity"), gone("merged")]), "injaneity")
+        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("merged")]), "cua-agents[bot]")   # #7037
+        self.assertIsNone(mj.queue_merged_by([add("injaneity"), gone("checks_timed_out")]))   # then merged outside the queue
+        self.assertIsNone(mj.queue_merged_by([]))
+        self.assertIsNone(mj.queue_merged_by([add("injaneity")]))   # an entry still waiting merged nothing: a merge outside it
 
     def test_the_first_run_seeds_the_allow_list_from_events_log(self):
         at = lambda h: (datetime.now(mj.SGT) - timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731  inside the window

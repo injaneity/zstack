@@ -314,9 +314,23 @@ DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk
 QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
                "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
-LAST_ENQUEUE = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { "
-                "timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) { nodes { ... on AddedToMergeQueueEvent { "
-                "enqueuer { login } } } } } } }")
+QUEUE_EVENTS = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { "
+                "timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT], last: 20) { nodes { "
+                "__typename ... on AddedToMergeQueueEvent { enqueuer { login } } ... on RemovedFromMergeQueueEvent { reason } } } } } }")
+
+
+def queue_merged_by(events):
+    """Who made the merge-queue entry that merged the PR: the enqueuer of the last AddedToMergeQueueEvent before a
+    RemovedFromMergeQueueEvent with reason `merged`, or None when no queue entry merged it (a merge outside the queue)."""
+    by = None
+    for e in events:
+        if e.get("__typename") == "AddedToMergeQueueEvent":
+            by = (e.get("enqueuer") or {}).get("login")
+        elif e.get("__typename") == "RemovedFromMergeQueueEvent":
+            if e.get("reason") == "merged":
+                return by
+            by = None
+    return None
 
 
 def should_dequeue(reasons, queued, entry, head, me=ME):
@@ -548,20 +562,20 @@ class Job:
             self.event(kind, ident, reason)
 
     def landed(self, ident):
-        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, from a queue entry ME made
-        (the PR's last AddedToMergeQueueEvent), with its mergedAt. Any other merge (a push dropped the job's entry, then
-        someone else merged or queued it) is not the job's: the record goes and merge-watch wakes for it. Drop it too when
-        GitHub closed it. The job runs as ME, so ME re-queueing the same head by hand after GitHub dropped the job's entry
-        reads as the job's; GitHub keeps nothing that tells the two apart."""
+        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, through a merge-queue entry
+        ME made (queue_merged_by), with its mergedAt. Any other merge (a push dropped the job's entry, then someone else
+        merged it outside the queue or queued it) is not the job's: the record goes and merge-watch wakes for it. Drop it too
+        when GitHub closed it. The job runs as ME, so ME re-queueing the same head by hand after GitHub dropped the job's
+        entry reads as the job's; GitHub keeps nothing that tells the two apart."""
         q, n = self.s["queued"][ident], ident.split("#")[1]
         st = gh_json(["pr", "view", n, "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
         by = None
         if st.get("state") == "MERGED":
-            items = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={LAST_ENQUEUE}"]) or {}).get("data") or {})
-                     .get("repository") or {}).get("pullRequest", {}).get("timelineItems", {}).get("nodes") or [{}]
-            by = (items[-1].get("enqueuer") or {}).get("login")
+            pull = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_EVENTS}"]) or {}).get("data") or {})
+                    .get("repository") or {}).get("pullRequest") or {}
+            by = queue_merged_by((pull.get("timelineItems") or {}).get("nodes") or [])
         if st.get("state") == "MERGED" and ((st.get("headRefOid") or q["head"]) != q["head"] or by != ME):
-            self.event("merge-dropped", ident, f"merged at {(st.get('headRefOid') or q['head'])[:9]} from {by or 'no'} queue entry, "
+            self.event("merge-dropped", ident, f"merged at {(st.get('headRefOid') or q['head'])[:9]} through {by or 'no'} queue entry, "
                                                f"the job queued {q['head'][:9]}: not the job's merge")
         elif st.get("state") == "MERGED":
             head = q["head"]
