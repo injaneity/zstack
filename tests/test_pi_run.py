@@ -494,8 +494,8 @@ class Launcher(unittest.TestCase):
         (d / "run.json").write_text(json.dumps(q))
         # the fake pi's --list-models is the setup window: another launcher's run hits a 429 there and is queued again
         cont = {**q, "attempt": 1, "rc": 1, "resume_at": "2026-11-10T02:00:00Z", "extra": []}
-        (self.t / "bin" / "pi").write_text(FAKE_PI.replace('if [ "$1" = --list-models ]; then',
-                                                           f'if [ "$1" = --list-models ]; then echo {json.dumps(json.dumps(cont))} > "{d}/run.json";'))
+        swap = f'echo {json.dumps(json.dumps(cont))} > "{d}/run.json";'
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace('if [ "$1" = --list-models ]; then', f'if [ "$1" = --list-models ]; then {swap}'))
         r = self.pi_run("race", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 3, r.stderr)
         self.assertIn("its state changed during setup; nothing started", r.stderr)
