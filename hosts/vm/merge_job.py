@@ -9,9 +9,10 @@ For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-
 risk tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED). A mergeability GitHub has not computed yet (UNKNOWN) is read again in the
 same run when it is the only thing in the way. next_action() turns both into one action: merge, rerun a red
-ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. The job's own entry in GitHub's merge queue
+ci-gate's failed runs once per head, or wait, with who must act: zane (a hold, PAUSED, a hands-off path, a deep/human
+tier with no preapproval at the head), session (no tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue
 (state.json queued, enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's
-entry is left alone; its merge wakes through the merge watch. A draft is a skip: draft means not ready, and
+entry is left alone; its merge wakes through the merge watch. A draft is a wait: draft means not ready, and
 only a person or the session that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an
 urgent unexpected-merge wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a
 teammate, a bot or an app). The job's own merges are the heads in state.json landed and queued.
@@ -21,10 +22,12 @@ teammate, a bot or an app). The job's own merges are the heads in state.json lan
   merge_job.py --explain N every reason for trycua/cua#N and the action a run would take; read-only
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
-PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs (the buffer item is still
-written, so the hourly routine sees it; nothing re-sends it after the pause). Outputs: $ROOT/events.log (one line per decision, only
-when it changes), $ROOT/buffer.jsonl (needs onigiri; urgent ones also POST the webhook), $ROOT/tick/state.json and
-$ROOT/tick/last-run. ROOT is $ONIGIRI_ROOT, default /srv/onigiri.
+PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs: events.log still has the wake, and
+the first pass after the pause sends it. An urgent wake (URGENT) POSTs the webhook once per kind, PR and key, retried
+every pass until it is sent (a host with no webhook key counts as sent). A wait goes
+nowhere but events.log and --dry-run's `who=` lines, which bin/hourly prints under needs-Zane and unstick. Outputs:
+$ROOT/events.log (one line per decision, only when it changes), $ROOT/tick/state.json and $ROOT/tick/last-run. ROOT is
+$ONIGIRI_ROOT, default /srv/onigiri.
 """
 import argparse
 import json
@@ -42,7 +45,7 @@ import wake  # noqa: E402  the urgent webhook's URL, key file and POST
 
 ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
 DIR = f"{ROOT}/tick"   # the data dir the hourly routine and the mini mirror read; no code lives there any more
-EVENTS, BUFFER, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/buffer.jsonl", f"{ROOT}/hold-prs.txt"
+EVENTS, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/hold-prs.txt"
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
 REPO, SHORT, ME = "trycua/cua", "cua", "injaneity"
 GATE_CHECK = "ci-gate"   # the one check the gate reads: it owns red checks and which platform lanes a PR needs
@@ -211,28 +214,32 @@ def blockers(pr, paused):
     return R
 
 
-SKIP_CODES = {"holds-unreadable", "hold", "no-tier", "draft", "paused"}   # logged, nobody woken
-BUFFER_CODES = {"hands-off", "risk", "conflict"}      # needs onigiri or Zane, buffered once per head
+URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed")   # the kinds that POST
+ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}   # only Zane moves these
+SESSION_CODES = {"no-tier", "conflict"}                                   # the session that opened the PR fixes these
 
 
 def next_action(reasons, notes, pr, rerun_head=None):
-    """(action, why): merge | rerun | buffer | wait | skip. why names every blocking reason."""
+    """(action, who, why): merge | rerun | wait, and who must act for a wait: zane | session | none. A draft waits on
+    nobody, because whoever opened it readies it when it is ready. why names every blocking reason."""
     codes = {r.code for r in reasons}
     why = "; ".join(r.text for r in reasons) or ", ".join(notes)
     if not reasons:
-        return "merge", "green, " + ", ".join(notes)
-    if codes & SKIP_CODES:
-        return "skip", why
-    if codes & BUFFER_CODES:
-        return "buffer", why
+        return "merge", "none", "green, " + ", ".join(notes)
+    if "draft" in codes:
+        return "wait", "none", why
+    if codes & ZANE_CODES:
+        return "wait", "zane", why
+    if codes & SESSION_CODES:
+        return "wait", "session", why
     if "ci" not in codes:
-        return "wait", why
+        return "wait", "none", why
     state, names, runs = check_state(pr.get("statusCheckRollup"))
     if state == "red":
         if rerun_head != pr["headRefOid"] and runs:
-            return "rerun", "red once: " + ", ".join(sorted(names))[:150]
-        return "buffer", "red after rerun: " + ", ".join(sorted(names))[:150]
-    return "wait", why
+            return "rerun", "none", "red once: " + ", ".join(sorted(names))[:150]
+        return "wait", "session", "red after rerun: " + ", ".join(sorted(names))[:150]
+    return "wait", "none", why
 
 
 DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused"}   # off the gate, or PAUSED
@@ -323,7 +330,9 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
-        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges", "queued", "landed")}
+        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed")}
+        if "woken" not in s:   # once: the urgent keys the buffer had, so no wake goes out twice; the rest of it is dropped
+            self.s["woken"] = {k: v for k, v in s.get("buffered", {}).items() if k.split("|")[0] in URGENT}
         if "landed" not in s:   # once, on the first run with this field
             self.s["landed"] = seed_landed(read(EVENTS).splitlines() if os.path.exists(EVENTS) else [])
         self.errors = 0
@@ -342,10 +351,13 @@ class Job:
             self.s["last_reason"][ident] = sig
             self.event(kind, ident, reason)
 
-    def buffer(self, kind, ident, head, reason, urgent=False):
+    def wake(self, kind, ident, head, reason):
+        """POST one urgent wake for this kind, id and head (or hour, or window), once it is sent: a failed, paused or dry
+        POST is tried again next pass. Returns whether it is handled: sent now or before, or not needed (the PR closed)."""
+        assert kind in URGENT, kind
         key = f"{kind}|{ident}|{head or '-'}"
-        if key in self.s["buffered"]:
-            return False
+        if key in self.s["woken"]:
+            return True
         m = re.fullmatch(rf"{SHORT}#(\d+)", ident or "")
         if m and kind != "unexpected-merge":   # re-read: a PR can merge or close mid-run (#6026)
             try:
@@ -354,17 +366,14 @@ class Job:
                 st = None   # unknown counts as open, so no alert is lost
             if st in ("CLOSED", "MERGED"):
                 self.decide("skipped", ident, head, f"{kind}: PR {st.lower()}, no alert")
-                return False
-        self.s["buffered"][key] = now()
-        item = {"time": now(), "kind": kind, "id": ident, "head": head, "reason": reason, **({"urgent": True} if urgent else {})}
-        if not self.dry:
-            with open(BUFFER, "a") as f:
-                f.write(json.dumps(item) + "\n")
-        self.event("urgent" if urgent else "buffer", ident, f"{kind}: {reason}")
-        if urgent:
-            sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
-            self.event("urgent", ident, sent)
-        return True
+                return True
+        self.event("urgent", ident, f"{kind}: {reason}")
+        sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
+        self.event("urgent", ident, sent)
+        if sent.startswith("webhook sent") or sent == "webhook not configured":
+            self.s["woken"][key] = now()
+            return True
+        return False
 
     def holds(self):
         try:
@@ -372,7 +381,7 @@ class Job:
         except Exception as e:   # never act without holds: gate() holds every PR until the file reads again
             self.errors += 1
             self.event("error", "holds", f"{type(e).__name__}: {str(e)[:200]}")
-            self.buffer("holds-unreadable", "holds", now()[:13], f"{HOLDS_FILE}: {str(e)[:150]}", urgent=True)
+            self.wake("holds-unreadable", "holds", now()[:13], f"{HOLDS_FILE}: {str(e)[:150]}")
             return None
 
     def evaluate(self, p, holds):
@@ -405,12 +414,12 @@ class Job:
             ident = f"{SHORT}#{p['number']}"
             try:
                 reasons, notes = self.evaluate(p, holds)
-                act, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
+                act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
                 if ident in self.s["queued"]:
                     self.dequeue(ident, p["number"], p["headRefOid"], reasons, why)
                 if self.dry:   # one line per PR, even when the decision has not changed since the last run
-                    print(f"dry-run {ident} {p['headRefOid'][:9]} {act}: {why}"[:400])
-                self.apply(ident, p["number"], p["headRefOid"], act, why)
+                    print(f"dry-run {ident} {p['headRefOid'][:9]} {act}{f' who={who}' if who != 'none' else ''}: {why}"[:400])
+                self.apply(ident, p["number"], p["headRefOid"], act, who, why)
             except Exception as e:   # one PR's failure must not skip the rest
                 self.errors += 1
                 self.event("error", ident, f"merge: {type(e).__name__}: {str(e)[:150]}")
@@ -432,11 +441,9 @@ class Job:
         del self.s["queued"][ident]
         self.event("merge-dequeued", ident, f"at {head[:9]}: {why}")
 
-    def apply(self, ident, n, head, act, why):
-        if act in ("skip", "wait"):
-            return self.decide("skipped", ident, head, why)
-        if act == "buffer":
-            return self.buffer("merge-blocked", ident, head, why)
+    def apply(self, ident, n, head, act, who, why):
+        if act == "wait":
+            return self.decide("wait", ident, head, f"who={who}: {why}" if who != "none" else why)
         if not self.can_act:
             return self.decide("would-" + act, ident, head, why)
         if act == "rerun":
@@ -447,7 +454,7 @@ class Job:
             return self.event("rerun", ident, f"{len(runs)} run(s) at {head[:9]}: {why}")
         rc, _, err = sh(["gh", "pr", "merge", str(n), "-R", REPO, "--squash", "--match-head-commit", head], timeout=180)
         if rc:
-            return self.buffer("merge-failed", ident, head, f"gh pr merge: {err.strip()[:200]}")
+            return self.wake("merge-failed", ident, head, f"gh pr merge: {err.strip()[:200]}")
         # trycua/cua has a merge queue: gh exits 0 when it only queued, so `merged` waits for GitHub's MERGED
         if self.s["queued"].get(ident, {}).get("head") != head:
             self.s["queued"][ident] = {"head": head, "why": why}
@@ -478,7 +485,8 @@ class Job:
         """Urgent unexpected-merge wake for a trycua/cua PR by ME that this job did not merge, whoever merged it. The heads
         in state.json landed and queued are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
         up to WATCH_OVERLAP_S before this run only after a fetch that was not cut short, so no merge falls between two
-        windows; merges.seen keeps the ones already handled inside the overlap."""
+        windows; merges.seen keeps the ones already handled inside the overlap. A merge whose wake was not sent (paused, or
+        the POST failed) is not seen, and the window does not move past it, so the next pass sends it."""
         mw = self.s["merges"]
         known = mw.setdefault("seen", {})
         if not mw.get("since"):
@@ -492,19 +500,22 @@ class Job:
         by_n = {p["number"]: p for p in merged if at_of(p) >= since}
         heads = {int(k): v["head"] for k, v in self.s["landed"].items()}
         heads.update({int(k.split("#")[1]): v["head"] for k, v in self.s["queued"].items()})
+        unsent = []
         for n, by in merge_audit(list(by_n.values()), heads, known):
             p, ident = by_n[n], f"{SHORT}#{n}"
             at = at_of(p).astimezone(SGT).isoformat(timespec="seconds")
             sha = (p.get("mergeCommit") or {}).get("oid") or "-"
             why = f"merged by {by} at {at} as {sha[:9]}, not by the tick: {(p.get('title') or '')[:100]}"
-            self.buffer("unexpected-merge", ident, sha, why, urgent=True)
-            known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
+            if self.wake("unexpected-merge", ident, sha, why):
+                known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
+            else:
+                unsent.append(at)
         if len(merged) >= WATCH_LIMIT:   # merges past the page are unseen: keep the window and wake a person, once per window
             self.errors += 1
             why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges of PRs by {ME} by hand, then move merges.since"
             self.event("error", "merge-watch", why)
-            return self.buffer("merge-watch-overflow", "merge-watch", mw["since"], why, urgent=True)
-        mw["since"] = max(mw["since"], start)
+            return self.wake("merge-watch-overflow", "merge-watch", mw["since"], why)
+        mw["since"] = max(mw["since"], min([start, *unsent]))
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
         self.s["landed"] = {k: v for k, v in self.s["landed"].items() if v["at"] >= mw["since"]}   # it landed no later than it merged
 
@@ -516,7 +527,7 @@ class Job:
         if not self.dry and (drift := parity_problem()):   # merging goes on; a person is woken, once an hour while it lasts
             self.errors += 1
             self.event("error", "parity", drift)
-            self.buffer("parity", "host", now()[:13], drift, urgent=True)
+            self.wake("parity", "host", now()[:13], drift)
         holds = self.holds()
         for name, fn in (("merge", lambda: self.merges(holds)), ("merge-watch", self.merge_watch)):
             try:
@@ -542,13 +553,13 @@ class Job:
             holds = None
             print(f"holds file unreadable: {e}")
         reasons, notes = self.evaluate(p, holds)
-        act, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
+        act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
         gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk"}
         lines = [f"{SHORT}#{n} {p.get('state', '')} by {(p.get('author') or {}).get('login', '?')} at {p['headRefOid']}: "
                  f"{(p.get('title') or '')[:90]}", f"gate: {'pass' if not gate_codes & {r.code for r in reasons} else 'fail'}"]
         lines += [f"  {'gate' if r.code in gate_codes else 'blocker'} [{r.code}] {r.text}" for r in reasons]
         lines += [f"  note {x}" for x in notes]
-        lines.append(f"next action: {act}: {why}"[:400])
+        lines.append(f"next action: {act}{f' who={who}' if who != 'none' else ''}: {why}"[:400])
         print("\n".join(lines))
         return act == "merge"
 
