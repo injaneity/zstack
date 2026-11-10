@@ -263,10 +263,15 @@ class Hourly(unittest.TestCase):
         self.assertTrue((vm / "review" / "v" / "QUEUED").exists())
         (self.t / "dead").write_text("#!/bin/bash\necho 'ssh: connect timed out' >&2; exit 255\n")
         (self.t / "dead").chmod(0o755)
+        bad = self.review("bad")   # a run.json pi-run list cannot read: this host's runs are unknown too
+        bad.mkdir()
+        (bad / "run.json").write_text("{")
+        self.assertRegex(self.hourly("queue"), r"host local: runs unknown, so every queue waits: pi-run list: .*JSON")
+        bad.joinpath("run.json").unlink()
         self.queued(self.t / "root", "here", 50)   # the peer may hold every slot, so a local run waits too
         out = self.hourly("queue", ONIGIRI_PEERS=f"vm={self.t}/dead")
-        self.assertIn("host vm: unreachable, so every queue waits: ssh: connect timed out", out)
-        self.assertIn("wait local here: vm unreachable, slots unknown", out)
+        self.assertIn("host vm: runs unknown, so every queue waits: ssh: connect timed out", out)
+        self.assertIn("wait local here: vm runs unknown", out)
         self.assertTrue((self.review("here") / "QUEUED").exists())
         self.assertFalse((self.review("here") / "run.json").exists())
 

@@ -84,7 +84,10 @@ def activity_min(d):
 
 def facts():
     """This host: zstack sha and parity, free disk, every run not collected, legacy dirs waiting to be processed."""
-    r, out = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"]).stdout
+    r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
+    if ls.returncode:   # runs unknown: report the host as an error, which every pass and the queue treat as unknown slots
+        return {"error": "pi-run list: " + (ls.stderr.strip().splitlines() or [f"exit {ls.returncode}"])[-1][:200]}
+    out = ls.stdout
     parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     runs = {}
     for line in out.splitlines():
@@ -218,13 +221,13 @@ def drain():
     running, auto = slots(hosts)
     blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free
     for h in blind:
-        print(f"host {h}: unreachable, so every queue waits: {hosts[h]['error']}")
+        print(f"host {h}: runs unknown, so every queue waits: {hosts[h]['error']}")
     queued = sorted((r.get("since", ""), h, sid, r["auto"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
                     if r["state"] == "queued")
     rc = 0
     for since, h, sid, is_auto in queued:
         f = hosts[h]
-        why = f"{', '.join(blind)} unreachable, slots unknown" if blind else \
+        why = f"{', '.join(blind)} runs unknown" if blind else \
             f"slots full: running {running}/{TOTAL}, auto {auto}/{AUTO}" if running >= TOTAL or (is_auto and auto >= AUTO) else \
             "not at main" if h != SELF and not f["at_main"] else f"{f['free_gb']}G free, under {FLOOR_GB}G" if h != SELF and \
             f["free_gb"] < FLOOR_GB else ""
