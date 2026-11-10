@@ -603,6 +603,16 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.buffered(), [])
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")
 
+    def test_the_seed_takes_the_queued_head_over_a_later_merged_line(self):
+        """Queued at A, pushed to B and merged by hand, and the run died before saving: the merged line names B."""
+        ev = [f"2026-11-10T12:00:00+08:00 merge-queued cua#7240 squash at {H[:9]}: green",
+              f"2026-11-10T12:30:00+08:00 merged cua#7240 squash at {H2[:9]}, mergedAt x: green",
+              f"2026-10-26T12:36:34+08:00 merged cua#5775 squash at {H[:9]}: green, verify PASS"]   # before #42: merged only
+        self.assertEqual(mj.seed_landed(ev), {"7240": {"head": H[:9], "at": "2026-11-10T12:00:00+08:00"},
+                                              "5775": {"head": H[:9], "at": "2026-10-26T12:36:34+08:00"}})
+        self.assertEqual(mj.merge_audit([{"number": 7240, "headRefOid": H2, "mergedBy": {"login": "injaneity"}}],
+                                        {int(k): v["head"] for k, v in mj.seed_landed(ev).items()}, {}), [(7240, "injaneity")])
+
     def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
         since = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": since, "seen": {}}}))

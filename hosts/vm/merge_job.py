@@ -264,10 +264,17 @@ def merge_audit(merged, job_heads, known):
 
 
 def seed_landed(events):
-    """state.json landed before it existed: the heads events.log says the job queued or saw merge (`merge-queued` and
-    `merged cua#N squash at <head>`), the latest per PR, with their time."""
-    return {m.group(2): {"head": m.group(3), "at": m.group(1)}
-            for x in events if (m := re.match(r"(\S+) (?:merged|merge-queued) cua#(\d+) squash at ([0-9a-f]+)", x))}
+    """state.json landed before it existed: the latest head events.log says the job queued (`merge-queued cua#N squash at
+    <head>`). A `merged` line counts only for a PR with no `merge-queued` line (the tick before #42 logged merged at
+    enqueue), because since #42 it names GitHub's head, which may be a push the job never queued."""
+    out, queued = {}, set()
+    for x in events:
+        if m := re.match(r"(\S+) (merged|merge-queued) cua#(\d+) squash at ([0-9a-f]+)", x):
+            at, kind, n, head = m.groups()
+            if kind == "merge-queued" or n not in queued:
+                out[n] = {"head": head, "at": at}
+            queued |= {n} if kind == "merge-queued" else set()
+    return out
 
 
 # ---------------- side effects ----------------
