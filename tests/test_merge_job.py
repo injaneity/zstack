@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -648,10 +649,11 @@ class Stage(unittest.TestCase):
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7230"]["head"], H)
 
     def test_the_first_run_seeds_the_allow_list_from_events_log(self):
+        at = lambda h: (datetime.now(mj.SGT) - timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731  inside the window
         with open(self.d / "events.log", "w") as e:
-            e.write("2026-11-10T12:47:08+08:00 merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
-                    "2026-11-10T12:50:00+08:00 merge-queued cua#7181 squash at d18608a73: green\n"
-                    "2026-11-10T13:00:00+08:00 merge-noted cua#7001 merged by f-trycua\n")
+            e.write(f"{at(2)} merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
+                    f"{at(2)} merge-queued cua#7181 squash at d18608a73: green\n"
+                    f"{at(1)} merge-noted cua#7001 merged by f-trycua\n")
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T00:00:00+08:00"}}))
         self.merged = [{"number": n, "headRefOid": h + "e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
                         "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}
