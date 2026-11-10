@@ -14,6 +14,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -59,6 +60,13 @@ def send(body, attempts=3, timeout=5):
     return status
 
 
+def sha():
+    here = os.path.dirname(os.path.realpath(__file__))
+    r = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+    return r.stdout.strip() or "unknown"
+
+
 def main(argv):
     fields = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
     if (len(argv) < 2 or argv[0] not in KINDS or not argv[1].strip() or len(fields) != len(argv) - 2
@@ -73,7 +81,7 @@ def main(argv):
         status = "not sent: dry run"
     else:
         status = send(body)
-    print(f"wake: {argv[0]} {status}", file=sys.stderr)
+    print(f"zstack {sha()}\nwake: {argv[0]} {status}", file=sys.stderr)
     return 0
 
 

@@ -1,0 +1,37 @@
+#!/bin/bash
+# new-brief <id> <role> [<source>]: write $ONIGIRI_ROOT/review/<id>/brief.md from the one brief template, with the task
+# text from stdin, and print its path. <source> is `auto` for an hourly auto-pick (it counts toward the 3 auto slots)
+# and `chat` otherwise. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
+# follow-ups:/questions: and the no-invented-limits line, so a launch never depends on who wrote it. Refuses to
+# overwrite a brief that exists. Then `bin/queue <id>` (or `bin/hourly launch`) starts it.
+set -eu
+pkg="$(cd "$(dirname "$0")/.." && pwd)"
+echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
+[ $# -ge 2 ] || { echo "usage: new-brief <id> <role> [auto|chat] < task.md" >&2; exit 2; }
+id=$1 role=$2 source=${3:-chat}
+case "$id" in [A-Za-z0-9]*) ;; *) echo "new-brief: bad id $id" >&2; exit 2;; esac
+case "$source" in auto|chat) ;; *) echo "new-brief: source is auto or chat, not $source" >&2; exit 2;; esac
+"$pkg/bin/model-for" "$role" >/dev/null
+root=$(ONIGIRI_HOST=${ONIGIRI_HOST:-} python3 -I -c 'import importlib.machinery as m, importlib.util as u, sys
+l = m.SourceFileLoader("p", sys.argv[1]); p = u.module_from_spec(u.spec_from_loader("p", l)); l.exec_module(p)
+print(p.host_env("list")[1])' "$pkg/bin/pi-run")
+d="$root/$id"; f="$d/brief.md"
+[ ! -e "$f" ] || { echo "new-brief: $f exists" >&2; exit 3; }
+task=$(cat)
+[ -n "$task" ] || { echo "new-brief: no task text on stdin" >&2; exit 2; }
+mkdir -p "$d"
+cat > "$f.tmp" <<BRIEF
+# $id ($role)
+role: $role
+source: $source
+
+$task
+
+Follow onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md in zstack; bin/pi-run appends them to your system prompt).
+After verifying, and again after every push to the PR, post a PR comment on its own: \`verified <full 40-character head sha>: ran <what>; skipped <what>; result <pass/fail>\`.
+End the report (report.md in this directory, and your final message) with \`follow-ups:\` and \`questions:\`, each "none" when empty. Put PR URLs in it.
+No invented limits: a restriction must trace to Zane's words or the policy. If you think one is needed, put it under questions: instead of applying it.
+wake: finish
+BRIEF
+mv "$f.tmp" "$f"
+echo "$f"

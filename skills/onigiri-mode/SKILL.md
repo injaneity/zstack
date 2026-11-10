@@ -85,6 +85,7 @@ Each is `playbooks/<name>.md`. Read the matched one in full, and list its number
 - **Measure** (`measure`). Improve a number, once or in a loop, against a frozen harness.
 - **Pull requests** (`pull-requests`). Open a PR at the end of every change. On request, land one or verify someone else's.
 - **Resume** (`resume`). Pick up prior work, or pause so it can be picked up.
+- **Hourly** (`hourly`). The chat's hourly pickup, run by `bin/hourly`. Only the chat runs it, never a pi session.
 
 Editing a skill is a Change. Match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
 
@@ -100,8 +101,10 @@ The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this 
 For the chat only. A pi session skips this section.
 
 - **Setup.** `pi install git:github.com/injaneity/zstack`.
-- **Launch.** Write the brief to a file, then run `<zstack>/bin/pi-run <id> <role> <brief-file>`. It detaches pi in `review/<id>/` and returns. The role picks the model from `config/models.json`, never a skill. Export the provider's credentials first, or name a host file with `ONIGIRI_HOST`. Run it on the machine that does the work, never in the chat.
-- **The brief** carries the task, its constraints and the repo path, and points at Hard rules instead of restating them. pi picks its own playbook. For urgent work, or a PR you want to watch, add a line exactly `wake: finish`: the run then wakes you with a `done` event when it exits 0, not only on failure. Report back what pi did, with the PR URL.
+- **Hourly.** The routine is one line: "run zstack hourly at main; relay what it returns". That pass is `playbooks/hourly.md`.
+- **Launch.** Write the brief with `<zstack>/bin/new-brief <id> <role>` (task text on stdin), then `bin/queue <id>` for the next hourly pass, or run `<zstack>/bin/pi-run <id> <role> <brief-file>` now. It detaches pi in `review/<id>/` and returns. The role picks the model from `config/models.json`, never a skill. Export the provider's credentials first, or name a host file with `ONIGIRI_HOST`. Run it on the machine that does the work, never in the chat.
+- **The brief** carries the task, its constraints and the repo path. `bin/new-brief` adds the rest: the Hard rules pointer, the verified-comment rule, `follow-ups:` and `questions:`, the no-invented-limits line and `wake: finish`, so the run wakes you with a `done` event when it exits 0, not only on failure. pi picks its own playbook. Report back what pi did, with the PR URL.
+- **A 429** (Claude Code or ChatGPT usage limit) pauses a run: `pi-run list` shows `paused` with `resume_at`, no failed wake is sent, and the hourly pass resumes it in the same session.
 - **After the PR opens**, whatever owns merging under Hard rules takes over. Watch the PR, don't redo the work.
 - `docs/HOST.md` is one reference deployment (a VM, a relay, a cron tick). It is an example, not a requirement.
 - **Don't build process.** No flow engine, gates, or lanes. zstack plus pi is the whole thing.

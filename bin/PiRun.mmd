@@ -4,19 +4,22 @@ title: "pi-run: one run of an id"
 stateDiagram-v2
   s0: no run
   s1: running
-  s2: exited, failed wake
-  s3: exited, no wake
-  s4: exited, done wake
-  s5: lost
-  s6: collected
+  s2: exited, done wake
+  s3: exited, failed wake
+  s4: exited, no wake
+  s5: paused
+  s6: lost
+  s7: collected
   [*] --> s0
   s0 --> s1: pi-run #60;id> #60;role> #60;brief>
-  s1 --> s2: pi exits rc != 0
-  s1 --> s3: pi exits rc 0 [no wake: finish]
-  s1 --> s5: KILL or OOM
-  s1 --> s4: pi exits rc 0 [brief has wake: finish]
-  s2 --> s6: pi-run collect #60;id>
-  s3 --> s6: pi-run collect #60;id>
-  s4 --> s6: pi-run collect #60;id>
-  s5 --> s6: pi-run collect #60;id>
-  s6 --> s1: pi-run #60;id> #60;role> #60;brief>
+  s1 --> s3: pi exits rc != 0
+  s1 --> s4: pi exits rc 0 [no wake: finish]
+  s1 --> s5: pi stops on an upstream 429
+  s1 --> s6: KILL or OOM
+  s1 --> s2: pi exits rc 0 [brief has wake: finish]
+  s2 --> s7: pi-run collect #60;id>
+  s3 --> s7: pi-run collect #60;id>
+  s4 --> s7: pi-run collect #60;id>
+  s5 --> s1: pi-run resume #60;id> [after resume_at]
+  s6 --> s7: pi-run collect #60;id>
+  s7 --> s1: pi-run #60;id> #60;role> #60;brief>

@@ -17,7 +17,7 @@ Every host runs merged main and nothing else. Three things keep it so:
 - cua's pre-push hook is a symlink into the package on both hosts, so the patent hold is main's too:
   `ln -sf <zstack>/hosts/vm/pre-push <root>/cua/.git/hooks/pre-push` (`<root>` is `/srv/onigiri` on the VM and `~/onigiri` on the mini). It runs `hosts/vm/patent_push.py`.
 
-`hosts/check-parity` checks all three and changes nothing but the fetched `origin/main` ref. It prints one `ok` or `FAIL` line each for the package (on `main`, clean, at `origin/main`), the hook (that symlink) and the agents dir (nothing in it that is not equal to the package's file of the same name), and exits 1 on any `FAIL`. Both host files run it at a launch, so `bin/pi-run` exits 4 and starts nothing on a host that differs. The merge job runs it on every cron run and raises an urgent `parity` wake, once an hour while it lasts. Run it by hand with `ONIGIRI_ROOT=<root> hosts/check-parity`.
+Every entry point (`bin/*`, `hosts/check-parity`, `hosts/vm/merge_job.py`, `wake.py`, the pre-push hook) prints `zstack <sha>` on stderr first, and the merge job's `last-run` carries it. `hosts/check-parity` prints it on stdout, checks all three and changes nothing but the fetched `origin/main` ref. It prints one `ok` or `FAIL` line each for the package (on `main`, clean, at `origin/main`), the hook (that symlink) and the agents dir (nothing in it that is not equal to the package's file of the same name), and exits 1 on any `FAIL`. Both host files run it at a launch, so `bin/pi-run` exits 4 and starts nothing on a host that differs. The merge job runs it on every cron run and raises an urgent `parity` wake, once an hour while it lasts. Run it by hand with `ONIGIRI_ROOT=<root> hosts/check-parity`.
 
 ## Holds file
 
@@ -26,8 +26,8 @@ Every host runs merged main and nothing else. Three things keep it so:
 ## Launching
 
 - One launcher on both hosts: `bin/pi-run <id> <role> <brief-file>`, with `ONIGIRI_HOST=vm` or `ONIGIRI_HOST=mini` naming `hosts/<host>/host.sh`, which sets the root and the env. `bin/pi-run --help` has the run states, the exit codes and the wakes.
-- The pickup collects with `ONIGIRI_HOST=<host> bin/pi-run list exited lost`, then `ONIGIRI_HOST=<host> bin/pi-run collect <id>` for each run it read.
-- The hourly routine does every pickup and launch. Nothing on the VM starts pi on a schedule. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
+- The hourly pass (`skills/onigiri-mode/playbooks/hourly.md`, `bin/hourly`) runs on the mini with `ONIGIRI_HOST=mini` and reaches the VM as the peer `vm=~/onigiri-vm/vm` (`ONIGIRI_PEERS` in `hosts/mini/host.sh`). Its `pickup.log`, `hourly-fingerprint.json` and `hourly-snapshot.json` are in `~/onigiri`. It collects with `bin/pi-run list exited lost`, then `bin/pi-run collect <id>` for each run it read, on each host.
+- The hourly pass does every pickup and launch. Nothing on the VM starts pi on a schedule. To test a provider, do a real `pi -p` run, because `pi auth check --provider claude-code` reports `not_ready` even when the seat works.
 - Each host keeps its own provider logins in `<agent dir>/auth.json`. Never copy one host's tokens to the other: an OpenAI refresh token is single use, so two hosts sharing one invalidate each other with `refresh_token_reused`.
 - The agents list FFF's search tools, which come from a separate package: `pi install npm:@ff-labs/pi-fff@0.11.0`, once per host. Without it pi skips those tools.
 - Wakes POST to the urgent-wake webhook with the key in `~/.config/onigiri-urgent-webhook`. Only Zane places that file, mode 0600, on each host. A host without it logs `webhook not configured`.
@@ -45,5 +45,6 @@ Every host runs merged main and nothing else. Three things keep it so:
 * * * * * HOME=/home/box GH_CONFIG_DIR=/home/box/.config/gh /home/box/.pi/agent/git/github.com/injaneity/zstack/hosts/vm/cron-wrap.sh tick 900 2400 /usr/bin/flock -n /srv/onigiri/tick/tick.lock /usr/bin/nice -n 5 /usr/bin/python3 /home/box/.pi/agent/git/github.com/injaneity/zstack/hosts/vm/merge_job.py > /dev/null 2>> /srv/onigiri/tick/tick.log
 ```
 
+- trycua/cua merges through a merge queue, so `gh pr merge` can succeed before anything merged. The job logs `merge-queued cua#N` once per head, and `merged cua#N … mergedAt <time>` once GitHub says MERGED.
 - Outputs: `/srv/onigiri/events.log`, `/srv/onigiri/buffer.jsonl`, and `state.json`, `last-run`, `cron.log` and `tick.log` in `/srv/onigiri/tick/`, which holds data only. `/srv/onigiri/tick/PAUSED` stops merges and reruns.
 - Don't score or flag drafts. Outside PRs go to the 3h sweep, never an urgent wake.

@@ -21,12 +21,12 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: merge job, patent hook, wake and pi-run lifecycle tests
+      - name: merge job, patent hook, wake, pi-run lifecycle and hourly pass tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
-          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main tests/ensure-package-main.sh tests/pirun-model.sh
+          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief bin/queue bin/model-for tests/ensure-package-main.sh tests/pirun-model.sh tests/models.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22

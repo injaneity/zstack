@@ -4,7 +4,8 @@
 # launch cannot run a race. model-for --roles lists every role and seat.
 # Exit 1 for a name the file lacks.
 set -eu
-cfg="$(cd "$(dirname "$0")/.." && pwd)/config/models.json"
+pkg="$(cd "$(dirname "$0")/.." && pwd)"; cfg="$pkg/config/models.json"
+echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 case "${1:-}" in ''|-h|--help) echo "usage: model-for <role>[:<n>] | --roles" >&2; exit 2;; esac
 exec python3 -I -c '
 import json, sys
