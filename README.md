@@ -36,7 +36,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 - **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, each child getting only its role prompt (its place in the pipeline, the skill it loads, the rules it could break), with safety changes and a per-role model from `config/models.json`. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
 
 - **`tool-guard` extension** (`extensions/tool-guard/`): adds three wall-clock rules to every session's system prompt: no whole-disk `find` for a tool, no `sleep`-and-`tail` polling, and time-bounded measurements.
-- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls onigiri-mode's Hard rules ban outright: force-push, skipping the pre-push hook, `gh pr merge`, `gh pr ready` (unless the brief says `merge: allowed`) or a rerun of really failed CI in `trycua/cua` (cancelled and timed-out runs rerun), and writes to the real holds file (a test root's `hold-prs.txt` is not one) other than `bin/hold-row add`, which appends one row relaying Zane's call. `docs/RULE-GUARD.md` has the details.
+- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls onigiri-mode's Hard rules ban outright: force-push, skipping the pre-push hook, `gh pr merge`, or `gh pr ready` (unless the brief says `merge: allowed`) in `trycua/cua`, and writes to the real holds file (a test root's `hold-prs.txt` is not one) other than `bin/hold-row add`, which appends one row relaying Zane's call. `docs/RULE-GUARD.md` has the details.
 
 `docs/PROVENANCE.md` records what changed from pstack and why.
 

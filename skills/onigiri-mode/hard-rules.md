@@ -1,6 +1,6 @@
 ## Hard rules
 
-`bin/pi-run` appends this section, and only this section, to every session's system prompt. The orchestrator reads it here. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, reruns of failed CI, `gh pr ready` and holds-file writes in code.
+`bin/pi-run` appends this section, and only this section, to every session's system prompt. The orchestrator reads it here. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready` and holds-file writes in code.
 
 ### Work
 
@@ -36,7 +36,7 @@
 
 ### Merging
 
-- In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` and reruns of failed CI there (a cancelled or timed-out run or job is rerun without asking), and `gh pr ready` unless the brief says `merge: allowed`. Never revert or close a PR, and never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.
+- In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Reruns are decided without asking (Zane, 11 Nov; only real failures go to him): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused. Never revert or close a PR, and never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.
 - The tick never merges or readies a draft. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Ready it only when merging is allowed.
 - Anywhere else, merge your own PR with `gh pr merge <pr> --squash` once checks pass and it is mergeable.
 - Verification is logged as PR comments, not body lines. After verifying, and again after every push to the PR, post a PR comment on its own: `verified <full 40-character head sha>: ran <what>; skipped <what>; result <pass/fail>`. Do not stamp `verify:` or `verify-ran:` lines in the PR body.
