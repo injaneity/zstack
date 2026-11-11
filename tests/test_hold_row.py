@@ -1,12 +1,16 @@
 """Tests for bin/hold-row: the sanctioned append of one holds row relaying Zane's call. Each test runs the real script
 on a throwaway $ONIGIRI_ROOT. Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
+import contextlib
+import importlib.machinery
 import importlib.util
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PKG = Path(__file__).resolve().parent.parent
 TOOL = PKG / "bin" / "hold-row"
@@ -57,7 +61,7 @@ class HoldRow(unittest.TestCase):
         self.run_tool("add", ROW)
         self.assertEqual(self.holds.read_text(), BASE + ROW + "\n")
 
-    def test_a_row_the_parser_rejects_is_restored_from_the_backup(self):
+    def test_a_row_the_parser_rejects_never_reaches_the_file(self):
         for row in ("hodl | 1 | no | Zane 11 Nov 14:56 SGT",                                       # unknown kind naming a PR
                     "preapprove | #7338 | no | a5d26a5 | deep; Zane 11 Nov 14:56 SGT",             # short sha
                     f"preapprove | #5178 | no | {SHA} | Zane 11 Nov 14:56 SGT"):                    # a second pin for #5178
@@ -66,8 +70,30 @@ class HoldRow(unittest.TestCase):
                 before = self.holds.read_text()
                 r = self.run_tool("add", row)
                 self.assertEqual(r.returncode, 1)
-                self.assertIn("restored", r.stderr)
+                self.assertIn("parser rejects", r.stderr)
                 self.assertEqual(self.holds.read_text(), before)
+                self.assertEqual(self.backups(), [])
+
+    def test_a_written_file_the_parser_rejects_is_restored_from_the_backup(self):
+        # the parse after the rename: here the file on disk fails it although the text did not before
+        loader = importlib.machinery.SourceFileLoader("hold_row", str(TOOL))
+        hr = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(hr)
+        real, calls = hr.mj.parse_holds, []
+
+        def parse(text):
+            calls.append(text)
+            if len(calls) == 3:
+                raise ValueError("holds file line 9: torn")
+            return real(text)
+        with patch.object(hr.mj, "parse_holds", parse), self.assertRaises(SystemExit) as e, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            hr.add(ROW, str(self.holds))
+        self.assertEqual(e.exception.code, 1)
+        self.assertIn("restored", err.getvalue())
+        self.assertEqual(self.holds.read_text(), BASE)
+        [b] = self.backups()
+        self.assertEqual(b.read_text(), BASE)
 
     def test_a_row_must_name_zanes_call_and_its_time(self):
         for row in (f"preapprove | #7338 | no | {SHA} | deep",

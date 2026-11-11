@@ -6,7 +6,8 @@
 It appends exactly one row to $ONIGIRI_ROOT/hold-prs.txt (default /srv/onigiri, as hosts/vm/merge_job.py). The row's
 last column is its source: it must name Zane and the time of his call (`Zane 11 Nov 14:56 SGT`, or an ISO date and
 time). Under a lock it backs the file up to hold-prs.txt.bak-<time> first, writes the new file beside it and renames
-it in, then runs the merge job's parser (parse_holds) on the result and restores the backup if parsing fails. A row
+it in, then runs the merge job's parser (parse_holds) on the result and restores the backup if parsing fails. The new text is parsed
+before the rename too, so a rejected row never reaches the live file even when the run dies halfway. A row
 already in the file is not added again, so a rerun changes nothing. A file that does not exist is not created: on the
 mini, the synced copy is read-only and never written here. Exit 0 added or already there, 1 refused or restored,
 2 usage. Direct edits of the holds file stay blocked by rule-guard (docs/RULE-GUARD.md).
@@ -76,9 +77,15 @@ def add(row, holds):
         if row.strip() in (x.strip() for x in old.splitlines()):
             print(f"already there: {row.strip()}")
             return
+        new = old + ("" if not old or old.endswith("\n") else "\n") + row.strip() + "\n"
+        # parsed before it goes live too, so a run killed before the restore below never leaves it unreadable
+        try:
+            mj.parse_holds(new)
+        except ValueError as e:
+            refuse(f"the merge job's parser rejects the result ({e}); nothing written")
         backup = f"{holds}.bak-{datetime.now(mj.SGT).strftime('%Y%m%d-%H%M%S-%f')}"
         shutil.copy2(holds, backup)
-        replace(holds, old + ("" if not old or old.endswith("\n") else "\n") + row.strip() + "\n")
+        replace(holds, new)
         try:
             mj.parse_holds(mj.read(holds))
         except ValueError as e:
