@@ -135,8 +135,74 @@ class HoldRow(unittest.TestCase):
         self.assertTrue(self.holds.is_symlink())
         self.assertEqual(real.read_text(), BASE + ROW + "\n")
 
+    OLD = f"preapprove | #5178 | no | {'d' * 40} | any risk; Zane 5 Nov 10:00 SGT"
+    NEW = f"preapprove | #5178 | no | {SHA} | any risk; Zane 11 Nov 18:00 SGT (new head)"
+
+    def test_replace_comments_out_the_stale_row_and_puts_the_new_one_in_its_place(self):
+        self.holds.write_text(BASE + self.OLD + "\nhold | 7400 | no | x\n")
+        r = self.run_tool("replace", self.OLD, self.NEW)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tomb = f"# retired any risk; Zane 11 Nov 18:00 SGT (new head): {self.OLD}"
+        self.assertEqual(self.holds.read_text(), BASE + tomb + "\n" + self.NEW + "\nhold | 7400 | no | x\n")
+        [b] = self.backups()
+        self.assertEqual(b.read_text(), BASE + self.OLD + "\nhold | 7400 | no | x\n")
+        spec = importlib.util.spec_from_file_location("mj", PKG / "hosts" / "vm" / "merge_job.py")
+        mj = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mj)
+        self.assertEqual(mj.parse_holds(self.holds.read_text())["preapproved"], {5178: SHA})
+
+    def test_retire_drops_the_row_from_what_the_merge_job_reads(self):
+        self.holds.write_text(BASE + self.OLD + "\n")
+        r = self.run_tool("retire", self.OLD, "Zane 11 Nov 18:00 SGT: stale pin")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.holds.read_text(), BASE + f"# retired Zane 11 Nov 18:00 SGT: stale pin: {self.OLD}\n")
+        spec = importlib.util.spec_from_file_location("mj", PKG / "hosts" / "vm" / "merge_job.py")
+        mj = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mj)
+        self.assertEqual(mj.parse_holds(self.holds.read_text())["preapproved"], {})
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_a_second_retire_or_replace_changes_nothing(self):
+        for args in (("retire", self.OLD, "Zane 11 Nov 18:00 SGT"), ("replace", self.OLD, self.NEW)):
+            with self.subTest(args=args[0]):
+                self.holds.write_text(BASE + self.OLD + "\n")
+                for p in self.backups():
+                    p.unlink()
+                self.assertEqual(self.run_tool(*args).returncode, 0)
+                after = self.holds.read_text()
+                r = self.run_tool(*args)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("already retired", r.stdout)
+                self.assertEqual(self.holds.read_text(), after)
+                self.assertEqual(len(self.backups()), 1)
+
+    def test_retire_and_replace_refuse_without_touching_the_file(self):
+        cases = (("retire", "preapprove | #5178 | no | nope | Zane 5 Nov 10:00", "Zane 11 Nov 18:00"),   # no such row
+                 ("retire", "hold | 5675", "Zane 11 Nov 18:00"),                    # a prefix is not the row
+                 ("retire", "hold | 5675 | yes | never touch", "ops 11 Nov 18:00"),       # not Zane
+                 ("retire", "hold | 5675 | yes | never touch", "Zane said so"),          # no time
+                 ("retire", "# holds", "Zane 11 Nov 18:00"),                            # a comment is not a row
+                 ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\nhold | 1 | no | x"),  # a second line
+                 ("retire", "hold | 5675 | yes | never touch\n", "Zane 11 Nov 18:00"),       # a trailing line break
+                 ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\n"),
+                 ("replace", "hold | 5675 | yes | never touch", "hold | 7401 | no | Zane 11 Nov 18:00\n"),
+                 ("replace", self.OLD, f"preapprove | #5178 | no | {SHA} | deep"),             # new row has no source
+                 ("replace", self.OLD, "preapprove | #5178 | no | a5d26a5 | Zane 11 Nov 18:00"),  # parser rejects it
+                 ("replace", "hold | 5675 | yes | never touch", "hold | 7400 | no | x; Zane 11 Nov 18:00"),  # dup below
+                 ("retire", "hold | 7400 | no | dup", "Zane 11 Nov 18:00"))             # two equal lines
+        for args in cases:
+            with self.subTest(args=args):
+                self.holds.write_text(BASE + self.OLD + "\nhold | 7400 | no | dup\nhold | 7400 | no | dup\n"
+                                      + "hold | 7400 | no | x; Zane 11 Nov 18:00\n")
+                before = self.holds.read_text()
+                r = self.run_tool(*args)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertEqual(self.holds.read_text(), before)
+                self.assertEqual(self.backups(), [])
+
     def test_usage(self):
-        for args in ((), ("add",), ("rm", ROW), ("add", ROW, "extra")):
+        for args in ((), ("add",), ("rm", ROW), ("add", ROW, "extra"), ("retire", ROW), ("replace", ROW),
+                     ("replace", ROW, ROW, "extra")):
             with self.subTest(args=args):
                 self.assertEqual(self.run_tool(*args).returncode, 2)
         self.assertEqual(self.holds.read_text(), BASE)
