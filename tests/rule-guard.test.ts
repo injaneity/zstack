@@ -1,18 +1,22 @@
 // Tests for extensions/rule-guard/rules.ts. Run: node --test tests/rule-guard.test.ts
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
+import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { checkBash, checkWrite, MERGE_OWNED, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
 const OWNED = MERGE_OWNED;
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
 // and /scratch is a directory outside any checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
-// and a fake filesystem whose only holds files are these
-const FILES = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt"]);
+// and a host whose real holds files are these; a hold-prs.txt anywhere else is a test root's own
+const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
 // and a fake GitHub: trycua/cua run 7 was cancelled (its job 70 too), run 8 timed out, run 9 and job 90 failed
 const CI: Record<string, string> = { "run 7": "cancelled", "job 70": "cancelled", "run 8": "timed_out", "run 9": "failure", "job 90": "failure" };
 const ciConclusion = (repo: string, kind: string, id: string) => (repo === "trycua/cua" ? CI[`${kind} ${id}`] : undefined);
-const host = { repoAt, isFile: (p: string) => FILES.has(p), ciConclusion };
+const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)), ciConclusion }; // no symlinks here
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
@@ -124,7 +128,7 @@ test("a cancelled or timed-out run in a merge-job repo is rerun without asking; 
 	blocked("gh run rerun 7 --failed", "/tmp/x"); // repo can't be told
 	allowed("cd /zs/wt || gh run rerun 7", inCua); // trycua/cua's run 7 is cancelled; zstack is not owned
 	blocked("cd /zs/wt || gh run rerun 9", inCua);
-	assert.match(checkBash("gh run rerun 7 -R trycua/cua", OWNED, { repoAt, isFile: () => false }) ?? "", /^blocked: /); // no GitHub lookup
+	assert.match(checkBash("gh run rerun 7 -R trycua/cua", OWNED, { repoAt, isHolds: () => false }) ?? "", /^blocked: /); // no GitHub lookup
 	// cancelled CI never opens a merge
 	blocked("gh run rerun 7 -R trycua/cua && gh pr merge 1 -R trycua/cua");
 });
@@ -141,7 +145,7 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	blocked("{ gh pr merge 1 -R trycua/cua; }");
 	blocked("{ cd /cua; gh pr merge 1; }");
 	blocked("if cd /cua; then gh pr merge 1; fi");
-	blocked("if true; then echo x >> hold-prs.txt; fi");
+	blocked("if true; then echo x >> hold-prs.txt; fi", "/srv/onigiri");
 	blocked("gh pr merge 1 -R github.com/trycua/cua");
 	blocked("gh pr merge 1 --repo=https://github.com/trycua/cua.git");
 	blocked("gh run rerun 5 -R github.com/TryCua/cua");
@@ -248,7 +252,8 @@ test("here-document bodies are data unless a shell reads them", () => {
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
 });
 
-test("writes to the holds file are blocked; reads run", () => {
+test("writes to the real holds file are blocked; reads run", () => {
+	const root = "/srv/onigiri";
 	for (const c of [
 		"echo 'hold | 1 | no | x' >> /srv/onigiri/hold-prs.txt",
 		"printf x > hold-prs.txt",
@@ -258,6 +263,8 @@ test("writes to the holds file are blocked; reads run", () => {
 		"mv hold-prs.txt.new hold-prs.txt",
 		"echo x | tee -a /srv/onigiri/hold-prs.txt",
 		"rm /srv/onigiri/hold-prs.txt",
+		"rm ./hold-prs.txt",
+		"rm ../onigiri/hold-prs.txt",
 		"chmod u+w ~/onigiri/sync/hold-prs.txt",
 		"~/onigiri-vm/vm \"echo x >> /srv/onigiri/hold-prs.txt\"",
 		"cp /tmp/new hold-prs.txt --verbose",
@@ -267,18 +274,32 @@ test("writes to the holds file are blocked; reads run", () => {
 		"dd if=/tmp/x of=/srv/onigiri/hold-prs.txt",
 		"echo x>hold-prs.txt",
 		"echo x>>/srv/onigiri/hold-prs.txt",
+		"echo x > /zs/sync/hold-prs.txt",
 		"cp -t /srv/onigiri /tmp/hold-prs.txt",
+		"cp --target-directory=/srv/onigiri /tmp/hold-prs.txt",
 		"cp /tmp/hold-prs.txt /srv/onigiri/",
 		"cp -p /tmp/hold-prs.txt $ROOT",
-		"ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'",
 		"cp /tmp/hold-prs.txt /srv/$D",
 		"cp /tmp/hold-prs.txt /srv/onig*",
 		"mv /tmp/hold-prs.txt /srv/onigiri",
-		"cp /tmp/hold-prs.txt sync",
+		"cp /tmp/hold-prs.txt /zs/sync",
 		"mv /srv/onigiri/hold-prs.txt /tmp/holds-copy",
+		"mv hold-prs.txt /tmp/holds-copy",
+		"mv -t /tmp /srv/onigiri/hold-prs.txt",
+		"mv --target-directory=/tmp hold-prs.txt",
+		"rsync --remove-source-files -t /tmp hold-prs.txt",
+		"cp /tmp/x/hold-prs.txt /srv/onigiri/",
+		"cp /tmp/x/hold-prs.txt /srv/onigiri//",
 		"rsync --remove-source-files hold-prs.txt /tmp/x",
+		"rm $ROOT/hold-prs.txt", // a path the guard can't resolve counts by its name
+		"rm ~other/hold-prs.txt",
+		"rm /srv/{onigiri,x}/hold-prs.txt",
+		...(process.platform === "darwin" ? ["rm $ROOT/HOLD-PRS.TXT"] : []),
 	])
-		blocked(c);
+		blocked(c, root);
+	// a remote host's paths can't be resolved here, so any hold-prs.txt there counts
+	blocked("ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'");
+	blocked("ssh host 'echo x > /tmp/t/hold-prs.txt'");
 	for (const c of [
 		"cat /srv/onigiri/hold-prs.txt",
 		"grep 7031 /srv/onigiri/hold-prs.txt",
@@ -292,17 +313,134 @@ test("writes to the holds file are blocked; reads run", () => {
 		"cp hold-prs.txt /tmp/x.txt",
 		'echo "x >hold-prs.txt"',
 		"cp /srv/onigiri/hold-prs.txt ~/scratch/holds.bak-1108",
-		"cp ~/onigiri/sync/hold-prs.txt dry/root/", // a fixture copy into a directory with no holds file
+		"cp ~/onigiri/sync/hold-prs.txt /zs/dry/root/",
 		"cp /srv/onigiri/hold-prs.txt /tmp",
 	])
-		allowed(c);
+		allowed(c, root);
+	// a test root or throwaway HOME makes, edits and removes its own hold-prs.txt
+	for (const c of [
+		"printf 'hold | 1 | all | x\\n' > /tmp/t/vm/hold-prs.txt",
+		"echo x >> hold-prs.txt",
+		"rm -f hold-prs.txt",
+		"mv hold-prs.txt.new hold-prs.txt",
+		"sed -i '' 1d /tmp/t/hold-prs.txt",
+		"cp /srv/onigiri/hold-prs.txt .",
+		"cp /tmp/hold-prs.txt /zs/dry/root/",
+		"cd /tmp/home && touch hold-prs.txt",
+		"cd -P /tmp/home && touch hold-prs.txt",
+		"pushd /tmp/home && touch hold-prs.txt",
+		"env -i rm hold-prs.txt",
+		"HOME=/tmp/h bash -c 'rm /tmp/h/onigiri/hold-prs.txt'",
+		"bash -c 'rm hold-prs.txt'", // a local shell starts in this directory
+		"sh -c 'cd /tmp/t && echo x > hold-prs.txt'",
+	])
+		allowed(c, "/zs/wt");
 	// the first cd may succeed, so the session's own directory still counts
 	assert.match(checkBash("cd /srv/onigiri || cd /tmp; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
+	assert.match(checkBash("bash -c 'rm hold-prs.txt'", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
+	assert.match(checkBash("cd /srv/onigiri && bash -c 'echo x > hold-prs.txt'", OWNED, host, "/tmp") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp || true; cp /tmp/hold-prs.txt .", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
 	// a relative cd resolves from every directory the line might be in: here the first cd fails, so `sync` is /zs/sync
 	assert.match(checkBash("cd /tmp/x extra || cd sync; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/cua") ?? "", /^blocked: /);
-	assert.match(checkWrite("/srv/onigiri/hold-prs.txt") ?? "", /^blocked: /);
-	assert.equal(checkWrite("/srv/onigiri/notes.md"), undefined);
-	assert.equal(checkWrite("hold-prs.txt.md"), undefined);
+	// from outside the root, a directory the guard can't tell falls back to the name
+	for (const c of [
+		"cd /tmp/$TARGET && rm hold-prs.txt", // a cd the guard can't expand
+		"cd /srv/onig?ri && rm hold-prs.txt",
+		"cd /srv/{onigiri,x} && rm hold-prs.txt",
+		"cd /tmp/`printf x` && rm hold-prs.txt", // a substitution the tokenizer splits off the cd word
+		"cd /tmp/$(printf x) && rm hold-prs.txt",
+		'cd "/tmp/$(printf x)" && rm hold-prs.txt',
+		"cd $(printf /tmp)/x; rm hold-prs.txt",
+		"cd /tmp; cd /srv/x; cd -; rm hold-prs.txt",
+		"pushd /tmp && popd && rm hold-prs.txt",
+		"env -C /srv/onigiri rm hold-prs.txt", // a wrapper's directory
+		"env --chdir=/srv/onigiri rm hold-prs.txt",
+		"sudo -D /srv/onigiri rm hold-prs.txt",
+		"env -C /srv/onigiri bash -c 'rm hold-prs.txt'",
+		"ssh host 'rm hold-prs.txt'",
+		"cd ~/x && rm hold-prs.txt",
+		"CDPATH=/srv; cd onigiri && rm hold-prs.txt", // a relative cd may search CDPATH, so it is never told
+		"export CD''PATH=/srv && cd onigiri && rm hold-prs.txt",
+		"cd onigiri && rm hold-prs.txt",
+		"cd ./x && rm hold-prs.txt",
+	])
+		assert.match(checkBash(c, OWNED, host, "/tmp") ?? "", /^blocked: /, c);
+	for (const c of ["cd -P /srv/onigiri && rm hold-prs.txt", "pushd /srv/onigiri && rm hold-prs.txt", "cd -L /zs/sync; echo x > hold-prs.txt"])
+		assert.match(checkBash(c, OWNED, host, "/tmp") ?? "", /^blocked: /, c);
+	const write = (f: string, cwd?: string) => checkWrite(f, host, cwd) ?? "";
+	assert.match(write("/srv/onigiri/hold-prs.txt"), /^blocked: /);
+	assert.match(write("@/srv/onigiri/hold-prs.txt"), /^blocked: /);
+	assert.match(write("hold-prs.txt", "/srv/onigiri"), /^blocked: /);
+	assert.match(write("sync/hold-prs.txt", "/zs"), /^blocked: /);
+	assert.match(write("hold-prs.txt"), /^blocked: /); // no cwd: can't be told
+	assert.equal(write("/srv/onigiri/notes.md"), "");
+	assert.equal(write("hold-prs.txt.md"), "");
+	assert.equal(write("/tmp/t/hold-prs.txt"), "");
+	assert.equal(write("hold-prs.txt", "/tmp/t"), "");
+});
+
+test("the real holds paths are this host's config, matched on the filesystem with symlinks followed", () => {
+	assert.deepEqual(holdsPaths({ ONIGIRI_ROOT: "/srv/onigiri" }), ["/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
+	assert.deepEqual(holdsPaths({}), ["~/onigiri/hold-prs.txt", "/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
+	const t = fs.mkdtempSync(path.join(os.tmpdir(), "rule-guard-"));
+	try {
+		const root = path.join(t, "root"), other = path.join(t, "test-home", "onigiri");
+		fs.mkdirSync(root);
+		fs.mkdirSync(other, { recursive: true });
+		fs.writeFileSync(path.join(root, "hold-prs.txt"), "hold | 1 | all | x\n");
+		fs.symlinkSync(root, path.join(t, "link"));
+		fs.symlinkSync(path.join(root, "hold-prs.txt"), path.join(t, "file-link"));
+		fs.linkSync(path.join(root, "hold-prs.txt"), path.join(t, "hard-link"));
+		const holds = holdsPaths({ ONIGIRI_ROOT: root });
+		const real = { repoAt: () => undefined, isHolds: (p: string) => isHoldsPath(p, holds, t) };
+		const no = (c: string, cwd = t) => assert.match(checkBash(c, OWNED, real, cwd) ?? "", /^blocked: /, c);
+		const ok = (c: string, cwd = t) => assert.equal(checkBash(c, OWNED, real, cwd), undefined, c);
+		for (const c of [`echo x >> ${root}/hold-prs.txt`, `rm ${root}/hold-prs.txt`, `mv ${root}/hold-prs.txt /tmp/x`, `cp /tmp/x ${root}/hold-prs.txt`, `sed -i '' 1d ${root}/hold-prs.txt`])
+			no(c);
+		no("echo x > link/hold-prs.txt"); // through a symlinked directory
+		no("rm link/hold-prs.txt");
+		no("echo x > file-link"); // through a symlink to the file
+		no("rm hard-link"); // a hard link is the same file
+		// `..` after a symlink is the parent of its target, as the kernel walks it
+		fs.mkdirSync(path.join(root, "sub"));
+		fs.symlinkSync(path.join(root, "sub"), path.join(t, "sublink"));
+		no("echo x > sublink/../hold-prs.txt");
+		no("cd sublink/.. && rm hold-prs.txt");
+		// bash's logical cd collapses `..` before following links, so `cd root/away/..` is root
+		fs.symlinkSync(other, path.join(root, "away"));
+		no(`cd ${root}/away/.. && rm hold-prs.txt`, other);
+		no(`cd -L ${root}/away/.. && rm hold-prs.txt`, other);
+		no(`mv -t /tmp ${t}/sublink/../hold-prs.txt`);
+		no("cp /tmp/x/hold-prs.txt sublink/..");
+		assert.match(checkWrite("sublink/../hold-prs.txt", real, t) ?? "", /^blocked: /);
+		ok("echo x > sublink/hold-prs.txt"); // root/sub/hold-prs.txt is not the holds file
+		no("echo x > hold-prs.txt", root);
+		no("echo x > ../../root/./hold-prs.txt", other);
+		no("echo x > ~/root/hold-prs.txt"); // ~ is the home passed in, here the temp dir
+		assert.match(checkWrite(path.join(t, "link", "hold-prs.txt"), real) ?? "", /^blocked: /);
+		// the configured file once removed still counts, so it can't be recreated either
+		fs.renameSync(path.join(root, "hold-prs.txt"), path.join(root, "gone"));
+		no("echo x > link/hold-prs.txt");
+		// a dangling link to it would create it
+		fs.symlinkSync(path.join(root, "hold-prs.txt"), path.join(t, "alias"));
+		fs.symlinkSync("../../link/hold-prs.txt", path.join(other, "rel-alias"));
+		no("echo x > alias");
+		no("echo x > rel-alias", other);
+		assert.match(checkWrite(path.join(t, "alias"), real) ?? "", /^blocked: /);
+		if (process.platform === "darwin") no(`echo x > ${root.toUpperCase()}/HOLD-PRS.TXT`);
+		// a symlink loop has no inode to compare, and the guard still answers
+		fs.symlinkSync(path.join(t, "loop"), path.join(t, "loop"));
+		ok("touch loop");
+		no("rm loop/hold-prs.txt"); // a path that can't be walked counts by its name
+		ok("rm loop/notes.md");
+		// a throwaway HOME's own holds file is an ordinary file
+		for (const c of [`printf 'hold | 2 | all | y\\n' > ${other}/hold-prs.txt`, `echo x >> ${other}/hold-prs.txt`, `mv ${other}/hold-prs.txt ${other}/old`, `rm ${other}/hold-prs.txt`])
+			ok(c);
+		ok("touch hold-prs.txt && rm hold-prs.txt", other);
+		assert.equal(checkWrite(path.join(other, "hold-prs.txt"), real), undefined);
+		assert.equal(checkWrite("hold-prs.txt", real, other), undefined);
+	} finally {
+		fs.rmSync(t, { recursive: true, force: true });
+	}
 });
