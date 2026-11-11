@@ -183,6 +183,9 @@ class HoldRow(unittest.TestCase):
                  ("retire", "hold | 5675 | yes | never touch", "Zane said so"),          # no time
                  ("retire", "# holds", "Zane 11 Nov 18:00"),                            # a comment is not a row
                  ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\nhold | 1 | no | x"),  # a second line
+                 ("retire", "hold | 5675 | yes | never touch\n", "Zane 11 Nov 18:00"),       # a trailing line break
+                 ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\n"),
+                 ("replace", "hold | 5675 | yes | never touch", "hold | 7401 | no | Zane 11 Nov 18:00\n"),
                  ("replace", self.OLD, f"preapprove | #5178 | no | {SHA} | deep"),             # new row has no source
                  ("replace", self.OLD, "preapprove | #5178 | no | a5d26a5 | Zane 11 Nov 18:00"),  # parser rejects it
                  ("replace", "hold | 5675 | yes | never touch", "hold | 7400 | no | x; Zane 11 Nov 18:00"),  # dup below

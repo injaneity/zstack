@@ -120,10 +120,10 @@ def retire(old_row, source, holds, new_row=None):
     """Turn the one line equal to `old_row` into `# retired <source>: <old_row>`, and with `new_row` put that row right
     after it. The comment keeps the history in the file, and the parser skips it. A second run finds the comment and
     changes nothing."""
-    old_row = old_row.strip()
-    if old_row.splitlines() != [old_row] or not old_row or old_row.startswith("#"):
+    if old_row.splitlines() != [old_row] or not old_row.strip() or old_row.lstrip().startswith("#"):
         refuse("name the row to retire exactly as it stands in the file, one line")
-    if source.splitlines() != [source.strip()] or not source_ok(source):
+    old_row = old_row.strip()
+    if source.splitlines() != [source] or not source_ok(source):
         refuse(f"the source must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {source!r}")
     if new_row is not None:
         why = check_row(new_row)
