@@ -30,6 +30,8 @@ const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 // git global options that take the next word as their value.
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
+// the one sanctioned write: bin/hold-row, which appends a row relaying Zane's explicit call (Zane, 11 Nov)
+const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, append one row with `bin/hold-row add '<row>; Zane <date> <time>'` on the merge host; otherwise put the row you want under questions:.";
 
 /**
  * Whether the word `w`, a path in a command run in `dir`, may name a real holds file. A path the guard can resolve
@@ -317,7 +319,7 @@ export function checkBash(command: string, owned: ReadonlySet<string>, host: Hos
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
-			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:.";
+			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 	}
@@ -327,5 +329,5 @@ export function checkBash(command: string, owned: ReadonlySet<string>, host: Hos
 /** The reason to refuse a write or edit to `file` (as the tool got it, relative to `cwd`), or undefined. */
 export function checkWrite(file: string, host: Host = NO_HOST, cwd?: string): string | undefined {
 	// pi's tools drop a leading @ from the path
-	return holdsAt(file.replace(/^@/, ""), cwd, false, host) ? "blocked: only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:." : undefined;
+	return holdsAt(file.replace(/^@/, ""), cwd, false, host) ? `blocked: it writes the holds file. ${HOLDS_WAY}` : undefined;
 }
