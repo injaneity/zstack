@@ -11,6 +11,7 @@ stateDiagram-v2
   s6: queued after a 429
   s7: lost
   s8: collected
+  s9: queued for its PR's red CI
   [*] --> s0
   s0 --> s1: pi-run queue #60;id>
   s0 --> s2: pi-run #60;id> #60;role> #60;brief>, or the hourly drain
@@ -25,3 +26,5 @@ stateDiagram-v2
   s5 --> s8: pi-run collect #60;id>
   s6 --> s2: hourly drain, after resume_at [same session]
   s7 --> s8: pi-run collect #60;id> [sends the failed wake]
+  s8 --> s9: its PR is red after the rerun, at a head it pushed [fix attempts left]
+  s9 --> s2: hourly drain, after resume_at [same session]

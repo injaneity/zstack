@@ -54,11 +54,19 @@ M = [
      "DeepNeedsPreapproveAtHead"),
     ("collect-never-runs", "no pickup collects ended runs",
      [("WF_vars(Collect) /\\ ", "")], "EveryFailureWakes"),
+    ("red-pr-flagged-to-zane", "a PR red after its rerun waited for Zane or a fresh run, never its own thread (before 11 Nov)",
+     [("  /\\ WF_vars(CiReopen) /\\ WF_vars(ThreadFixes)", "  /\\ WF_vars(ThreadFixes)")], "RedPrGoesBackToItsThread"),
+    ("ci-fix-uncapped", "red CI reopens the thread past config/ci.json fix_attempts",
+     [("~fixing /\\ fixes < FixAttempts\n", "~fixing /\\ fixes <= FixAttempts\n")], "FixesCapped"),
+    ("reopened-thread-holds-no-slot", "the drain reopens a thread without counting its slot",
+     [("/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = TRUE", "/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = FALSE")],
+     "SlotOnlyWhileRunning"),
 ]
 
 
 # The PROPERTY lines in Zstack.cfg: TLC reports a temporal failure without naming which one broke.
-TEMPORAL = {"EveryFailureWakes", "EveryOtherMergeWakes", "EveryJobMergeLogged", "OffGateLeavesQueue", "ContinuationRuns"}
+TEMPORAL = {"EveryFailureWakes", "EveryOtherMergeWakes", "EveryJobMergeLogged", "OffGateLeavesQueue", "ContinuationRuns",
+            "RedPrGoesBackToItsThread", "ReopenedThreadEnds"}
 
 
 def main(jar, java, scratch):

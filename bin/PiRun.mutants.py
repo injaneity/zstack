@@ -23,9 +23,14 @@ M = [
     ("continuation-never-drained", "the drain never resumes a 429'd run",
      [("/\\ WF_vars(Resume) ", "")], "a temporal property"),
     ("pause-wakes", "a 429 sends a failed wake",
-     [("/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by>>",
-       "/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE /\\ wake' = \"failed\"\n"
-       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by>>")], "PauseIsSilent"),
+     [("/\\ live' = FALSE /\\ why' = \"limit\"\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes>>",
+       "/\\ live' = FALSE /\\ why' = \"limit\" /\\ wake' = \"failed\"\n"
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes>>")], "PauseIsSilent"),
+    ("ci-fix-uncapped", "a red PR reopens its thread past config/ci.json fix_attempts",
+     [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state = \"collected\" /\\ fixes < FixAttempts + 1")], "FixesCapped"),
+    ("ci-reopen-before-collect", "a red PR reopens a thread whose result the pickup has not taken",
+     [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state \\in {\"collected\", \"exited\"} /\\ fixes < FixAttempts")],
+     "CiReopenAfterCollect"),
 ]
 
 

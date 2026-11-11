@@ -17,6 +17,10 @@ trycua/cua-staging, the public push is refused and:
   - otherwise the branch stays local and a blocked wake (wake.py, once per branch and head) tells Zane it is held for
     the private repo.
 A diff that cannot be read counts as held (fail closed).
+
+A push that goes ahead to trycua/cua from a pi session (PI_SESSION_ID, set by bin/pi-run) appends `<sha> <branch>` to
+<root>/review/<id>/pushed. That file names the thread that pushed a PR's head, which owns its CI: bin/hourly reopens it
+when the PR goes red at that head (bin/pi-run ci).
 """
 import os
 import re
@@ -139,6 +143,20 @@ def wake_hold(branch, sha, hits, root=ROOT):
     return status.startswith(("webhook sent", "not sent: dry run"))
 
 
+def record_push(sid, sha, branch, root=ROOT):
+    """Note that session `sid` pushed `sha` to trycua/cua, in its own review dir only (a push from no pi run records nothing)."""
+    d = os.path.join(root, "review", sid or "")
+    if not sid or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", sid) or not os.path.isdir(d):
+        return False
+    with open(os.path.join(d, "pushed"), "a") as f:
+        f.write(f"{sha} {branch}\n")
+    return True
+
+
+def is_public(url):
+    return bool(re.search(r"github\.com[:/]trycua/cua(\.git)?/?$", url or ""))
+
+
 def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
     """pre-push hook: argv = [remote name, remote url], stdin = "<local ref> <local sha> <remote ref> <remote sha>"
     lines. Returns the exit code (non-zero refuses the whole push)."""
@@ -152,6 +170,8 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         hits = diff_hits(sha, cwd)
         act = choose_remote(url, hits, staging_ok or staging_push_ok)
         if act == "push":
+            if is_public(url):
+                record_push(os.environ.get("PI_SESSION_ID"), sha, remote_ref.removeprefix("refs/heads/"), root)
             continue
         refuse = 1
         branch = remote_ref.removeprefix("refs/heads/")

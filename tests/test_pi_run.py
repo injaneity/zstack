@@ -109,6 +109,42 @@ class Step(unittest.TestCase):
                 pr.step(run, "collect", alive)
 
 
+class CiStep(unittest.TestCase):
+    """The thread that pushed a PR's head owns its CI: a red PR reopens the collected run, once per head, fix_attempts times."""
+    R = Step.R
+
+    def test_a_red_pr_reopens_its_collected_run_once_per_head_up_to_the_cap(self):
+        done = self.R("collected", rc=0, wake="done", wake_finish=True, since="2026-11-10T01:00:00Z", role="coding")
+        f = dict(pr="7338", why="ci-gate, contract clients", now="2026-11-11T05:00:00Z", cap=2)
+        q = pr.step(done, "ci", head="a5d26a5", **f)
+        self.assertEqual({k: q[k] for k in ("state", "attempt", "rc", "wake", "resume_at", "since", "ci", "ci_now")},
+                         {"state": "queued", "attempt": 1, "rc": None, "wake": None, "resume_at": "2026-11-11T05:00:00Z",
+                          "since": "2026-11-10T01:00:00Z", "ci": {"7338": ["a5d26a5"]},
+                          "ci_now": {"pr": "7338", "head": "a5d26a5", "why": "ci-gate, contract clients", "n": 1, "cap": 2}})
+        self.assertTrue(pr.continuation(q))
+        with self.assertRaisesRegex(pr.Refused, "the hourly drain resumes it"):   # a direct start never takes it
+            pr.step(q, "start", pid=8, start="w", wake_finish=False, now="2026-11-11T06:00:00Z")
+        go = pr.step(q, "start", pid=8, start="w", wake_finish=False, now="2026-11-11T05:00:00Z", drain=True)
+        self.assertEqual((go["state"], go["attempt"], go["resumes"], go["ci_now"], go["wake_finish"]), ("running", 1, 1, None, True))
+        back = pr.step(pr.step(go, "exit", pid=8, rc=0), "collect")
+        self.assertEqual(back["wake"], "done")   # the reopened thread reports back like the first time
+        with self.assertRaisesRegex(pr.Refused, "already reopened for cua#7338 at a5d26a5"):
+            pr.step(back, "ci", head="a5d26a5", **f)
+        again = pr.step(back, "ci", head="b7", **f)
+        self.assertEqual((again["ci"], again["ci_now"]["n"]), ({"7338": ["a5d26a5", "b7"]}, 2))
+        spent = pr.step(pr.step(pr.step(again, "start", pid=9, start="x", wake_finish=False, now="9", drain=True), "exit", pid=9, rc=0), "collect")
+        with self.assertRaisesRegex(pr.Refused, "fix attempts spent for cua#7338: 2 of 2"):
+            pr.step(spent, "ci", head="c9", **f)
+        self.assertEqual(pr.step(spent, "ci", head="c9", **dict(f, pr="7400"))["ci"]["7400"], ["c9"])   # the cap is per PR
+
+    def test_only_a_collected_run_is_reopened(self):
+        f = dict(pr="1", head="h", why="w", now="n", cap=3)
+        for run, alive, why in ((self.R("running"), True, "still running"), (self.R("exited", rc=0), False, "not collected"),
+                                (None, False, "no ci from absent"), (self.R("queued", resume_at="x"), False, "no ci from queued")):
+            with self.assertRaisesRegex(pr.Refused, why):
+                pr.step(run, "ci", alive, **f)
+
+
 def chart():
     """bin/PiRun.mmd as {(from, to, label)}: the chart TLC draws from bin/PiRun.tla (tests/pirun-model.sh keeps them equal)."""
     names, edges = {}, set()
@@ -132,7 +168,7 @@ class Model(unittest.TestCase):
             if run["state"] == "running":
                 return "running" if alive else "lost"
             if run["state"] == "queued":
-                return "queued after a 429" if run.get("resume_at") else "queued"
+                return ("queued for its PR's red CI" if run.get("ci_now") else "queued after a 429") if run.get("resume_at") else "queued"
             return {"exited": f"exited, {run['wake'] or 'no'} wake", "collected": "collected"}[run["state"]]
         start, collect = "pi-run <id> <role> <brief>, or the hourly drain", "pi-run collect <id>"
         resume = "hourly drain, after resume_at [same session]"
@@ -144,11 +180,13 @@ class Model(unittest.TestCase):
                 continue
             seen.add(key)
             asked = "brief has wake: finish" if key[1] else "no wake: finish"
-            label = resume if key[0] == "queued after a 429" else start
+            label = resume if key[0] in ("queued after a 429", "queued for its PR's red CI") else start
             moves = [(label, "start", dict(pid=1, start="t", wake_finish=wf, now="9", drain=dr), True)
                      for wf in (False, True) for dr in (False, True)]
             moves += [("pi-run queue <id>", "queue", dict(since="1", role="coding"), False)]
             moves += [(collect + (" [sends the failed wake]" if key[0] == "lost" else ""), "collect", {}, False)]
+            moves += [("its PR is red after the rerun, at a head it pushed [fix attempts left]", "ci",
+                       dict(pr="7", head=f"h{len(seen)}", why="ci-gate", now="1", cap=1), False)]
             if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
                 moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3), False),
                           (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0), False),

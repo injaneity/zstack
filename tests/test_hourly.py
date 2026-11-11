@@ -22,6 +22,15 @@ FAKE_GH = "#!/bin/bash\ncase \"$*\" in *--author*) cat \"$T/ours.json\";; *) cat
 TASK = "Fix the thing in trycua/cua.\n"
 
 
+def wait_for_state(d, state, secs=10):
+    end = time.time() + secs
+    while time.time() < end:
+        if json.loads((d / "run.json").read_text())["state"] == state:
+            return True
+        time.sleep(0.05)
+    return False
+
+
 class Hourly(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
@@ -330,6 +339,46 @@ class Hourly(unittest.TestCase):
         for sid in ("c", "e"):
             self.assertEqual(state(local, sid), "queued", sid)
         self.assertIn("queue: 5 queued, slots now running 7/7, auto 5/5", r.stdout)
+
+    def test_a_pr_red_after_its_rerun_reopens_the_thread_that_pushed_its_head_once_per_head(self):
+        sha, other = "a5d26a5a" + "1" * 32, "b" * 40
+        d = self.review("salvage-7255")
+        d.mkdir()
+        (d / "brief.md").write_text("task\nrole: coding\n")
+        (d / "brief.full.md").write_text("task\nrole: coding\nwake: finish\n")
+        (d / "pushed").write_text(f"{'c' * 40} fix/x\n{sha} salvage/7255\n")   # cua's pre-push hook, one line per push
+        (d / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "pid": 1, "start": "t", "rc": 0, "wake_finish": True,
+                                                "wake": "done", "resume_at": None, "since": "2026-11-10T20:10:17Z", "role": "coding",
+                                                "extra": []}))
+        peer = self.t / "mj"
+        peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' "
+                        f"'dry-run cua#7338 {sha[:9]} wait who=session: red after rerun: ci-gate, contract clients / result' "
+                        f"'dry-run cua#7400 {other[:9]} wait who=session: red after rerun: ci-gate' "
+                        "'dry-run cua#7401 1234567ab wait who=session: merge conflict';;\n"
+                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "pushed": {}}\';; esac\n')
+        peer.chmod(0o755)
+        env = dict(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        self.assertIn(f"cua#7338 {sha[:9]}: red after rerun: ci-gate, contract clients / result  (thread salvage-7255 on local: "
+                      "bin/hourly queue reopens it)", self.hourly(**env))
+        dry = self.hourly("queue", PI_RUN_DRY="1", **env)
+        self.assertIn(f"would reopen local salvage-7255 for cua#7338 at {sha[:9]}", dry)
+        self.assertIn(f"red cua#7400 {other[:9]}: no run pushed this head; file an unstick", dry)
+        self.assertEqual(json.loads((d / "run.json").read_text())["state"], "collected")   # a dry pass changes nothing
+        r = self.sh("hourly", "queue", **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("salvage-7255 queued for cua#7338 at", r.stdout)
+        self.assertIn("pi-run: resumed salvage-7255 attempt 1", r.stdout)   # the drain takes it in the same pass
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual(args[args.index("--session-id") + 1], "salvage-7255")
+        self.assertIn(f"Your PR trycua/cua#7338 is red at {sha}", args[-1])
+        self.assertIn("fix 1 of 3", args[-1])
+        self.assertTrue(wait_for_state(d, "exited"))
+        self.assertEqual(self.sh("pi-run", "collect", "salvage-7255").returncode, 0)
+        r = self.sh("hourly", "queue", **env)   # the same red head on the next pass: the thread already had it
+        self.assertIn(f"red cua#7338 {sha[:9]}: salvage-7255: already reopened for cua#7338 at {sha}", r.stdout)
+        self.assertEqual(json.loads((d / "run.json").read_text())["state"], "collected")
+        rows = [x.split("\t")[1:4] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual(rows[:2], [["local", "ci-reopen", "salvage-7255"], ["local", "resume", "salvage-7255"]])
 
     def test_a_429d_run_frees_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
         def peer(free, runs):

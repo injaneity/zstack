@@ -4,10 +4,11 @@
   pi-run <id> <role> <brief> [extra pi args...]   start a detached pi session in $ONIGIRI_ROOT/review/<id>
   pi-run collect <id>                             take a finished run's result, exactly once
   pi-run queue <id>                               queue review/<id>/brief.md for the hourly drain (bin/queue)
+  pi-run ci <id> <pr> <head> <why...>             reopen a collected run for its trycua/cua PR that is red at <head>
   pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc> [since= resume_at=]
 
-A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role}. step() is the
-whole lifecycle:
+A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, and once its
+PR's CI reopened it: ci {pr: [heads]}, ci_now}. step() is the whole lifecycle:
 
   (no file)   --queue-->   queued     since = now, role from the brief's `role:` line; a second queue changes nothing
   (no file) or queued --start--> running   attempt + 1, a fresh pi session; since is kept (now when never queued)
@@ -18,7 +19,11 @@ whole lifecycle:
   running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT): no wake, the slot is
                                       freed, resume_at is the reset time pi names (else now), since is kept
   exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first
-  collected is final: a retry is a fresh id (onigiri-mode: nothing restarts a session)
+  collected   --ci------>  queued     its PR's ci-gate is red after the merge job's rerun, at a head this run pushed
+                                      (review/<id>/pushed, written by cua's pre-push hook): resume_at = now and ci_now
+                                      names the PR, head and failure, so the drain reopens the same session with them.
+                                      Once per PR and head, at most fix_attempts heads per PR (config/ci.json).
+  collected is otherwise final: a retry is a fresh id (onigiri-mode: nothing restarts a session)
 
 lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
 transition holds flock on the review dir, so two launchers or a launcher and a collect never interleave. A review dir
@@ -48,10 +53,16 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
-USAGE = "usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run list [<state>...]"
+USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
+         "| pi-run list [<state>...]")
 # pi's whole last line when the upstream refused on a usage limit: Claude Code's 429, or ChatGPT's (which names the wait)
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status 429, .*\)|You have hit your ChatGPT usage limit.*)")
 RESUME = "Your run stopped on an upstream rate limit and is resumed in the same session. Carry on with the task from where you stopped."
+CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
+             "so this session is reopened to resolve it (fix {n} of {cap}, config/ci.json). Read the failing logs, fix the cause "
+             "(update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
+             "comment. Rerun a cancelled or timed-out job yourself. If only Zane can decide it, say why under questions: and stop.")
+CI_CONFIG = os.path.join(PKG, "config", "ci.json")   # fix_attempts: how many red heads per PR reopen its thread
 
 
 class Refused(Exception):
@@ -77,7 +88,16 @@ def step(run, event, alive=False, **f):
                 "since": (run or {}).get("since") or f["now"]}
     if event == "start" and cont and f.get("drain") and f["now"] >= run["resume_at"]:
         return {**run, "state": "running", "pid": f["pid"], "start": f["start"], "rc": None, "resume_at": None,
-                "resumes": run.get("resumes", 0) + 1}
+                "resumes": run.get("resumes", 0) + 1, "ci_now": None}
+    if event == "ci" and s == "collected":
+        heads = (run.get("ci") or {}).get(f["pr"], [])
+        if f["head"] in heads:
+            raise Refused(f"already reopened for cua#{f['pr']} at {f['head']}")
+        if len(heads) >= f["cap"]:
+            raise Refused(f"fix attempts spent for cua#{f['pr']}: {len(heads)} of {f['cap']} ({', '.join(heads)})")
+        return {**run, "state": "queued", "rc": None, "wake": None, "resume_at": f["now"],
+                "ci": {**(run.get("ci") or {}), f["pr"]: heads + [f["head"]]},
+                "ci_now": {"pr": f["pr"], "head": f["head"], "why": f["why"], "n": len(heads) + 1, "cap": f["cap"]}}
     if event == "exit" and s == "running" and run["pid"] == f["pid"]:
         if f["rc"] and f.get("resume_at"):
             return {**run, "state": "queued", "rc": f["rc"], "resume_at": f["resume_at"]}
@@ -93,6 +113,8 @@ def step(run, event, alive=False, **f):
         ("start", "queued"): f"queued after a 429 until {run and run.get('resume_at')}; the hourly drain resumes it"
                              + (" once that has passed" if f.get("drain") else ""),
         ("queue", "collected"): f"attempt {run and run['attempt']} was collected; a retry is a fresh id",
+        ("ci", "running"): "still running: the session is at work",
+        ("ci", "exited"): "exited and not collected yet",
         ("collect", "running"): "still running",
         ("collect", "queued"): "queued: nothing to collect yet",
     }.get((event, s), f"no {event} from {s}"))
@@ -288,7 +310,8 @@ def launch(sid, role, brief, extra):
     run = read_json(os.path.join(d, "run.json"))
     cont = continuation(run)
     if cont:   # the same session goes on: its role, pi args and brief are the ones it started with
-        role, extra, text = run.get("role") or role, run.get("extra") or [], RESUME
+        role, extra = run.get("role") or role, run.get("extra") or []
+        text = CI_RESUME.format(**run["ci_now"]) if run.get("ci_now") else RESUME
         with open(os.path.join(d, "brief.full.md")) as fh:
             brief_text = fh.read()
     else:
@@ -319,7 +342,7 @@ def launch(sid, role, brief, extra):
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check(d, sid, r.run, **f)
-        if continuation(r.run) != cont:   # another launcher started it and it hit a 429 meanwhile: the setup above is stale
+        if continuation(r.run) != cont or (r.run or {}).get("ci_now") != (run or {}).get("ci_now"):   # the setup above is stale
             die(3, f"{sid}: its state changed during setup; nothing started")
         if not cont:
             with open(os.path.join(d, "brief.full.md"), "w") as fh:
@@ -360,7 +383,7 @@ def collect(sid):
 
 
 def continuation(run):
-    """The run is a 429's continuation waiting in the queue."""
+    """The run is a continuation waiting in the queue: a 429's, or its PR's red CI's."""
     return bool(run and run["state"] == "queued" and run.get("resume_at"))
 
 
@@ -404,6 +427,22 @@ def list_runs(states):
     return 0
 
 
+def ci(sid, pr_n, head, why):
+    """Reopen a collected run for its trycua/cua PR that is red at a head it pushed: queued with resume_at now, for the drain."""
+    _, root = host_env("list")
+    d = os.path.join(root, sid)
+    if not os.path.exists(os.path.join(d, "run.json")):
+        die(3, f"{sid}: no run")
+    with Run(d) as r:
+        try:
+            r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=int(json.load(open(CI_CONFIG))["fix_attempts"])))
+        except Refused as e:
+            die(3, f"{sid}: {e}")
+    n = r.run["ci_now"]
+    print(f"{sid} queued for cua#{pr_n} at {head}: fix {n['n']} of {n['cap']}")
+    return 0
+
+
 def queue(sid):
     """Queue review/<id> (its brief.md) for the hourly drain: run.json queued, with the role from the brief's `role:` line."""
     _, root = host_env("list")
@@ -428,9 +467,11 @@ def main(argv):
         return 0
     if len(argv) == 2 and argv[0] in ("collect", "queue") and ID.fullmatch(argv[1]):
         return {"collect": collect, "queue": queue}[argv[0]](argv[1])
+    if len(argv) >= 5 and argv[0] == "ci" and ID.fullmatch(argv[1]) and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{7,40}", argv[3]):
+        return ci(argv[1], argv[2], argv[3], " ".join(argv[4:]))
     if argv[:1] == ["list"]:
         return list_runs(argv[1:])
-    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list"):
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci"):
         return start(argv[0], argv[1], argv[2], argv[3:])
     die(2, USAGE)
 

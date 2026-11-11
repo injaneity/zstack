@@ -18,6 +18,9 @@
 \*  - Each pass re-gates the job's own entries in GitHub's merge queue and dequeues one that now fails the gate.
 \*    Another actor's entry is not touched (whether it should be is an open question); its merge wakes.
 \*  - merge-watch wakes for every merge of our PR that the job did not queue, whoever merged it (bots and apps too).
+\*  - The thread owns its PR's CI (Zane 11 Nov): red after the job's rerun, the hourly reopens the run that pushed the
+\*    head (`pi-run ci`, then the drain), in its own session, at most FixAttempts times per PR. A deep/human PR with no
+\*    preapproval is the thread's while it is red; Zane's tier call comes once it is green.
 EXTENDS Naturals
 
 VARIABLES
@@ -43,11 +46,14 @@ VARIABLES
   alerted,   \* an unexpected-merge wake went out
   logged,    \* events.log has `merged cua#N`
   atQueue,   \* the gate's facts when the job queued it
-  atMerge    \* the facts when GitHub merged it
+  atMerge,   \* the facts when GitHub merged it
+  fixing,    \* the PR's thread is reopened for its red CI (queued for, or in, its session again)
+  fixes      \* how many times red CI reopened the thread (run.json ci: the heads, per PR)
 
 vars == <<phase, draft, lost, collected, woke, reopened, cont, due, limited, slot, drained, ci, reran, tier, pre, held, conflict, byJob, by,
-          alerted, logged, atQueue, atMerge>>
-RunVars == <<lost, collected, woke, reopened, cont, due, limited, slot, drained>>
+          alerted, logged, atQueue, atMerge, fixing, fixes>>
+RunVars == <<lost, collected, woke, reopened, cont, due, limited, slot, drained, fixing, fixes>>
+FixAttempts == 2   \* config/ci.json fix_attempts; 2 keeps TLC small
 PRVars == <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
 Tiers == {"light", "deep"}   \* TIERS in merge_job.py; "none" stands for a PR that declares none of them
 NoFacts == [green |-> FALSE, held |-> FALSE, preOk |-> FALSE, tier |-> "none", draft |-> FALSE]
@@ -58,6 +64,7 @@ Init ==
   /\ cont = FALSE /\ due = FALSE /\ limited = FALSE /\ slot = FALSE /\ drained = FALSE
   /\ ci = "pending" /\ reran = FALSE /\ tier = "none" /\ pre = FALSE /\ held = FALSE /\ conflict = FALSE
   /\ byJob = FALSE /\ by = "none" /\ alerted = FALSE /\ logged = FALSE /\ atQueue = NoFacts /\ atMerge = NoFacts
+  /\ fixing = FALSE /\ fixes = 0
 
 \* ---------------- the run: bin/pi-run step() ----------------
 \* queued --start--> running. A refused start (parity, no credential, slots full) changes nothing: the run stays queued.
@@ -65,38 +72,56 @@ Init ==
 \* reopens its own session. The drain's other checks (slots, peer at main, the floor) are in bin/hourly, not here.
 Drain == phase = "queued" /\ (cont => due)
   /\ phase' = "running" /\ slot' = TRUE /\ drained' = TRUE /\ reopened' = cont /\ cont' = FALSE
-  /\ UNCHANGED <<lost, collected, woke, due, limited>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<lost, collected, woke, due, limited, fixing, fixes>> /\ UNCHANGED PRVars
 \* The chat's `pi-run <id> <role> <brief>` starts a fresh run now. It never starts a continuation.
 StartNow == phase = "queued" /\ ~cont
   /\ phase' = "running" /\ slot' = TRUE /\ drained' = FALSE /\ reopened' = FALSE /\ cont' = FALSE
-  /\ UNCHANGED <<lost, collected, woke, due, limited>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<lost, collected, woke, due, limited, fixing, fixes>> /\ UNCHANGED PRVars
 \* running --limit--> queued: an upstream 429. No wake, the slot is freed, and resume_at is set.
 Limit == phase = "running" /\ phase' = "queued" /\ cont' = TRUE /\ due' = FALSE /\ limited' = TRUE /\ slot' = FALSE
-  /\ UNCHANGED <<lost, collected, woke, reopened, drained>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<lost, collected, woke, reopened, drained, fixing, fixes>> /\ UNCHANGED PRVars
 \* Time passes resume_at. The run stays Queued.
 ResumeAtPasses == phase = "queued" /\ cont /\ ~due /\ due' = TRUE
-  /\ UNCHANGED <<phase, lost, collected, woke, reopened, cont, limited, slot, drained>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<phase, lost, collected, woke, reopened, cont, limited, slot, drained, fixing, fixes>> /\ UNCHANGED PRVars
 \* running --exit rc!=0--> failed: the supervisor sends the failed wake, then writes exited.
 ExitFailed == phase = "running" /\ phase' = "failed" /\ woke' = TRUE /\ slot' = FALSE
-  /\ UNCHANGED <<lost, collected, reopened, cont, due, limited, drained>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<lost, collected, reopened, cont, due, limited, drained, fixing, fixes>> /\ UNCHANGED PRVars
 \* KILL or OOM: the supervisor dies with pi and sends nothing.
 Killed == phase = "running" /\ phase' = "failed" /\ lost' = TRUE /\ woke' = FALSE /\ slot' = FALSE
-  /\ UNCHANGED <<collected, reopened, cont, due, limited, drained>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<collected, reopened, cont, due, limited, drained, fixing, fixes>> /\ UNCHANGED PRVars
 \* `pi-run collect`: a lost run's collect sends the failed wake the supervisor could not (wake, then write).
 Collect == phase = "failed" /\ ~collected /\ collected' = TRUE /\ woke' = TRUE
-  /\ UNCHANGED <<phase, lost, reopened, cont, due, limited, slot, drained>> /\ UNCHANGED PRVars
+  /\ UNCHANGED <<phase, lost, reopened, cont, due, limited, slot, drained, fixing, fixes>> /\ UNCHANGED PRVars
 \* The chat files it again under a fresh id: a new review dir and a new session.
 Retry == phase = "failed" /\ collected
   /\ phase' = "queued" /\ lost' = FALSE /\ collected' = FALSE /\ woke' = FALSE
   /\ reopened' = FALSE /\ cont' = FALSE /\ due' = FALSE /\ limited' = FALSE /\ slot' = FALSE /\ drained' = FALSE
-  /\ UNCHANGED PRVars
+  /\ UNCHANGED <<fixing, fixes>> /\ UNCHANGED PRVars
 \* running --exit rc 0-->: no trycua/cua PR (research, or a cua-staging PR the session merged itself), or a PR.
 \* The session declares a tier, or forgets to.
 ExitOk == phase = "running" /\ slot' = FALSE
   /\ \/ phase' = "done" /\ UNCHANGED PRVars
      \/ /\ phase' = "open" /\ draft' \in BOOLEAN /\ tier' \in {"none"} \cup Tiers
         /\ UNCHANGED <<ci, reran, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
-  /\ UNCHANGED <<lost, collected, woke, reopened, cont, due, limited, drained>>
+  /\ UNCHANGED <<lost, collected, woke, reopened, cont, due, limited, drained, fixing, fixes>>
+
+\* ---------------- the thread owns its PR's CI: bin/hourly queue, bin/pi-run ci ----------------
+\* Red after the job's rerun at a head the thread pushed, not held and not a draft (next_action() who=session): the
+\* hourly queues the collected run again and the drain reopens its session, holding a slot. The draft check and a
+\* deep/human tier with no preapproval do not stop it; a hold row (Zane's) does.
+CiReopen == phase = "open" /\ ~draft /\ ci = "red" /\ reran /\ ~held /\ ~fixing /\ fixes < FixAttempts
+  /\ fixing' = TRUE /\ fixes' = fixes + 1 /\ slot' = TRUE /\ reopened' = TRUE /\ drained' = TRUE
+  /\ UNCHANGED <<phase, lost, collected, woke, cont, due, limited>> /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+\* The thread pushes its fix (a new head: ci restarts, any pin and queue entry go) and exits; or it exits with its
+\* questions for Zane and no push. Either way its slot is free and it is collected again.
+\* A PR that merged or closed meanwhile ends the session the same way, with nothing to push.
+ThreadFixes == fixing
+  /\ \/ phase \in PRopen /\ ci' = "pending" /\ reran' = FALSE /\ pre' = FALSE /\ conflict' = FALSE /\ byJob' = FALSE
+        /\ phase' = "open"
+     \/ UNCHANGED <<phase, ci, reran, pre, conflict, byJob>>
+  /\ fixing' = FALSE /\ slot' = FALSE /\ reopened' = FALSE
+  /\ UNCHANGED <<draft, tier, held, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<lost, collected, woke, cont, due, limited, drained, fixes>>
 
 \* ---------------- the PR: GitHub and the people around it ----------------
 CiFinishes == phase \in PRopen /\ ci = "pending" /\ ci' \in {"green", "red"}
@@ -168,14 +193,15 @@ OtherMerges == phase = "open" /\ ~draft /\ ~conflict /\ phase' = "merged" /\ by'
   /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, alerted, logged, atQueue>> /\ UNCHANGED RunVars
 
 \* The chat may also stop after a failure instead of filing it again.
-Ends == (phase \in {"done", "merged"} \/ (phase = "failed" /\ collected)) /\ UNCHANGED vars
+Ends == (phase \in {"done", "merged"} \/ (phase = "failed" /\ collected)) /\ ~fixing /\ UNCHANGED vars
 
 Next == Drain \/ StartNow \/ Limit \/ ResumeAtPasses \/ ExitFailed \/ Killed \/ Collect \/ Retry \/ ExitOk
   \/ CiFinishes \/ Push \/ DeclareTier \/ MainMoves \/ Ready \/ ZaneHolds \/ ZanePreapproves
   \/ JobEnqueues \/ JobReruns \/ JobDequeues \/ JobLogsMerged \/ JobAlerts
-  \/ OtherEnqueues \/ QueueMerges \/ QueueDrops \/ OtherMerges \/ Ends
+  \/ OtherEnqueues \/ QueueMerges \/ QueueDrops \/ OtherMerges \/ CiReopen \/ ThreadFixes \/ Ends
 \* The hourly drains the queue and collects every ended run, time passes resume_at, and the job's pass always comes round.
 Spec == Init /\ [][Next]_vars /\ WF_vars(Drain) /\ WF_vars(ResumeAtPasses) /\ WF_vars(Collect) /\ WF_vars(JobLogsMerged) /\ WF_vars(JobAlerts) /\ WF_vars(JobDequeues)
+  /\ WF_vars(CiReopen) /\ WF_vars(ThreadFixes)
 
 \* ---------------- Zane's rules ----------------
 JobMerged == phase = "merged" /\ by = "job"
@@ -193,8 +219,8 @@ MergedEventMeansMerged == logged => JobMerged
 OffGateLeavesQueue == [](phase = "inqueue" /\ byJob /\ ~Gate => <>(phase # "inqueue" \/ Gate))
 \* Nothing restarts a session (SKILL.md:9): only a 429's continuation reopens one.
 RetryIsFresh == phase = "running" /\ reopened => limited
-\* A paused run frees its slot (Zane, 10 Nov): only a running run holds one.
-SlotOnlyWhileRunning == slot <=> phase = "running"
+\* A paused run frees its slot (Zane, 10 Nov): only a running run holds one, the first session or a thread reopened for its PR.
+SlotOnlyWhileRunning == slot <=> (phase = "running" \/ fixing)
 \* The hourly queue drain resumes it (Zane, 10 Nov), once resume_at has passed (step()): no other path reopens a session.
 ResumeGoesThroughTheQueue == phase = "running" /\ reopened => drained /\ due
 \* A 429'd run comes back: it does not sit in Queued for ever.
@@ -204,6 +230,14 @@ PauseIsSilent == cont => ~woke /\ ~collected
 \* Failures wake the chat: every collected failure has sent its wake, and every failure wakes eventually.
 CollectedFailureWoke == phase = "failed" /\ collected => woke
 EveryFailureWakes == [](phase = "failed" => <>(woke \/ phase # "failed"))
+\* The thread owns its PR's CI (Zane, 11 Nov): a PR red after the job's rerun, not held and not a draft, goes back to its
+\* own thread while it has fix attempts left, rather than waiting on Zane or a fresh run.
+RedPrGoesBackToItsThread == [](phase = "open" /\ ci = "red" /\ reran /\ ~held /\ ~draft /\ fixes < FixAttempts
+                               => <>(fixing \/ ci # "red" \/ phase # "open" \/ held \/ draft))
+\* config/ci.json fix_attempts bounds it; past that the PR is Zane's.
+FixesCapped == fixes <= FixAttempts
+\* A reopened thread ends: it never holds its slot for ever.
+ReopenedThreadEnds == [](fixing => <>~fixing)
 \* A merge the job did not make raises an unexpected-merge wake.
 EveryOtherMergeWakes == [](by = "other" => <>alerted)
 \* The job's merges are all logged.
@@ -217,5 +251,5 @@ HeldIsNeverMergedStrict == JobMerged => ~atMerge.held
 \* atQueue and atMerge are history the rules read and no step reads (reopened once the session has ended, due once the run left Queued), so states
 \* that differ only there draw as one. Zstack.cfg checks every rule without this view.
 ChartView == <<phase, draft, lost, collected, woke, phase = "running" /\ reopened, cont, cont /\ due, ci, reran, tier, pre, held, conflict,
-               byJob, by, alerted, logged>>
+               byJob, by, alerted, logged, fixing>>
 ====

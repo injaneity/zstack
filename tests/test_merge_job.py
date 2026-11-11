@@ -164,6 +164,19 @@ class NextAction(unittest.TestCase):
         status = pr(statusCheckRollup=[{"__typename": "StatusContext", "context": "ci-gate", "state": "FAILURE"}])
         self.assertEqual(verdict(status)[:2], ("wait", "session"))             # nothing to rerun
 
+    def test_a_red_deep_pr_with_no_preapproval_is_the_sessions_first(self):
+        """cua#7338 (11 Nov 12:17): red ci-gate and risk deep with no preapprove row waited who=zane and was never rerun."""
+        p = pr(number=7338, body="risk: deep\n", statusCheckRollup=self.RED)
+        self.assertEqual(verdict(p), ("rerun", "red once: ci-gate, rust"))
+        self.assertEqual(verdict(p, rerun_head=H),
+                         ("wait", "session", "red after rerun: ci-gate, rust; declared deep: needs Zane (no preapprove row)"))
+        self.assertEqual(verdict(dict(p, statusCheckRollup=[cr("ci-gate")])), ("wait", "zane", "declared deep: needs Zane (no preapprove row)"))
+        pending = [cr("ci-gate", status="IN_PROGRESS", conclusion=None)]
+        self.assertEqual(verdict(dict(p, statusCheckRollup=pending))[1], "zane")
+        for held in (dict(p, number=5675), dict(p, files=["never.rs"])):   # a hold row is Zane's stop, red or not
+            self.assertEqual(verdict(held)[:2], ("wait", "zane"))
+        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
+
     def test_pending_waits(self):
         pending = pr(statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None), cr("x", conclusion="FAILURE")])
         self.assertEqual(verdict(pending), ("wait", "ci-gate PENDING"))
@@ -1044,6 +1057,23 @@ class PatentPush(unittest.TestCase):
             self.assertNotEqual(g.returncode, 0)   # the same head again: still held, and no second wake
             self.assertNotIn('"kind": "blocked"', g.stdout + g.stderr)
             self.assertEqual(len(mj.read(f"{root}/events.log").splitlines()), 1)
+
+    def test_a_public_push_from_a_run_records_its_head_in_that_runs_dir_only(self):
+        """The thread that pushed a PR's head owns its CI: bin/hourly finds it through review/<id>/pushed."""
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(f"{root}/review/r1")
+            pub, stg = "https://github.com/trycua/cua.git", "https://github.com/trycua/cua-staging"
+            line = lambda sha: io.StringIO(f"refs/heads/fix/x {sha} refs/heads/fix/x {'0' * 40}\n")   # noqa: E731
+            with patch.object(pp, "diff_hits", return_value=[]):
+                for sid, url in (("r1", pub), ("r1", stg), (None, pub), ("gone", pub), ("../r1", pub)):
+                    with patch.dict(os.environ, {"PI_SESSION_ID": sid} if sid else {}, clear=False):
+                        if not sid:
+                            os.environ.pop("PI_SESSION_ID", None)
+                        self.assertEqual(pp.main(["origin", url], line("a" * 40), root=root, out=io.StringIO()), 0)
+            with patch.object(pp, "diff_hits", return_value=["src/pairing.rs"]), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
+                pp.main(["origin", pub], line("b" * 40), staging_ok=lambda: False, root=root, out=io.StringIO())   # held: not pushed
+            self.assertEqual(Path(f"{root}/review/r1/pushed").read_text(), f"{'a' * 40} fix/x\n")
+            self.assertEqual(sorted(os.listdir(f"{root}/review")), ["r1"])
 
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
