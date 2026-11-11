@@ -1,6 +1,7 @@
 // onigiri-mode's Hard rules' mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
 // Pure: the caller passes the repo lookup, so tests run without pi or git. See docs/RULE-GUARD.md.
 import * as path from "node:path";
+import { fold } from "./holds.ts";
 import { base, commands, program } from "./shell.ts";
 
 /** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger). */
@@ -14,15 +15,15 @@ export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boo
 
 /** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
  * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
- * with ~) is an existing file. `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
+ * with ~) is one of the real holds files (holds.ts). `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
 export interface Host {
 	repoAt(dir: string): string | null | undefined;
-	isFile(p: string): boolean;
+	isHolds(p: string): boolean;
 	ghRepo?: string;
 	/** A workflow run's or job's conclusion in `repo` (owner/name), as GitHub reports it; undefined when it can't be told. */
 	ciConclusion?(repo: string, kind: "run" | "job", id: string): string | undefined;
 }
-const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
+const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
@@ -30,14 +31,27 @@ const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
 
-const isHolds = (w: string) => base(w) === HOLDS;
+/**
+ * Whether the word `w`, a path in a command run in `dir`, may name a real holds file. A path the guard can resolve
+ * (absolute, ~/, or relative to a known directory) counts only when it is one, symlinks followed, so a test root's
+ * hold-prs.txt is an ordinary file. One it can't (a variable, a glob or brace, an unknown directory, or a path on a
+ * remote host) counts when its file name is hold-prs.txt.
+ */
+function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
+	const named = fold(base(w)) === HOLDS;
+	if (remote || /[$`*?[{]/.test(w) || /^~[^/]/.test(w)) return named;
+	// joined, not resolved: `..` after a symlink is the target's parent, which only the host can tell
+	const abs = /^[/~]/.test(w) ? w : dir && `${dir}/${w}`;
+	return abs === undefined ? named : host.isHolds(abs);
+}
 
 /**
  * A simple command, its raw words (env prefixes included) and every directory it might run in. A `cd` may fail
  * (`cd x || gh ...`), so a command keeps the directories from before each `cd` too; undefined is one that can't be
- * told (`cd ~/x`, `cd $X`, or a remote shell).
+ * told (`cd ~/x`, `cd $X`, or a remote shell). `at` is the same for the holds check, which can't tell a relative cd
+ * either, since $CDPATH may redirect it.
  */
-interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; remote: boolean }
+interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; at: (string | undefined)[]; remote: boolean }
 const REMOTE = new Set(["ssh", "vm"]);
 
 /** Whether `s` ends outside any quote or comment, so a `<<` after it is an operator and not text. */
@@ -77,23 +91,39 @@ function stripHeredocs(line: string): string {
 	return out.join("\n");
 }
 
-function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0, env: string[] = []): Cmd[] {
+function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0, env: string[] = [], at = dirs): Cmd[] {
 	const out: Cmd[] = [];
+	// the tokenizer splits a substitution out of the word it sits in (`cd /x/$(y)` reads as `cd /x/`), so on a line
+	// with one no cd can be told
+	const subst = /`|\$\(/.test(line);
 	for (const words of commands(stripHeredocs(line))) {
 		const w = program(words);
-		if (w[0] === "cd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
-			const to = w[1] ?? "~";
-			// relative to every directory it might start in, since an earlier cd may have failed
-			const next = /^[~$]/.test(to) ? [undefined] : to.startsWith("/") ? [path.posix.resolve(to)] : dirs.map((d) => d && path.posix.resolve(d, to));
-			dirs = [...new Set([...dirs, ...next])];
+		if (w[0] === "cd" || w[0] === "pushd" || w[0] === "popd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
+			if (w[0] === "cd") {
+				// relative to every directory it might start in, since an earlier cd may have failed
+				const to = w[1] ?? "~";
+				const next = /^[~$]/.test(to) ? [undefined] : to.startsWith("/") ? [path.posix.resolve(to)] : dirs.map((d) => d && path.posix.resolve(d, to));
+				dirs = [...new Set([...dirs, ...next])];
+			}
+			// `cd -P x` takes x; `cd -`, `pushd +1` and popd go back to a directory the guard did not keep
+			const to = w[0] === "popd" ? "-" : w.slice(1).find((a) => !/^-[LPe@]+$/.test(a)) ?? "~";
+			// for holds only a literal absolute path is told: a relative one may go through $CDPATH, however it is set
+			// or spelled. It is kept as written (`cd -P`) and with `..` collapsed (bash's default logical cd).
+			const nextAt = subst || !to.startsWith("/") || /[$`*?[{]/.test(to) ? [undefined] : [to, path.posix.resolve(to)];
+			at = [...new Set([...at, ...nextAt])];
 			continue;
 		}
 		const raw = [...env, ...words];
-		out.push({ words: w, raw, dirs, remote });
+		// a wrapper that changes directory (`env -C dir`, `sudo -D dir`) runs the command somewhere the guard can't tell
+		const pre = words.slice(0, words.length - w.length);
+		const moved = pre.some((a) => /^(-C|--chdir|-D)(=|$)|^-C./.test(a) || /^-[A-Za-z]*[CD]$/.test(a));
+		const here = moved ? [undefined] : at;
+		out.push({ words: w, raw, dirs, at: here, remote });
 		// a local shell inherits this command's env prefix (`GH_REPO=x bash -c ...`); a remote one does not
 		const inner = REMOTE.has(w[0]) ? [] : raw.slice(0, raw.length - w.length);
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
-			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1, inner));
+			// a local shell starts where this command runs, so a holds path in it resolves from there too
+			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1, inner, REMOTE.has(w[0]) ? [undefined] : here));
 	}
 	return out;
 }
@@ -241,11 +271,13 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 }
 
 function writesHolds(w: string[], dir: string | undefined, remote: boolean, host: Host): boolean {
+	const isHolds = (a: string) => holdsAt(a, dir, remote, host);
 	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word). A word with
 	// whitespace in it was quoted, so its `>` is text: `echo "x >hold-prs.txt"` writes nothing.
 	for (let i = 0; i < w.length; i++) {
 		const m = /\s/.test(w[i]) ? null : w[i].match(/>>?\|?(.*)$/);
-		if (m && isHolds(m[1] || w[i + 1] || "")) return true;
+		const to = m && (m[1] || w[i + 1]);
+		if (to && isHolds(to)) return true;
 	}
 	const [p, ...all] = w;
 	// drop redirections and their targets, so `tee x.bak < hold-prs.txt` reads the file instead of naming it
@@ -256,20 +288,18 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 			return ops.some(isHolds);
 		case "sed": case "perl":
 			return args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place")) && ops.some(isHolds);
-		case "mv": case "rsync": // moving it away removes it, wherever it goes
-			if ((p === "mv" || args.includes("--remove-source-files")) && ops.slice(0, -1).some(isHolds)) return true;
-		// falls through
-		case "cp": case "install": case "ln": case "ditto":
-			// with -t DIR every operand is a source copied into DIR under its own name
-			if (args.some((a) => a === "-t" || a.startsWith("--target-directory"))) return ops.some(isHolds);
-			// the destination is the file itself, or a directory that already holds a hold-prs.txt the copy replaces.
-			// A copy into a directory without one (a test fixture) creates a new file and edits no holds.
-			if (ops.length < 2) return false;
-			const dest = ops[ops.length - 1];
-			if (isHolds(dest)) return true;
-			if (!ops.slice(0, -1).some(isHolds)) return false;
-			const abs = remote || /[$`*?[]/.test(dest) ? undefined : /^[/~]/.test(dest) ? dest : dir && path.posix.resolve(dir, dest);
-			return abs === undefined || host.isFile(path.posix.join(abs, HOLDS));
+		case "mv": case "rsync": case "cp": case "install": case "ln": case "ditto": {
+			// with -t DIR every operand is a source that lands in DIR under its own name; otherwise the last operand is
+			// the file written, or a directory each source lands in
+			const t = args.findIndex((a) => a === "-t" || a.startsWith("--target-directory"));
+			const into = t < 0 ? undefined : args[t].includes("=") ? args[t].slice(args[t].indexOf("=") + 1) : args[t + 1];
+			const sources = into !== undefined ? ops : ops.slice(0, -1);
+			// moving it away removes it, wherever it goes
+			if ((p === "mv" || args.includes("--remove-source-files")) && sources.some(isHolds)) return true;
+			const dest = into ?? ops[ops.length - 1];
+			if (dest === undefined || !sources.length) return false;
+			return (into === undefined && isHolds(dest)) || sources.some((s) => isHolds(`${dest}/${base(s)}`));
+		}
 		case "dd":
 			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
 	}
@@ -286,7 +316,7 @@ export function checkBash(command: string, owned: ReadonlySet<string>, host: Hos
 		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 	for (const c of simpleCommands(command, [cwd])) {
 		// a `cd` may fail, so every directory the command might run in counts, as for gh
-		if (c.dirs.some((d) => writesHolds(c.words, d, c.remote, host)))
+		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return "blocked: it writes the holds file. Only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:.";
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
@@ -294,7 +324,8 @@ export function checkBash(command: string, owned: ReadonlySet<string>, host: Hos
 	return undefined;
 }
 
-/** The reason to refuse a write or edit to `file`, or undefined. */
-export function checkWrite(file: string): string | undefined {
-	return isHolds(file) ? "blocked: only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:." : undefined;
+/** The reason to refuse a write or edit to `file` (as the tool got it, relative to `cwd`), or undefined. */
+export function checkWrite(file: string, host: Host = NO_HOST, cwd?: string): string | undefined {
+	// pi's tools drop a leading @ from the path
+	return holdsAt(file.replace(/^@/, ""), cwd, false, host) ? "blocked: only Zane edits hold-prs.txt (Hard rules, Work); put the row you want under questions:." : undefined;
 }
