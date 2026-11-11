@@ -234,7 +234,7 @@ class Hourly(unittest.TestCase):
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: zstack s at main, free 25G", out)
         self.assertIn("running  v1 auto idle_min=200  HUNG?", out)
-        self.assertIn("slots: running 1/5, auto 1/3: free 4, auto 2", out)
+        self.assertIn("slots: running 1/7, auto 1/5: free 6, auto 4", out)
         self.assertIn("launch host: vm", out)
         peer.write_text(peer.read_text().replace('"free_gb": 25', '"free_gb": 19'))
         self.assertIn("launch host: local", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))
@@ -301,13 +301,13 @@ class Hourly(unittest.TestCase):
         local, vm = self.t / "root", self.t / "vm-root"
         peers = self.peer_pkg("test-vm", vm)
         (self.t / "hang").touch()
-        for sid in ("p1", "p2"):   # two auto runs already hold slots: 2/5 running, 2/3 auto
+        for sid in ("p1", "p2", "p3", "p4"):   # four auto runs already hold slots: 4/7 running, 4/5 auto
             self.queued(local, sid, 1000, "auto")
             self.assertEqual(self.sh("pi-run", sid, "coding", str(local / "review" / sid / "brief.md")).returncode, 0)
         self.queued(local, "a", 500)
         self.queued(vm, "b", 400, "auto")   # takes the last auto slot
         self.queued(local, "c", 300, "auto")   # auto slots full: waits
-        self.queued(vm, "d", 200)   # the fifth slot
+        self.queued(vm, "d", 200)   # the seventh slot
         self.queued(local, "e", 100)   # every slot full: waits
         dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
         self.assertEqual([x.split(":")[0] for x in dry.splitlines()],
@@ -321,15 +321,15 @@ class Hourly(unittest.TestCase):
         rows = [x.split("\t")[1:5] for x in (local / "pickup.log").read_text().splitlines()[2:]]
         self.assertEqual([x[:3] for x in rows], [["local", "launch", "a"], ["test-vm", "launch", "b"], ["local", "wait", "c"],
                                                  ["test-vm", "launch", "d"], ["local", "wait", "e"]])
-        self.assertIn("slots full: running 4/5, auto 3/3", rows[2][3])
-        self.assertIn("slots full: running 5/5, auto 3/3", rows[4][3])
+        self.assertIn("slots full: running 6/7, auto 5/5", rows[2][3])
+        self.assertIn("slots full: running 7/7, auto 5/5", rows[4][3])
         state = lambda r, sid: json.loads((r / "review" / sid / "run.json").read_text())["state"]   # noqa: E731
         for root_, sid in ((local, "a"), (vm, "b"), (vm, "d")):   # each started on the host whose queue held it
             self.assertEqual(state(root_, sid), "running", sid)
         self.assertFalse((local / "review" / "b").exists())
         for sid in ("c", "e"):
             self.assertEqual(state(local, sid), "queued", sid)
-        self.assertIn("queue: 5 queued, slots now running 5/5, auto 3/3", r.stdout)
+        self.assertIn("queue: 5 queued, slots now running 7/7, auto 5/5", r.stdout)
 
     def test_a_429d_run_frees_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
         def peer(free, runs):
@@ -338,22 +338,22 @@ class Hourly(unittest.TestCase):
             f.chmod(0o755)
             return f"vm={f}"
         q = {"state": "queued", "auto": False, "since": "2026-11-10T00:00:00Z"}
-        held = {f"r{i}": {"state": "running", "auto": False} for i in range(4)}
+        held = {f"r{i}": {"state": "running", "auto": False} for i in range(6)}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(19, {"v": q, **held}))
         self.assertIn("wait vm v: 19G free, under 20G", out)
-        self.assertIn("slots: running 4/5", self.hourly(ONIGIRI_PEERS=peer(25, held)))
+        self.assertIn("slots: running 6/7", self.hourly(ONIGIRI_PEERS=peer(25, held)))
         back = {"state": "queued", "auto": False, "since": "2026-11-09T00:00:00Z", "resume_at": "2099-01-01T00:00:00Z"}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": back, **held}), PI_RUN_DRY="1")
         self.assertIn("wait vm p: after a 429, not before resume_at 2099-01-01T00:00:00Z", out)   # older, but not yet
         self.assertIn("would launch vm v", out)   # the 429'd run's slot went to the next queued run
-        self.assertIn("slots: running 4/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": back, **held})))
+        self.assertIn("slots: running 6/7", self.hourly(ONIGIRI_PEERS=peer(25, {"p": back, **held})))
 
     def test_a_429d_run_resumes_from_the_drain_in_its_own_session_at_its_first_queue_place(self):
         local = self.t / "root"
         self.queued(local, "back", 900, resume_in=-60)    # queued first, hit a 429, resume_at passed
         self.queued(local, "fresh", 300)
         self.queued(local, "later", 1200, resume_in=3600)   # oldest place, but not before its resume_at
-        for i in range(3):   # three runs hold slots: two left
+        for i in range(5):   # five runs hold slots: two left
             self.queued(local, f"h{i}", 2000)
             self.assertEqual(self.sh("pi-run", f"h{i}", "coding", str(local / "review" / f"h{i}" / "brief.md")).returncode, 0)
         (self.t / "hang").touch()
@@ -381,12 +381,12 @@ class Hourly(unittest.TestCase):
 
     def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
         shutil.rmtree(self.t / "root")
-        self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue", PI_RUN_DRY="1"))
+        self.assertIn("queue: 0 queued, slots now running 0/7", self.hourly("queue", PI_RUN_DRY="1"))
         self.assertFalse((self.t / "root").exists())   # a dry pass makes nothing
         r = subprocess.run([str(BIN / "hourly"), "queue"], cwd=self.t, capture_output=True, text=True, timeout=60,
                            env={**self.env, "ONIGIRI_ROOT": "rel/root", "PI_RUN_DRY": "1"})   # a relative root not made yet
         self.assertIn("queue: 0 queued", r.stdout, r.stderr)
-        self.assertIn("queue: 0 queued, slots now running 0/5", self.hourly("queue"))
+        self.assertIn("queue: 0 queued, slots now running 0/7", self.hourly("queue"))
 
     def test_a_second_queue_pass_launches_nothing_while_one_runs(self):
         self.queued(self.t / "root", "solo", 10)
