@@ -380,6 +380,23 @@ test("writes to the real holds file are blocked; reads run", () => {
 	assert.equal(write("hold-prs.txt", "/tmp/t"), "");
 });
 
+test("bin/hold-row is the sanctioned way to append a row relaying Zane's call; direct writes still name it", () => {
+	const row = "preapprove | #7338 | no | " + "a".repeat(40) + " | deep; Zane 11 Nov 14:56 SGT (green at pin)";
+	for (const c of [
+		`bin/hold-row add '${row}'`,
+		`~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add "${row}"`,
+		`ONIGIRI_ROOT=/srv/onigiri bin/hold-row add '${row}'`,
+		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add '${row}'"`,
+		`ssh vm 'bin/hold-row add "hold | 7400 | no | Zane 11 Nov 17:00 SGT: wait for bench"'`,
+	])
+		allowed(c, "/srv/onigiri");
+	// the helper does not launder a redirection or an edit on the same line
+	blocked(`bin/hold-row add '${row}' > /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
+	blocked(`bin/hold-row add '${row}'; echo x >> /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
+	assert.match(checkBash("echo x >> /srv/onigiri/hold-prs.txt", OWNED, host) ?? "", /bin\/hold-row add/);
+	assert.match(checkWrite("/srv/onigiri/hold-prs.txt", host) ?? "", /bin\/hold-row add/);
+});
+
 test("the real holds paths are this host's config, matched on the filesystem with symlinks followed", () => {
 	assert.deepEqual(holdsPaths({ ONIGIRI_ROOT: "/srv/onigiri" }), ["/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
 	assert.deepEqual(holdsPaths({}), ["~/onigiri/hold-prs.txt", "/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);

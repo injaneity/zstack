@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""hold-row: the one sanctioned way for a session to write the holds file, relaying Zane's explicit call.
+
+  hold-row add '<kind> | <target> | <rules> | ... | <source>'
+
+It appends exactly one row to $ONIGIRI_ROOT/hold-prs.txt (default /srv/onigiri, as hosts/vm/merge_job.py). The row's
+last column is its source: it must name Zane and the time of his call (`Zane 11 Nov 14:56 SGT`, or an ISO date and
+time). Under a lock it backs the file up to hold-prs.txt.bak-<time> first, writes the new file beside it and renames
+it in, then runs the merge job's parser (parse_holds) on the result and restores the backup if parsing fails. The new text is parsed
+before the rename too, so a rejected row never reaches the live file even when the run dies halfway. A row
+already in the file is not added again, so a rerun changes nothing. A file that does not exist is not created: on the
+mini, the synced copy is read-only and never written here. Exit 0 added or already there, 1 refused or restored,
+2 usage. Direct edits of the holds file stay blocked by rule-guard (docs/RULE-GUARD.md).
+"""
+import fcntl
+import importlib.util
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+_spec = importlib.util.spec_from_file_location("merge_job", os.path.join(PKG, "hosts", "vm", "merge_job.py"))
+mj = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mj)
+
+MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+# `11 Nov 14:56`, `Nov 11 14:56`, or `2026-11-11 14:56` / `2026-11-11T14:56`
+WHEN = re.compile(rf"\b(\d{{1,2}} ({MONTHS})|({MONTHS}) \d{{1,2}}|\d{{4}}-\d{{2}}-\d{{2}})[ ,T]+\d{{1,2}}:\d{{2}}\b")
+
+
+def refuse(msg, code=1):
+    print(f"hold-row: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def check_row(row):
+    """The row's problem before anything is written, or None."""
+    # the parser splits on every separator splitlines() knows (U+2028, \x1c, ...), not only \n
+    if row.splitlines() != [row]:
+        return "one row only: it has a line break"
+    f = [x.strip() for x in row.split("|")]
+    if len(f) < 3 or not all(f[:2]) or row.lstrip().startswith("#"):
+        return "a row is `kind | target | rules | ... | source`"
+    if not re.search(r"\bZane\b", f[-1]) or not WHEN.search(f[-1]):
+        return f"the last column must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {f[-1]!r}"
+    return None
+
+
+def replace(holds, text):
+    """Write `text` beside the holds file and rename it in, so a reader never sees half a file."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(holds), prefix=".hold-prs.txt.")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    shutil.copymode(holds, tmp)
+    os.replace(tmp, holds)
+
+
+def add(row, holds):
+    why = check_row(row)
+    if why:
+        refuse(why)
+    if not os.path.isfile(holds):
+        refuse(f"{holds} does not exist; rows are appended only to the merge host's holds file")
+    with open(os.path.join(os.path.dirname(holds), ".hold-row.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = mj.read(holds)
+        try:
+            mj.parse_holds(old)
+        except ValueError as e:
+            refuse(f"the holds file is already unreadable ({e}); not adding to it")
+        if row.strip() in (x.strip() for x in old.splitlines()):
+            print(f"already there: {row.strip()}")
+            return
+        new = old + ("" if not old or old.endswith("\n") else "\n") + row.strip() + "\n"
+        # parsed before it goes live too, so a run killed before the restore below never leaves it unreadable
+        try:
+            mj.parse_holds(new)
+        except ValueError as e:
+            refuse(f"the merge job's parser rejects the result ({e}); nothing written")
+        backup = f"{holds}.bak-{datetime.now(mj.SGT).strftime('%Y%m%d-%H%M%S-%f')}"
+        shutil.copy2(holds, backup)
+        replace(holds, new)
+        try:
+            mj.parse_holds(mj.read(holds))
+        except ValueError as e:
+            replace(holds, mj.read(backup))
+            refuse(f"the merge job's parser rejects the result ({e}); restored {backup}")
+        print(f"added: {row.strip()}\nbackup: {backup}")
+
+
+def main(argv):
+    if len(argv) != 2 or argv[0] != "add":
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(2)
+    # a symlinked holds file keeps its link: the rename lands on the file it points to
+    add(argv[1], os.path.realpath(mj.HOLDS_FILE))
+
+
+if __name__ == "__main__":
+    sha = subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    print(f"zstack {sha or 'unknown'}", file=sys.stderr)
+    main(sys.argv[1:])

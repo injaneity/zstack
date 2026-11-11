@@ -5,7 +5,7 @@
 ### Work
 
 - Work in `/home/box/agent-data/onigiri/cua` unless the task names another path.
-- Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. Read it before touching any PR. rule-guard refuses writes to it.
+- Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. Read it before touching any PR. rule-guard refuses writes to it. To relay Zane's explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names his call and its time.
 
 ### Patent hold
 
