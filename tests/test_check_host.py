@@ -1,0 +1,102 @@
+"""Tests for bin/check-host against a fake pi, gh and claude in an empty HOME: each missing dependency is one FAIL line
+naming its fix and the exit is 1; with everything present it exits 0.
+Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+PKG = Path(__file__).resolve().parent.parent
+# fake pi: `pi list` prints $T/packages, `--list-models` prints $T/models, `-p` prints $T/answer-<provider> (exit 0) or fails.
+FAKE_PI = """#!/bin/bash
+case "$1" in
+  list) cat "$T/packages" 2>/dev/null; exit 0;;
+  --list-models) echo "provider model"; cat "$T/models" 2>/dev/null; exit 0;;
+esac
+while [ $# -gt 0 ]; do [ "$1" = --provider ] && p=$2; shift; done
+[ -e "$T/answer-$p" ] || { echo "Error: refused" >&2; exit 1; }
+cat "$T/answer-$p"
+"""
+FAKE_GH = '#!/bin/bash\n[ -e "$T/gh-ok" ] && exit 0\necho "You are not logged into any GitHub hosts." >&2; exit 1\n'
+PACKAGES = "git:github.com/injaneity/zstack\ngit:github.com/earendil-works/pi-claude-code@70abb65\nnpm:@ff-labs/pi-fff@0.11.0\n"
+MODELS = "claude-code claude-opus-5-5\nopenai-codex gpt-6.1-terra\n"
+
+
+class CheckHost(unittest.TestCase):
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.t = t = Path(td.name)
+        (t / "bin").mkdir()
+        for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH), ("claude", "#!/bin/sh\n"), ("node", "#!/bin/sh\n")):
+            (t / "bin" / name).write_text(text)
+            (t / "bin" / name).chmod(0o755)
+        self.env = {"PATH": f"{t}/bin:/usr/bin:/bin", "HOME": str(t), "T": str(t), "ONIGIRI_HOST": "",
+                    "ONIGIRI_ROOT": str(t / "root"), "PI_CODING_AGENT_DIR": str(t / "agent")}
+
+    def check(self, *args):
+        r = subprocess.run([str(PKG / "bin" / "check-host"), *args], env=self.env, capture_output=True, text=True, timeout=120)
+        return r.returncode, [x for x in r.stdout.splitlines() if not x.startswith("FAIL  parity")]
+
+    def ready(self):
+        (self.t / "packages").write_text(PACKAGES)
+        (self.t / "models").write_text(MODELS)
+        (self.t / "gh-ok").touch()
+        for p in ("claude-code", "openai-codex"):
+            (self.t / f"answer-{p}").write_text("ok\n")
+
+    def fails(self, lines):
+        return [x for x in lines if x.startswith("FAIL")]
+
+    def test_an_empty_host_fails_each_missing_dependency_with_its_fix(self):
+        rc, lines = self.check()
+        self.assertEqual(rc, 1)
+        text = "\n".join(self.fails(lines))
+        for want in ("pi install npm:@ff-labs/pi-fff@0.11.0", "pi install git:github.com/earendil-works/pi-claude-code@",
+                     "pi lists no claude-code model", "pi lists no openai-codex model", "gh auth login"):
+            self.assertIn(want, text)
+        self.assertIn("check-host: ", lines[-1])
+
+    def test_a_ready_host_passes_offline_but_parity_is_still_checked(self):
+        self.ready()
+        rc, lines = self.check("--offline")
+        self.assertEqual(self.fails(lines), [], lines)
+        self.assertFalse(any(x.startswith("ok    live") for x in lines))
+        self.assertEqual(rc, 1)   # this temp host has no cua clone, so check-parity's hook line fails it
+
+    def test_a_listed_provider_that_refuses_a_real_call_fails(self):
+        """The 11 Nov fresh run: pi listed claude-code models and every request came back as a billing refusal."""
+        self.ready()
+        os.unlink(self.t / "answer-claude-code")
+        _, lines = self.check()
+        self.assertTrue(any(x.startswith("FAIL  live claude-code claude-opus-5-5") and "refused" in x for x in lines), lines)
+        self.assertTrue(any(x.startswith("ok    live openai-codex") for x in lines), lines)
+
+    def test_claude_code_needs_the_claude_cli_on_path(self):
+        self.ready()
+        os.unlink(self.t / "bin" / "claude")
+        _, lines = self.check("--offline")
+        self.assertTrue(any("`claude` CLI is not on PATH" in x for x in self.fails(lines)), lines)
+
+    def test_the_merge_host_needs_the_holds_file(self):
+        self.ready()
+        host = PKG / "hosts" / "checkhost-test"
+        host.mkdir()
+        self.addCleanup(lambda: (host / "host.sh").unlink() or host.rmdir())
+        (host / "host.sh").write_text("export ONIGIRI_MERGE_HOST=checkhost-test\n")
+        self.env["ONIGIRI_HOST"] = "checkhost-test"
+        _, lines = self.check("--offline")
+        self.assertTrue(any(x.startswith("FAIL  holds:") for x in lines), lines)
+        (self.t / "root").mkdir()
+        (self.t / "root" / "hold-prs.txt").write_text("")
+        _, lines = self.check("--offline")
+        self.assertTrue(any(x.startswith("ok    holds:") for x in lines), lines)
+
+    def test_a_bad_argument_is_usage(self):
+        r = subprocess.run([str(PKG / "bin" / "check-host"), "--nope"], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

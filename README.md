@@ -10,7 +10,17 @@ pstack splits work across agents: one model designs, a subagent implements, more
 pi install git:github.com/injaneity/zstack
 ```
 
-That is the whole install: skills, extensions and agents all load from the package. You still log in to each provider yourself. `config/models.json` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended (`bin/pi-run --help`). Its lifecycle is one state machine, `bin/PiRun.tla`, which CI model-checks and holds the launcher to. `model/Zstack.tla` is the whole flow from the chat to merged, with the merge job. CI model-checks it, and its mutants (`model/mutants.py`) each put back a bug the flow had. `docs/HOST.md` and `hosts/` are one example deployment.
+That installs the skills, extensions and agents. A fresh host needs these too (a fresh-HOME install on 11 Nov 2026 failed without each one):
+
+- **Tools** on `PATH`: `pi`, `node`, `git`, `gh`, and `python3` 3.9 or newer.
+- **The claude-code provider** for the `coding`, `research` and `designer:1` roles: the Claude Code CLI (`npm install -g @anthropic-ai/claude-code`, then `claude auth login`, or `CLAUDE_CODE_OAUTH_TOKEN` exported by the host file) and the pi package, pinned:
+  `pi install git:github.com/earendil-works/pi-claude-code@70abb65186592ca788b29b3db22c3160d629c41f`.
+  Later commits (from d070212, which sets `CLAUDE_CODE_ENTRYPOINT=pi-agent`) get every request refused as third-party usage on a Claude plan, while pi still lists the models.
+- **The openai-codex provider** for `explorer`, `verifier` and `designer:2`: run `pi`, then `/login` and pick ChatGPT. Without it the verifier refuses to run and the explorer falls back to your model.
+- **FFF's search tools** for the agents: `pi install npm:@ff-labs/pi-fff@0.11.0`. Without it pi drops `fffind`, `ffgrep` and `fff-multi-grep` from their tool lists without a word.
+- **`gh auth login`**, for the hourly pass, the merge job and PRs.
+
+Then run `bin/check-host` (`--offline` skips the live calls). It prints one `ok` or `FAIL` line per dependency, makes one real `pi -p` call per provider, runs `hosts/check-parity`, and exits 1 on any `FAIL`. A deployment's host file, cua clone, holds file and webhook key are `docs/HOST.md`'s. `config/models.json` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended (`bin/pi-run --help`). Its lifecycle is one state machine, `bin/PiRun.tla`, which CI model-checks and holds the launcher to. `model/Zstack.tla` is the whole flow from the chat to merged, with the merge job. CI model-checks it, and its mutants (`model/mutants.py`) each put back a bug the flow had. `docs/HOST.md` and `hosts/` are one example deployment.
 
 Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe the work and let the model route to it. The `/onigiri-mode` prompt template expands inside pi, so it works on any provider, including claude-code.
 
