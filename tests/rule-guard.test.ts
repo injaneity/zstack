@@ -111,6 +111,13 @@ test("a cancelled or timed-out run in a merge-job repo is rerun without asking; 
 	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
 	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inCua);
 	blocked("gh run rerun 9 -R trycua/cua --failed -R", inCua);
+	// a placeholder takes its part from the current repo, so {owner}/cua under trycua/other is trycua/cua
+	const otherEnv = { ...host, ghRepo: "trycua/other" };
+	for (const c of ["gh api -X POST repos/{owner}/cua/actions/runs/9/rerun", "gh api -X PUT repos/{owner}/cua/pulls/1/merge", "gh api -X PUT repos/trycua/{repo}/pulls/1/merge"])
+		assert.match(checkBash(c, OWNED, c.includes("{repo}") ? { ...host, ghRepo: "other/cua" } : otherEnv, "/scratch") ?? "", /^blocked: /, c);
+	assert.equal(checkBash("gh api -X POST repos/{owner}/cua/actions/runs/7/rerun", OWNED, otherEnv, "/scratch"), undefined);
+	assert.equal(checkBash("gh api -X PUT repos/{owner}/zstack/pulls/1/merge", OWNED, otherEnv, "/scratch"), undefined);
+	blocked("gh api -X PUT repos/{owner}/{bogus}/pulls/1/merge", inCua);
 	blocked("gh run rerun 6 -R trycua/cua"); // conclusion unknown
 	blocked("gh run rerun -R trycua/cua"); // no run named: gh would prompt for one
 	blocked("gh run rerun $RUN -R trycua/cua");

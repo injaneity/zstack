@@ -114,9 +114,10 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 }
 
 /** The repo a gh command names: -R/--repo or a PR or run URL operand, or for `gh api` the endpoint's repos/<owner>/<name>/
- * path. `{owner}` means the cwd's. Option values (a header, a field, a body) name nothing. */
+ * path, whose `{owner}` and `{repo}` gh fills from the current repo (ghOwned resolves them). Option values (a header, a
+ * field, a body) name nothing. */
 function ghNamedRepo(w: string[]): string | undefined {
-	const named = (m: RegExpMatchArray | null | undefined) => (m && !m[1].includes("{") ? repoName(m[1]) : undefined);
+	const named = (m: RegExpMatchArray | null | undefined) => (m ? repoName(m[1]) : undefined);
 	if (w[1] === "api") return named(operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\//));
 	for (let i = 0; i < w.length; i++) {
 		const a = w[i];
@@ -202,9 +203,17 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string
 	const pre = raw.slice(0, raw.length - w.length);
 	const inline = pre.map((a) => a.match(/^GH_REPO=(.*)$/)?.[1]).filter((v) => v !== undefined).pop();
 	const cleared = pre.some((a, i) => a === "-i" || a === "--ignore-environment" || a === "--unset=GH_REPO" || ((a === "-u" || a === "--unset") && pre[i + 1] === "GH_REPO"));
-	const named = ghNamedRepo(w) ?? repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
+	const pattern = ghNamedRepo(w);
+	const named = pattern && !pattern.includes("{") ? pattern : repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
-	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
+	const current = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
+	// `repos/{owner}/cua/...` takes each placeholder from the current repo, whichever it is
+	const fill = (r: string | undefined) => {
+		if (r === undefined) return undefined;
+		const [o, n] = r.split("/");
+		return pattern!.replace(/\{owner\}/g, o).replace(/\{repo\}/g, n);
+	};
+	const repos = pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
 	if (hit && act.includes("rerun")) {
