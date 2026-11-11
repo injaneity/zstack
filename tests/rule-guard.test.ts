@@ -9,7 +9,10 @@ const OWNED = MERGE_OWNED;
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
 // and a fake filesystem whose only holds files are these
 const FILES = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt"]);
-const host = { repoAt, isFile: (p: string) => FILES.has(p) };
+// and a fake GitHub: trycua/cua run 7 was cancelled (its job 70 too), run 8 timed out, run 9 and job 90 failed
+const CI: Record<string, string> = { "run 7": "cancelled", "job 70": "cancelled", "run 8": "timed_out", "run 9": "failure", "job 90": "failure" };
+const ciConclusion = (repo: string, kind: string, id: string) => (repo === "trycua/cua" ? CI[`${kind} ${id}`] : undefined);
+const host = { repoAt, isFile: (p: string) => FILES.has(p), ciConclusion };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
@@ -84,6 +87,48 @@ test("merging or rerunning CI in a merge-job repo is blocked", () => {
 	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/rerun-failed-jobs");
 });
 
+test("a cancelled or timed-out run in a merge-job repo is rerun without asking; a real failure is not", () => {
+	allowed("gh run rerun 7 -R trycua/cua --failed");
+	allowed("gh run rerun 7 --failed", inCua);
+	allowed("gh run rerun 8 -R trycua/cua");
+	allowed("gh run rerun --job 70 -R trycua/cua");
+	allowed("gh run rerun 9 --job=70 -R trycua/cua"); // the job is what reruns
+	allowed("gh api -X POST repos/trycua/cua/actions/runs/7/rerun-failed-jobs");
+	allowed("gh api -X POST repos/trycua/cua/actions/jobs/70/rerun");
+	assert.equal(checkBash("gh run rerun 7 --failed", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch"), undefined);
+	blocked("gh run rerun 9 -R trycua/cua --failed"); // failed: Zane's call
+	blocked("gh run rerun --job 90 -R trycua/cua");
+	blocked("gh run rerun 7 --job 90 -R trycua/cua");
+	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/rerun-failed-jobs");
+	// only the endpoint counts, not a field naming a cancelled run
+	blocked("gh api -f x=repos/trycua/cua/actions/runs/7/rerun repos/trycua/cua/actions/runs/9/rerun");
+	blocked("gh api repos/trycua/cua/actions/runs/9/rerun -f x=repos/trycua/cua/actions/runs/7/rerun");
+	blocked("gh api -X POST repos/trycua/cua/actions/runs/7/rerun/../../9/rerun");
+	allowed("gh api -H 'Accept: x' -X POST /repos/trycua/cua/actions/runs/7/rerun");
+	// an option value naming another repo does not hide the endpoint's
+	blocked("gh api -X POST -H x/repos/other/repo/actions/runs/7/rerun repos/trycua/cua/actions/runs/9/rerun", "/scratch");
+	blocked("gh api --jq x/repos/other/repo/ -X POST repos/trycua/cua/actions/runs/9/rerun", "/scratch");
+	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
+	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inCua);
+	blocked("gh run rerun 9 -R trycua/cua --failed -R", inCua);
+	// a placeholder takes its part from the current repo, so {owner}/cua under trycua/other is trycua/cua
+	const otherEnv = { ...host, ghRepo: "trycua/other" };
+	for (const c of ["gh api -X POST repos/{owner}/cua/actions/runs/9/rerun", "gh api -X PUT repos/{owner}/cua/pulls/1/merge", "gh api -X PUT repos/trycua/{repo}/pulls/1/merge"])
+		assert.match(checkBash(c, OWNED, c.includes("{repo}") ? { ...host, ghRepo: "other/cua" } : otherEnv, "/scratch") ?? "", /^blocked: /, c);
+	assert.equal(checkBash("gh api -X POST repos/{owner}/cua/actions/runs/7/rerun", OWNED, otherEnv, "/scratch"), undefined);
+	assert.equal(checkBash("gh api -X PUT repos/{owner}/zstack/pulls/1/merge", OWNED, otherEnv, "/scratch"), undefined);
+	blocked("gh api -X PUT repos/{owner}/{bogus}/pulls/1/merge", inCua);
+	blocked("gh run rerun 6 -R trycua/cua"); // conclusion unknown
+	blocked("gh run rerun -R trycua/cua"); // no run named: gh would prompt for one
+	blocked("gh run rerun $RUN -R trycua/cua");
+	blocked("gh run rerun 7 --failed", "/tmp/x"); // repo can't be told
+	allowed("cd /zs/wt || gh run rerun 7", inCua); // trycua/cua's run 7 is cancelled; zstack is not owned
+	blocked("cd /zs/wt || gh run rerun 9", inCua);
+	assert.match(checkBash("gh run rerun 7 -R trycua/cua", OWNED, { repoAt, isFile: () => false }) ?? "", /^blocked: /); // no GitHub lookup
+	// cancelled CI never opens a merge
+	blocked("gh run rerun 7 -R trycua/cua && gh pr merge 1 -R trycua/cua");
+});
+
 test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh pr merge 33 -R injaneity/zstack --squash");
 	allowed("gh pr merge 33 --squash");
@@ -136,6 +181,7 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	blocked(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -F query=@m.graphql -f q='enablePullRequestAutoMerge'`);
+	blocked(`gh api -X POST graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	allowed("gh pr ready 7040 -R trycua/cua --undo");
 	allowed("gh pr ready 33 -R injaneity/zstack", inCua);
 	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);

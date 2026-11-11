@@ -15,7 +15,13 @@ export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boo
 /** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
  * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
  * with ~) is an existing file. `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
-export interface Host { repoAt(dir: string): string | null | undefined; isFile(p: string): boolean; ghRepo?: string }
+export interface Host {
+	repoAt(dir: string): string | null | undefined;
+	isFile(p: string): boolean;
+	ghRepo?: string;
+	/** A workflow run's or job's conclusion in `repo` (owner/name), as GitHub reports it; undefined when it can't be told. */
+	ciConclusion?(repo: string, kind: "run" | "job", id: string): string | undefined;
+}
 const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
@@ -107,13 +113,22 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 	return undefined;
 }
 
-/** The repo a gh command names: -R/--repo, a PR or run URL, or a repos/<owner>/<name>/ API path. `{owner}` means the cwd's. */
+/** The repo a gh command names: -R/--repo or a PR or run URL operand, or for `gh api` the endpoint's repos/<owner>/<name>/
+ * path, whose `{owner}` and `{repo}` gh fills from the current repo (ghOwned resolves them). Option values (a header, a
+ * field, a body) name nothing. */
 function ghNamedRepo(w: string[]): string | undefined {
+	const named = (m: RegExpMatchArray | null | undefined) => (m ? repoName(m[1]) : undefined);
+	if (w[1] === "api") return named(operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\//));
 	for (let i = 0; i < w.length; i++) {
 		const a = w[i];
 		if (a === "-R" || a === "--repo") return repoName(w[i + 1]);
-		const m = a.match(/^(?:-R|--repo=)(.+)$/) ?? a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//) ?? a.match(/(?:^|\/)repos\/([^/]+\/[^/]+)\//);
-		if (m && !m[1].includes("{")) return repoName(m[1]);
+		const m = a.match(/^(?:-R|--repo=)(.+)$/);
+		if (m) return repoName(m[1]);
+		if (GH_VALUE_OPTS.has(a)) i++;
+	}
+	for (const a of operands(w.slice(1), GH_VALUE_OPTS)) {
+		const r = named(a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//));
+		if (r) return r;
 	}
 	return undefined;
 }
@@ -139,13 +154,39 @@ function ghApiWrites(w: string[]): boolean {
 const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
+// Zane, 11 Nov: cancelled or stuck CI is rerun without asking; only real failures go to him. A stuck job is cancelled
+// first (GitHub reruns only finished runs), so these two cover it.
+const RERUNNABLE = new Set(["cancelled", "timed_out"]);
+
+// gh api options that take the next word as their value
+const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+
+/** What a CI rerun targets: `gh run rerun <run> [--job <job>]`, or an actions runs/jobs rerun API path. */
+function rerunTarget(w: string[]): { kind: "run" | "job"; id: string } | undefined {
+	if (w[1] === "api") {
+		// the endpoint is the first operand; a field value (`-f x=.../runs/7/rerun`) names nothing
+		const m = operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^\/?repos\/[^/]+\/[^/]+\/actions\/(runs|jobs)\/(\d+)\/rerun(?:-failed-jobs)?$/);
+		return m ? { kind: m[1] === "runs" ? "run" : "job", id: m[2] } : undefined;
+	}
+	let run: string | undefined, job: string | undefined;
+	for (let i = 3; i < w.length; i++) {
+		const a = w[i];
+		const v = a === "-j" || a === "--job" ? w[++i] : a.match(/^(?:-j|--job=)(.+)$/)?.[1];
+		if (v !== undefined) job = v;
+		else if (a === "-R" || a === "--repo") i++;
+		else if (!a.startsWith("-")) run = a;
+	}
+	const target = job !== undefined ? { kind: "job" as const, id: job } : run !== undefined ? { kind: "run" as const, id: run } : undefined;
+	return target && /^\d+$/.test(target.id) ? target : undefined;
+}
+
 // gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
 
 function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string>, host: Host, ready: boolean): string | undefined {
 	if (!owned.size || w[0] !== "gh") return undefined;
 	const api = w[1] === "api" && ghApiWrites(w);
-	if (api && w[2] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
 	// a flag, not the value of the option before it (`--subject --help`)
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
@@ -162,11 +203,29 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string
 	const pre = raw.slice(0, raw.length - w.length);
 	const inline = pre.map((a) => a.match(/^GH_REPO=(.*)$/)?.[1]).filter((v) => v !== undefined).pop();
 	const cleared = pre.some((a, i) => a === "-i" || a === "--ignore-environment" || a === "--unset=GH_REPO" || ((a === "-u" || a === "--unset") && pre[i + 1] === "GH_REPO"));
-	const named = ghNamedRepo(w) ?? repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
+	const pattern = ghNamedRepo(w);
+	const named = pattern && !pattern.includes("{") ? pattern : repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
 	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
-	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
+	const current = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
+	// `repos/{owner}/cua/...` takes each placeholder from the current repo, whichever it is
+	const fill = (r: string | undefined) => {
+		if (r === undefined) return undefined;
+		const [o, n] = r.split("/");
+		return pattern!.replace(/\{owner\}/g, o).replace(/\{repo\}/g, n);
+	};
+	const repos = pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
+	if (hit && act.includes("rerun")) {
+		// every owned repo the command might act in must report the run or job cancelled or timed out
+		const t = rerunTarget(w);
+		for (const r of new Set(repos.filter((r) => owned.has(r as string)) as string[])) {
+			const c = t && host.ciConclusion?.(r, t.kind, t.id);
+			if (!c || !RERUNNABLE.has(c))
+				return `${act} in ${r}: only a cancelled or timed-out run or job is rerun without asking (it is ${c ?? "unknown"}); a real failure goes to Zane`;
+		}
+		return undefined;
+	}
 	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
 }
 
