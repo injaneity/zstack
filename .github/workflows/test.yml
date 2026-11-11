@@ -63,7 +63,7 @@ jobs:
       - name: skills and agent types have frontmatter
         run: |
           fail=0
-          for f in skills/*/SKILL.md agents/*.md; do
+          for f in skills/*/SKILL.md skills/cua/*/SKILL.md agents/*.md; do
             head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; fail=1; }
           done
           exit $fail
@@ -83,8 +83,8 @@ jobs:
           # A skill reference is /skill:x, ../x/SKILL.md, skills/x/, or a lowercase **x** / **`x`**.
           # A target repo's .cursor/skills/x/ or .pi/skills/x/ is that repo's skill, not ours, so it is skipped.
           # Lowercase bold in these docs is reserved for skill and agent names, so a stray one fails here.
-          # The skills vendored verbatim from pstack (docs/PROVENANCE.md) use bold as emphasis, so only their links are checked.
-          verbatim='^skills/(statechart|create-formal-verification-skill|maintain-formal-verification-skill)/'
+          # The skills vendored verbatim from pstack and trycua/cua (docs/PROVENANCE.md) use bold as emphasis, so only their links are checked.
+          verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/|cua/)'
           agents=$(sed -n 's/^name: *//p' agents/*.md)
           fail=0
           while IFS=: read -r file ref; do
@@ -92,7 +92,9 @@ jobs:
             [[ $ref == .cursor/* || $ref == .pi/* ]] && continue
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
-            [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
+            # skills/cua/ is a group directory: it holds skills, not a SKILL.md of its own.
+            [ "$name" = cua ] && [ -d skills/cua ] && continue
+            [ -f "skills/$name/SKILL.md" ] || [ -f "skills/cua/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
           done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
