@@ -38,7 +38,8 @@ def refuse(msg, code=1):
 
 def check_row(row):
     """The row's problem before anything is written, or None."""
-    if "\n" in row or "\r" in row:
+    # the parser splits on every separator splitlines() knows (U+2028, \x1c, ...), not only \n
+    if row.splitlines() != [row]:
         return "one row only: it has a line break"
     f = [x.strip() for x in row.split("|")]
     if len(f) < 3 or not all(f[:2]) or row.lstrip().startswith("#"):

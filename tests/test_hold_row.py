@@ -75,6 +75,9 @@ class HoldRow(unittest.TestCase):
                     f"preapprove | #7338 | no | {SHA} | deep; ops 11 Nov 14:56 SGT",      # not Zane
                     f"preapprove | #7338 | no | {SHA} | Zane 11 Nov 14:56 SGT | deep",    # the source is the last column
                     "hold | 1 | no | Zane 11 Nov 14:56\nhold | 2 | no | Zane 11 Nov 14:56",  # two rows
+                    "hold | 1 | no | x\u2028preapprove | #1 | no | " + "e" * 40 + " | Zane 11 Nov 14:56",  # two rows to splitlines()
+                    "hold | 1 | no | x\x1chold | 2 | no | Zane 11 Nov 14:56",
+                    "",
                     "# Zane 11 Nov 14:56"):
             with self.subTest(row=row):
                 r = self.run_tool("add", row)
