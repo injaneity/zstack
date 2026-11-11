@@ -1063,7 +1063,7 @@ class PatentPush(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             os.makedirs(f"{root}/review/r1")
             pub, stg = "https://github.com/trycua/cua.git", "https://github.com/trycua/cua-staging"
-            line = lambda sha: io.StringIO(f"refs/heads/fix/x {sha} refs/heads/fix/x {'0' * 40}\n")   # noqa: E731
+            line = lambda sha, more="": io.StringIO(f"refs/heads/fix/x {sha} refs/heads/fix/x {'0' * 40}\n{more}")   # noqa: E731
             with patch.object(pp, "diff_hits", return_value=[]):
                 for sid, url in (("r1", pub), ("r1", stg), (None, pub), ("gone", pub), ("../r1", pub)):
                     with patch.dict(os.environ, {"PI_SESSION_ID": sid} if sid else {}, clear=False):
@@ -1072,7 +1072,13 @@ class PatentPush(unittest.TestCase):
                         self.assertEqual(pp.main(["origin", url], line("a" * 40), root=root, out=io.StringIO()), 0)
             with patch.object(pp, "diff_hits", return_value=["src/pairing.rs"]), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
                 pp.main(["origin", pub], line("b" * 40), staging_ok=lambda: False, root=root, out=io.StringIO())   # held: not pushed
-            self.assertEqual(Path(f"{root}/review/r1/pushed").read_text(), f"{'a' * 40} fix/x\n")
+            held = lambda sha, cwd=None: ["src/pairing.rs"] if sha == "d" * 40 else []   # noqa: E731
+            with patch.object(pp, "diff_hits", side_effect=held), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
+                two = line("c" * 40, f"refs/heads/y {'d' * 40} refs/heads/y {'0' * 40}\n")   # the second ref refuses the whole push
+                self.assertEqual(pp.main(["origin", pub], two, staging_ok=lambda: False, root=root, out=io.StringIO()), 1)
+            rows = [x.split() for x in Path(f"{root}/review/r1/pushed").read_text().splitlines()]
+            self.assertEqual([x[:2] for x in rows], [["a" * 40, "fix/x"]])
+            self.assertRegex(rows[0][2], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$")
             self.assertEqual(sorted(os.listdir(f"{root}/review")), ["r1"])
 
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):

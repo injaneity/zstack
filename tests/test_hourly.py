@@ -346,7 +346,10 @@ class Hourly(unittest.TestCase):
         d.mkdir()
         (d / "brief.md").write_text("task\nrole: coding\n")
         (d / "brief.full.md").write_text("task\nrole: coding\nwake: finish\n")
-        (d / "pushed").write_text(f"{'c' * 40} fix/x\n{sha} salvage/7255\n")   # cua's pre-push hook, one line per push
+        (d / "pushed").write_text(f"{'c' * 40} fix/x 2026-11-10T03:00:00.000000Z\n{sha} salvage/7255 2026-11-10T03:30:00.000000Z\n")
+        e = self.review("earlier")   # pushed the same head before (its push rejected): the later push owns it
+        e.mkdir()
+        (e / "pushed").write_text(f"{sha} salvage/7255 2026-11-10T02:00:00.000000Z\n")
         (d / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "pid": 1, "start": "t", "rc": 0, "wake_finish": True,
                                                 "wake": "done", "resume_at": None, "since": "2026-11-10T20:10:17Z", "role": "coding",
                                                 "extra": []}))

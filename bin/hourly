@@ -129,16 +129,14 @@ def facts():
 
 
 def pushed(review):
-    """{sha: id} from every review/<id>/pushed (cua's pre-push hook writes `<sha> <branch>` per push to trycua/cua): the run
-    that pushed each head. A head two runs pushed belongs to the later push."""
-    out = {}
-    files = [(os.path.getmtime(p), sid, p) for sid in (os.listdir(review) if os.path.isdir(review) else [])
-             if os.path.isfile(p := os.path.join(review, sid, "pushed"))]
-    for _, sid, p in sorted(files):
-        for line in open(p, errors="replace"):
-            if re.fullmatch(r"[0-9a-f]{40}", (line.split() or [""])[0]):
-                out[line.split()[0]] = sid
-    return out
+    """{sha: id} from every review/<id>/pushed (cua's pre-push hook writes `<sha> <branch> <utc time>` per ref pushed to
+    trycua/cua): the run that pushed each head. A head two runs pushed belongs to the later push."""
+    rows = []
+    for sid in sorted(os.listdir(review)) if os.path.isdir(review) else []:
+        if os.path.isfile(p := os.path.join(review, sid, "pushed")):
+            rows += [(f[2], f[0], sid) for f in (x.split() for x in open(p, errors="replace"))
+                     if len(f) == 3 and re.fullmatch(r"[0-9a-f]{40}", f[0])]
+    return {sha: sid for _, sha, sid in sorted(rows)}
 
 
 RED = re.compile(r"cua#(\d+) ([0-9a-f]{7,40}) wait who=session: (red after rerun: .*)")
