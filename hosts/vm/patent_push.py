@@ -20,9 +20,10 @@ A diff that cannot be read counts as held (fail closed).
 
 A push to trycua/cua from a pi session (PI_SESSION_ID, set by bin/pi-run) that the hook lets through whole appends
 `<sha> <branch> <utc time>` per ref to <root>/review/<id>/pushed. That file names the thread that pushed a PR's head,
-which owns its CI: bin/hourly reopens it when the PR goes red at that head (bin/pi-run ci). The hook runs before git
-sends anything, so a push the remote then rejects is recorded too. That sha is the run's own commit, and a later push of
-it by another run has a later time and wins (bin/hourly pushed()).
+which owns its CI: bin/hourly reopens it when the PR goes red at that head (bin/pi-run ci), matching the PR's own head
+sha and branch and taking the latest push. The hook runs before git sends anything, so a push the remote then rejects is
+recorded too. For a branch already at the pushed sha git hands the hook no ref line (nothing to send), so a rejected
+attempt is one whose sha was not the branch's head at the time: it can name the owner only of a head that run made.
 
 """
 import os

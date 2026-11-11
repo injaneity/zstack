@@ -358,9 +358,15 @@ class Hourly(unittest.TestCase):
                         f"'dry-run cua#7338 {sha[:9]} wait who=session: red after rerun: ci-gate, contract clients / result' "
                         f"'dry-run cua#7400 {other[:9]} wait who=session: red after rerun: ci-gate' "
                         "'dry-run cua#7401 1234567ab wait who=session: merge conflict';;\n"
-                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "pushed": {}}\';; esac\n')
+                        '*) echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": {}, "pushed": {"'
+                        f'{sha} salvage/7255": ["vm-older", "2026-11-10T01:00:00.000000Z"]}}}}\';; esac\n')   # the VM pushed it first
         peer.chmod(0o755)
         env = dict(ONIGIRI_PEERS=f"vm={peer}", ONIGIRI_MERGE_HOST="vm")
+        gh = self.t / "bin" / "gh"   # gh pr view: each PR's head and branch now
+        gh.write_text(gh.read_text().replace("case \"$*\" in ", "case \"$*\" in *'pr view 7338'*) echo "
+                                             f"'{{\"headRefOid\": \"{sha}\", \"headRefName\": \"salvage/7255\"}}';; "
+                                             f"*'pr view 7400'*) echo '{{\"headRefOid\": \"{other}\", \"headRefName\": \"b\"}}';; "))
+        (e / "pushed").write_text((e / "pushed").read_text() + f"{sha} other-branch 2026-11-10T09:00:00.000000Z\n")   # not the PR's branch
         self.assertIn(f"cua#7338 {sha[:9]}: red after rerun: ci-gate, contract clients / result  (thread salvage-7255 on local: "
                       "bin/hourly queue reopens it)", self.hourly(**env))
         dry = self.hourly("queue", PI_RUN_DRY="1", **env)
@@ -371,11 +377,11 @@ class Hourly(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("salvage-7255 queued for cua#7338 at", r.stdout)
         self.assertIn("pi-run: resumed salvage-7255 attempt 1", r.stdout)   # the drain takes it in the same pass
+        self.assertTrue(wait_for_state(d, "exited"))   # pi is detached: its args exist once it has run
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args[args.index("--session-id") + 1], "salvage-7255")
         self.assertIn(f"Your PR trycua/cua#7338 is red at {sha}", args[-1])
         self.assertIn("fix 1 of 3", args[-1])
-        self.assertTrue(wait_for_state(d, "exited"))
         self.assertEqual(self.sh("pi-run", "collect", "salvage-7255").returncode, 0)
         r = self.sh("hourly", "queue", **env)   # the same red head on the next pass: the thread already had it
         self.assertIn(f"red cua#7338 {sha[:9]}: salvage-7255: already reopened for cua#7338 at {sha}", r.stdout)
