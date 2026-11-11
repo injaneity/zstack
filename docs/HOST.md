@@ -46,7 +46,7 @@ Tools come from each host's install (`pi`, `gh`, `git`, `python3`, cargo's `~/.c
 
 ## Disk
 
-`df -h /` must show well over 30G free. A run that hits ENOSPC dies mid-task. Nothing guards the disk on a schedule. The hourly routine records free space with every pickup decision. Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
+`df -h /` must show well over 30G free. A run that hits ENOSPC dies mid-task. Nothing guards the disk on a schedule. The hourly routine records free space with every pickup decision. The hourly prunes finished sessions' build output and caches on either host without asking (Zane, 11 Nov). Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
 
 ## The merge job
 
