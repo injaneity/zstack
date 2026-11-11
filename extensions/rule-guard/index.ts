@@ -1,5 +1,5 @@
 // rule-guard: blocks the tool calls onigiri-mode's Hard rules ban outright (force-push, skipping the pre-push hook, merging
-// or rerunning CI that really failed in a repo the merge job owns, writing the holds file). See docs/RULE-GUARD.md.
+// or readying in a repo the merge job owns, writing the holds file). See docs/RULE-GUARD.md.
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -10,7 +10,7 @@ import { checkBash, checkWrite, type Host, MERGE_OWNED, readyAllowed } from "./r
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
 
-// Runs only for a gh merge, rerun or ready with no repo named, so ordinary calls spawn nothing.
+// Runs only for a gh merge or ready with no repo named, so ordinary calls spawn nothing.
 function originRepo(dir: string): string | null | undefined {
 	if (!stat(dir)?.isDirectory()) return undefined;
 	try {
@@ -22,19 +22,9 @@ function originRepo(dir: string): string | null | undefined {
 	}
 }
 
-// Runs only for a rerun in an owned repo: GitHub's word on whether the run or job was cancelled or timed out.
-function ciConclusion(repo: string, kind: "run" | "job", id: string): string | undefined {
-	try {
-		const out = execFileSync("gh", ["api", `repos/${repo}/actions/${kind}s/${id}`, "--jq", ".conclusion // \"\""], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-		return out || undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 // read once at load, like the ready flag: the session's bash can't move the real holds file
 const holds = holdsPaths();
-const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), ciConclusion, get ghRepo() { return process.env.GH_REPO || undefined; } };
+const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export default function (pi: ExtensionAPI) {
 	const ready = readyAllowed();
