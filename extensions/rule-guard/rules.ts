@@ -113,13 +113,21 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 	return undefined;
 }
 
-/** The repo a gh command names: -R/--repo, a PR or run URL, or a repos/<owner>/<name>/ API path. `{owner}` means the cwd's. */
+/** The repo a gh command names: -R/--repo or a PR or run URL operand, or for `gh api` the endpoint's repos/<owner>/<name>/
+ * path. `{owner}` means the cwd's. Option values (a header, a field, a body) name nothing. */
 function ghNamedRepo(w: string[]): string | undefined {
+	const named = (m: RegExpMatchArray | null | undefined) => (m && !m[1].includes("{") ? repoName(m[1]) : undefined);
+	if (w[1] === "api") return named(operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\//));
 	for (let i = 0; i < w.length; i++) {
 		const a = w[i];
 		if (a === "-R" || a === "--repo") return repoName(w[i + 1]);
-		const m = a.match(/^(?:-R|--repo=)(.+)$/) ?? a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//) ?? a.match(/(?:^|\/)repos\/([^/]+\/[^/]+)\//);
-		if (m && !m[1].includes("{")) return repoName(m[1]);
+		const m = a.match(/^(?:-R|--repo=)(.+)$/);
+		if (m) return repoName(m[1]);
+		if (GH_VALUE_OPTS.has(a)) i++;
+	}
+	for (const a of operands(w.slice(1), GH_VALUE_OPTS)) {
+		const r = named(a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//));
+		if (r) return r;
 	}
 	return undefined;
 }

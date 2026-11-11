@@ -105,6 +105,12 @@ test("a cancelled or timed-out run in a merge-job repo is rerun without asking; 
 	blocked("gh api repos/trycua/cua/actions/runs/9/rerun -f x=repos/trycua/cua/actions/runs/7/rerun");
 	blocked("gh api -X POST repos/trycua/cua/actions/runs/7/rerun/../../9/rerun");
 	allowed("gh api -H 'Accept: x' -X POST /repos/trycua/cua/actions/runs/7/rerun");
+	// an option value naming another repo does not hide the endpoint's
+	blocked("gh api -X POST -H x/repos/other/repo/actions/runs/7/rerun repos/trycua/cua/actions/runs/9/rerun", "/scratch");
+	blocked("gh api --jq x/repos/other/repo/ -X POST repos/trycua/cua/actions/runs/9/rerun", "/scratch");
+	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
+	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inCua);
+	blocked("gh run rerun 9 -R trycua/cua --failed -R", inCua);
 	blocked("gh run rerun 6 -R trycua/cua"); // conclusion unknown
 	blocked("gh run rerun -R trycua/cua"); // no run named: gh would prompt for one
 	blocked("gh run rerun $RUN -R trycua/cua");
