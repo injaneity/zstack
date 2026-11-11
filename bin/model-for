@@ -2,18 +2,16 @@
 # model-for <role>[:<n>]: prints "<provider> <model>" for <role> from the package's config/models.json.
 # A role with several seats (designer) needs :<n>, 1-based: the bare name exits 1 naming its seats, because one
 # launch cannot run a race. model-for --roles lists every role and seat.
-# An alias (the launchers' older role names, such as coding) resolves to its role. Exit 1 for a name the file lacks.
+# Exit 1 for a name the file lacks.
 set -eu
-cfg="$(cd "$(dirname "$0")/.." && pwd)/config/models.json"
+pkg="$(cd "$(dirname "$0")/.." && pwd)"; cfg="$pkg/config/models.json"
+echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 case "${1:-}" in ''|-h|--help) echo "usage: model-for <role>[:<n>] | --roles" >&2; exit 2;; esac
 exec python3 -I -c '
 import json, sys
 cfg, want = sys.argv[1:]
 data = json.load(open(cfg))
 roles = data.get("roles", {})
-alias = data.get("aliases", {})
-if want != "--roles" and want.split(":")[0] in alias:
-    want = ":".join([alias[want.split(":")[0]]] + want.split(":")[1:])
 seats = {}
 for name, v in roles.items():
     if isinstance(v, list):

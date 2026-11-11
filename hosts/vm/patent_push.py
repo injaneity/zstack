@@ -14,10 +14,10 @@ what the merge itself adds counts, not the main it brings in. If any of that mat
 trycua/cua-staging, the public push is refused and:
   - when injaneity can push to trycua/cua-staging, the same commit is pushed there (never forced) and the run is told
     to open its PR with `gh pr create -R trycua/cua-staging`;
-  - otherwise the branch stays local and a buffer item tells Zane it is held for the private repo.
+  - otherwise the branch stays local and a blocked wake (wake.py, once per branch and head) tells Zane it is held for
+    the private repo.
 A diff that cannot be read counts as held (fail closed).
 """
-import json
 import os
 import re
 import subprocess
@@ -35,8 +35,10 @@ LOCKFILE = re.compile(r"(^|/)(Cargo\.lock|package-lock\.json|npm-shrinkwrap\.jso
 STAGING = "trycua/cua-staging"
 STAGING_URL = f"https://github.com/{STAGING}"
 ZERO = "0" * 40
-ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")   # buffer.jsonl and events.log live here
+ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")   # events.log lives here
 SGT = ZoneInfo("Asia/Singapore")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # wake.py sits beside this file
+import wake  # noqa: E402
 
 
 def is_staging(url):
@@ -73,7 +75,7 @@ def status_paths(name_status):
 
 
 def choose_remote(url, hits, staging_ok):
-    """-> "push" (go ahead), "staging" (push to cua-staging instead) or "hold" (keep local, buffer for Zane)."""
+    """-> "push" (go ahead), "staging" (push to cua-staging instead) or "hold" (keep local, wake Zane)."""
     if not hits or is_staging(url):
         return "push"
     return "staging" if staging_ok() else "hold"
@@ -118,25 +120,23 @@ def staging_push_ok():
     return r.returncode == 0 and r.stdout.strip() == "true"
 
 
-def buffer_hold(branch, sha, hits, root=ROOT):
-    """One buffer item per branch and head (buffer.jsonl, read by onigiri), plus an events.log line."""
-    ident = f"cua:{branch}"
-    path = f"{root}/buffer.jsonl"
+def wake_hold(branch, sha, hits, root=ROOT):
+    """One blocked wake per branch and head. Its events.log line (`patent-held cua:<branch> at <sha> <status>: ...`)
+    records how the POST went; a push of the same head sends again until one line says it was sent."""
+    ident, log = f"cua:{branch}", f"{root}/events.log"
+    mark = f" patent-held {ident} at {sha} "
     try:
-        for line in open(path):
-            if f'"id": "{ident}"' in line and f'"head": "{sha}"' in line and '"patent-held-publish"' in line:
-                return False
+        if any(mark in line and line.split(mark, 1)[1].startswith(("webhook sent", "not sent: dry run")) for line in open(log)):
+            return False
     except OSError:
         pass
-    when = datetime.now(SGT).isoformat(timespec="seconds")
     reason = (f"held for the private repo: the diff touches pairing, Teleport or Keyvault ({'; '.join(hits)[:200]}), "
               f"so it was not pushed to public trycua/cua. {STAGING} is not pushable as injaneity, so the branch "
               f"stays local. Zane: grant push on {STAGING} or say where it goes.")
-    with open(path, "a") as f:
-        f.write(json.dumps({"time": when, "kind": "patent-held-publish", "id": ident, "head": sha, "reason": reason}) + "\n")
-    with open(f"{root}/events.log", "a") as f:
-        f.write(f"{when} buffer {ident} patent-held-publish: {reason}\n".replace("\r", " "))
-    return True
+    status = wake.post("blocked", f"{ident} {reason}")
+    with open(log, "a") as f:
+        f.write(f"{datetime.now(SGT).isoformat(timespec='seconds')}{mark}{status}: {reason}\n".replace("\r", " "))
+    return status.startswith(("webhook sent", "not sent: dry run"))
 
 
 def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
@@ -162,9 +162,9 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
                           f"repo {STAGING}, not to {url}. Open or update its PR there: gh pr create -R {STAGING} "
                           f"--head {branch}. Never push it to trycua/cua.\n")
                 continue
-        buffer_hold(branch, sha, hits, root)
+        woke = "Zane has been woken" if wake_hold(branch, sha, hits, root) else "Zane was woken earlier, or the wake failed (events.log)"
         out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault and must not go to public "
-                  f"trycua/cua. It stays local and onigiri has a buffer item for Zane. Do not retry the push, push "
+                  f"trycua/cua. It stays local, and {woke}. Do not retry the push, push "
                   f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
     return refuse
 

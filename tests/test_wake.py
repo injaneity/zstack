@@ -61,40 +61,29 @@ class Wake(unittest.TestCase):
             return R()
         return patch.object(wake.urllib.request, "urlopen", f)
 
-    def test_mid_run_event_carries_kind_message_fields_and_the_session(self):
+    def test_blocked_and_failed_post_the_message_pr_and_session(self):
         self.key.write_text("sekrit\n")
-        with self.urlopen(None):
-            code, out, err = run("blocked", "need a key on the mini", "pr=31", "repo=injaneity/zstack",
-                                 env={"PI_SESSION_ID": "pi-x"})
+        with self.urlopen(None, None):
+            code, out, err = run("blocked", "need a key on the mini", "pr=31", env={"PI_SESSION_ID": "cua-1"})
+            run("failed", "cua-2 exited rc=3", env={"PI_SESSION_ID": "cua-2"})
         self.assertEqual(code, 0)
         auth, body, timeout = self.sent[0]
         self.assertEqual(auth, "Bearer sekrit")
         self.assertLessEqual(timeout, 10)
-        self.assertEqual({k: body[k] for k in ("kind", "reason", "id", "pr", "repo", "source")},
-                         {"kind": "blocked", "reason": "need a key on the mini", "id": "pi-x", "pr": 31,
-                          "repo": "injaneity/zstack", "source": "pi"})
-        self.assertEqual(err.strip(), "wake: blocked webhook sent (200)")
+        self.assertEqual({k: body[k] for k in ("kind", "reason", "id", "pr", "source")},
+                         {"kind": "blocked", "reason": "need a key on the mini", "id": "cua-1", "pr": 31, "source": "pi"})
+        self.assertEqual((self.sent[1][1]["kind"], self.sent[1][1]["id"], self.sent[1][1]["pr"]), ("failed", "cua-2", None))
+        self.assertEqual(err.strip().splitlines()[-1], "wake: blocked webhook sent (200)")
         self.assertNotIn("sekrit", out + err)
 
-    def test_launcher_exit_posts_only_a_failure(self):
+    def test_done_carries_rc_report_and_pr_links(self):
         self.key.write_text("k")
-        with self.urlopen(None, None):
-            ok = run("--exit", "0", "pi-a")
-            run("--exit", "3", "pi-b")
-            run("--exit", "143", "pi-c")
-        got = [(b["kind"], b["id"], b["rc"]) for _, b, _ in self.sent]
-        self.assertEqual(got, [("pi-failed", "pi-b", "3"), ("pi-failed", "pi-c", "143")])
-        self.assertEqual(ok, (0, "", "wake: pi-done not sent: only failures wake\n"))
-
-    def test_mid_run_wakes_only_for_blocked_or_failed(self):
-        self.key.write_text("k")
-        with self.urlopen(None, None):
-            for kind in ("pr-opened", "question", "milestone", "pi-failed", "pi-done", "blocked", "failed"):
-                self.assertEqual(run(kind, "x", "pr=9")[0], 0, kind)
-        self.assertEqual([b["kind"] for _, b, _ in self.sent], ["blocked", "failed"])
-        with self.urlopen():
-            code, out, err = run("question", "which branch?", env={"ONIGIRI_WAKE_DRY": "1"})
-        self.assertEqual((code, out, err), (0, "", "wake: question not sent: only failures wake\n"))
+        with self.urlopen(None):
+            run("done", "w exited rc=0", "rc=0", "report=/r/a b/run.log", "prs=https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
+                env={"PI_SESSION_ID": "w"})
+        b = self.sent[0][1]
+        self.assertEqual((b["kind"], b["id"], b["rc"], b["report"], b["prs"]),
+                         ("done", "w", 0, "/r/a b/run.log", ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"]))
 
     def test_retries_network_errors_and_5xx_but_not_4xx_and_always_exits_0(self):
         self.key.write_text("k")
@@ -117,7 +106,7 @@ class Wake(unittest.TestCase):
         with self.urlopen():
             code, _, err = run("blocked", "which branch?")
         self.assertEqual((code, self.sent), (0, []))
-        self.assertEqual(err.strip(), "wake: blocked webhook not configured")
+        self.assertEqual(err.strip().splitlines()[-1], "wake: blocked webhook not configured")
 
     def test_dry_prints_the_body_and_posts_nothing(self):
         self.key.write_text("sekrit")
@@ -128,11 +117,12 @@ class Wake(unittest.TestCase):
         self.assertIn("not sent: dry run", err)
         self.assertNotIn("sekrit", out + err)
 
-    def test_bad_usage_exits_2_and_posts_nothing(self):
+    def test_other_kinds_and_bad_usage_exit_2_and_post_nothing(self):
         self.key.write_text("k")
         with self.urlopen():
-            for argv in ([], ["blocked"], ["Blocked", "x"], ["blocked", " "], ["blocked", "x", "kind=y"],
-                         ["blocked", "x", "nofield"], ["--exit", "x", "pi-a"], ["--exit", "0"]):
+            for argv in ([], ["blocked"], ["pr-opened", "x"], ["question", "which branch?"], ["pi-done", "x"], ["Blocked", "x"],
+                         ["blocked", " "], ["blocked", "x", "repo=y"], ["blocked", "x", "pr=x"], ["done", "x", "rc=a"], ["done", "x", "pr=1", "pr"],
+                         ["--exit", "0", "pi-a"]):
                 self.assertEqual(run(*argv)[0], 2, argv)
         self.assertEqual(self.sent, [])
 

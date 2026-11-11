@@ -1,8 +1,6 @@
-// tool-guard: refuses bash commands that burn a session's wall clock (see find-guard.ts), and adds the matching
-// rules to every session's system prompt, subagent children included. See docs/TOOL-GUARD.md.
-import * as os from "node:os";
+// tool-guard: adds three wall-clock rules to every session's system prompt, subagent children included. They are
+// prompt rules, not blocks.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { checkFind } from "./find-guard.ts";
 
 export const GUIDELINES = [
 	"Find a tool with `command -v`, `which -a` or `brew --prefix`, or its known install directory. Never `find /`, and never walk a whole home directory to find one.",
@@ -14,10 +12,5 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", (event) => {
 		const rules = event.systemPromptOptions.promptGuidelines;
 		for (const g of GUIDELINES) if (!rules.includes(g)) rules.push(g);
-	});
-	pi.on("tool_call", (event) => {
-		if (event.toolName !== "bash") return undefined;
-		const reason = checkFind(String((event.input as { command?: unknown }).command ?? ""), os.homedir());
-		return reason ? { block: true, reason } : undefined;
 	});
 }

@@ -2,21 +2,34 @@
 """merge_job.py: the one scheduled merger for trycua/cua on the VM. Cron runs it every 15 minutes through
 hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge stage on 6 Nov 2026.
 
-For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a
-preapprove row pinned to the head for a declared deep/human tier) and blockers() (what stops any merge: draft,
-conflict, mergeability not MERGEABLE, PAUSED). next_action() turns both into one action: merge, ready a draft,
-rerun a red ci-gate's failed runs once per head, buffer for onigiri, or skip/wait. Then the merge watch raises an
-urgent unexpected-merge wake for a merge as ME that this job did not make.
+A bare run first moves the package checkout to origin/main (bin/ensure-package-main) and restarts on it, then runs
+hosts/check-parity: a host whose package, hook or agents differ from main raises an urgent parity wake.
+
+For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
+tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
+conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
+of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
+mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
+next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
+must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
+tier, a conflict, red after its rerun) or none. The job's own entry in GitHub's merge queue (state.json queued,
+enqueued as ME at this head) that now fails the gate or meets PAUSED is dequeued. Another actor's entry is left alone;
+its merge wakes through the merge watch. A draft is a wait: draft means not ready, and only a person or the session
+that opened it readies one, so this job never marks a PR ready. Then the merge watch raises an urgent unexpected-merge
+wake for every merge of a PR by ME that this job did not make, whoever merged it (a hand merge, a teammate, a bot or
+an app). The job's own merges are the heads in state.json landed and queued.
 
   merge_job.py             one real run (cron, under flock)
   merge_job.py --dry-run   decide every PR, print would-<action>, change and write nothing
   merge_job.py --explain N every reason for trycua/cua#N and the action a run would take; read-only
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
-PAUSED (first line = reason) stops merge, ready and rerun, and holds back webhook POSTs (the buffer item is still
-written, so the hourly routine sees it; nothing re-sends it after the pause). Outputs: $ROOT/events.log (one line per decision, only
-when it changes), $ROOT/buffer.jsonl (needs onigiri; urgent ones also POST the webhook), $ROOT/tick/state.json and
-$ROOT/tick/last-run. ROOT is $ONIGIRI_ROOT, default /srv/onigiri.
+PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs: events.log still has the wake, and
+the first pass after the pause sends it. An urgent wake (URGENT) POSTs the webhook once per kind, PR and key, retried
+every pass until it is sent (a host with no webhook key counts as sent). A wait goes
+nowhere but events.log and --dry-run's `who=` lines, which bin/hourly prints under needs-Zane and unstick. Outputs:
+$ROOT/events.log (one line per decision, only when it changes), $ROOT/tick/state.json and $ROOT/tick/last-run. ROOT is
+$ONIGIRI_ROOT, default /srv/onigiri.
 """
 import argparse
 import json
@@ -34,24 +47,23 @@ import wake  # noqa: E402  the urgent webhook's URL, key file and POST
 
 ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
 DIR = f"{ROOT}/tick"   # the data dir the hourly routine and the mini mirror read; no code lives there any more
-EVENTS, BUFFER, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/buffer.jsonl", f"{ROOT}/hold-prs.txt"
+EVENTS, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/hold-prs.txt"
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
 REPO, SHORT, ME = "trycua/cua", "cua", "injaneity"
 GATE_CHECK = "ci-gate"   # the one check the gate reads: it owns red checks and which platform lanes a PR needs
 NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a reason to wait
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
-TIERS = ["light", "standard", "deep", "human"]
-HOLD_KINDS = ("hold", "no-move", "hands-off-user", "skip-author", "review-only", "hands-off-path", "exception", "preapprove")
-PATH_MODES = ("never", "split-undone")
-SPLIT_PR = 2886
+TIERS = ["light", "standard", "deep", "human"]   # the one risk enum; a PR declaring none of these never merges
+MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5   # GitHub computes mergeability on the first ask, so UNKNOWN is read again
+PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SGT = ZoneInfo("Asia/Singapore")
 # cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
 ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", os.environ.get("PATH") or "/usr/bin:/bin"])}
 
 Reason = namedtuple("Reason", "code text")
-# gate codes: ci | holds-unreadable | hold | hands-off | risk. blocker codes: draft | conflict | mergeable | paused
+# gate codes: ci | holds-unreadable | hold | hands-off | no-tier | risk. blocker codes: draft | conflict | mergeable | paused
 
 
 def now():
@@ -66,131 +78,51 @@ def read(path):
 # ---------------- holds file ----------------
 
 def parse_holds(text):
-    """The rows the gate reads. Every row is validated: a malformed one raises ValueError, because a hold must never
-    be dropped silently. Rows only pickup reads (hands-off-user, skip-author, review-only, exception) are checked,
-    not kept."""
-    h = {"hold": set(), "no_move": set(), "path_modes": {}, "preapproved": {}}
+    """The rows the gate reads: hold, preapprove and hands-off-path. A malformed one raises ValueError, and so does a
+    row of any other kind that names a PR number, because a hold must never be dropped silently. A row about a login
+    is the pickup's and is not read; neither is the third column."""
+    h = {"hold": set(), "paths": [], "preapproved": {}}
     for ln, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         f = [x.strip() for x in line.split("|")]
-        if len(f) < 4 or f[0] not in HOLD_KINDS or f[2] not in ("yes", "no") or not f[1]:
-            raise ValueError(f"holds file line {ln}: {line[:80]}")
-        kind, target = f[0], f[1]
-        if kind == "exception" and (len(f) < 6 or not all(f[3:6])):
-            raise ValueError(f"holds file line {ln}: exception needs match | scope | source")
-        if kind == "preapprove":
-            if not re.fullmatch(r"#?\d+", target) or not re.fullmatch(r"[0-9a-f]{40}", f[3]) or len(f) < 5 or not f[4]:
-                raise ValueError(f"holds file line {ln}: preapprove needs #N | rules | <40-char sha> | source")
-            n = int(target.lstrip("#"))
-            if h["preapproved"].get(n, f[3]) != f[3]:
-                raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
-            h["preapproved"][n] = f[3]
-        elif kind in ("hold", "no-move"):
-            if not re.fullmatch(r"#?\d+", target):
-                raise ValueError(f"holds file line {ln}: {kind} needs a PR number")
-            h["hold" if kind == "hold" else "no_move"].add(int(target.lstrip("#")))
-        elif kind == "hands-off-path":
-            mode = f[3][len("mode="):].strip() if f[3].startswith("mode=") else "never"
-            if mode not in PATH_MODES:
-                raise ValueError(f"holds file line {ln}: unknown hands-off-path mode {mode!r}")
-            if h["path_modes"].get(target) != "never":   # two rows for one path: the stricter (never) wins
-                h["path_modes"][target] = mode
+        kind, pr = f[0], re.fullmatch(r"#?(\d+)", f[1]) if len(f) > 1 else None
+        if kind == "hands-off-path":
+            mode = f[3][len("mode="):].strip() if len(f) > 3 and f[3].startswith("mode=") else "never"
+            if len(f) < 4 or not f[1] or mode not in ("never", "split-undone"):
+                raise ValueError(f"holds file line {ln}: {line[:80]}")
+            if mode == "never":   # split-undone is retired (Zane 10 Nov): its row holds nothing, a hold row stops a PR
+                h["paths"].append(f[1])
+            continue
+        if kind not in ("hold", "preapprove"):
+            if len(f) < 2 or not f[1] or pr:
+                raise ValueError(f"holds file line {ln}: {line[:80]}")
+            continue
+        if len(f) < 4 or not pr:
+            raise ValueError(f"holds file line {ln}: {kind} needs a PR number | rules | note")
+        n = int(pr.group(1))
+        if kind == "hold":
+            h["hold"].add(n)
+            continue
+        if not re.fullmatch(r"[0-9a-f]{40}", f[3]) or len(f) < 5 or not f[4]:
+            raise ValueError(f"holds file line {ln}: preapprove needs #N | rules | <40-char sha> | source")
+        if h["preapproved"].get(n, f[3]) != f[3]:
+            raise ValueError(f"holds file line {ln}: two preapprove rows for #{n}")
+        h["preapproved"][n] = f[3]
     return h
-
-
-def path_hits(files, holds):
-    """The hands-off paths (matched by file name) that the PR's changed files hit, in row order."""
-    return [p for p in holds["path_modes"] if any(re.search(r"(^|/)" + re.escape(p) + "$", f) for f in files)]
-
-
-# split-undone (Zane 20 Oct): an impl_.rs PR is held only when its diff undoes the #2886 per-tool split.
-_MOD_DECL = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;")
-_WIRING = re.compile(r"^\s*(#\[path\b|include!)")
-_USE_SUPER = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?use\s+super::\{")
-_TOOL_NAME = re.compile(r"\b([A-Z]\w*Tool)\b")
-_TOOL_IMPORT = re.compile(r"^\s*([a-z_]\w*::)?\{?\s*([A-Z]\w*Tool\s*,\s*)*[A-Z]\w*Tool\s*,?\s*\}?,?\s*$")
-_TOOL_DEF = re.compile(r"^\s*(impl(<[^>]*>)?\s+Tool\s+for\s+\w+Tool\b|(pub(\([^)]*\))?\s+)?struct\s+\w+Tool\b)")
-MOVED_BACK_MIN = 3
-
-
-def _lines(patch, sign):
-    return [x[1:] for x in (patch or "").split("\n") if x.startswith(sign) and not x.startswith(sign * 3 + " ")]
-
-
-def split_undone(files, path):
-    """Why the diff undoes the #2886 split of `path`, or None. files: GitHub pulls/N/files entries (filename,
-    status, patch, previous_filename). With D the changed impl_.rs's directory, the diff undoes the split if it
-    deletes or renames impl_.rs or a file under D, drops a `mod x;` from impl_.rs or D/mod.rs, adds or drops a
-    #[path]/include! line, drops impl_.rs's `use super::{` line or a tool import, adds a tool type to impl_.rs, or
-    moves MOVED_BACK_MIN lines from files under D into impl_.rs. A missing patch cannot be checked and counts."""
-    for h in [f for f in files if re.search(r"(^|/)" + re.escape(path) + "$", f["filename"])]:
-        if h.get("status") in ("removed", "renamed"):
-            return f"{h['status']} {h.get('previous_filename') or h['filename']}"
-        d = h["filename"].rsplit("/", 1)[0] + "/" if "/" in h["filename"] else ""
-        sib = [f for f in files if f is not h and (f["filename"].startswith(d) or (f.get("previous_filename") or "").startswith(d))]
-        for f in sib:
-            old = f.get("previous_filename") or f["filename"]
-            if f.get("status") == "removed" or (f.get("status") == "renamed" and old.startswith(d)):
-                return f"{'deletes' if f.get('status') == 'removed' else 'renames'} split module {old}"
-        for f in [h] + sib:
-            if f.get("patch") is None:
-                return f"no diff from GitHub for {f['filename']} (cannot check; buffered to be safe)"
-        add, rem = _lines(h["patch"], "+"), _lines(h["patch"], "-")
-        wiring = [(h["filename"], add, rem)] + [(f["filename"], _lines(f["patch"], "+"), _lines(f["patch"], "-"))
-                                                for f in sib if f["filename"] == d + "mod.rs"]
-        for name, a, r in wiring:
-            mods = {m.group(1) for x in r if (m := _MOD_DECL.match(x))} - {m.group(1) for x in a if (m := _MOD_DECL.match(x))}
-            if mods:
-                return f"rewrites the split's module wiring in {name} (drops mod {', '.join(sorted(mods))})"
-            bad = next((x for x in a + r if _WIRING.match(x)), None) or \
-                next((x for x in r if name == h["filename"] and _USE_SUPER.match(x)), None)
-            if bad:
-                return f"rewrites the split's module wiring in {name} ({bad.strip()[:80]!r})"
-        dropped = {t for x in rem if _TOOL_IMPORT.match(x) for t in _TOOL_NAME.findall(x)} - \
-            {t for x in add if _TOOL_IMPORT.match(x) or re.match(r"\s*(pub(\([^)]*\))?\s+)?use\s", x) for t in _TOOL_NAME.findall(x)}
-        if dropped:
-            return f"rewrites the split's module wiring in {h['filename']} (drops the import of {', '.join(sorted(dropped))})"
-        bad = next((x for x in add if _TOOL_DEF.match(x)), None)
-        if bad:
-            return f"re-inlines a tool into {h['filename']} ({bad.strip()[:80]!r})"
-        gone = {x.strip() for f in sib for x in _lines(f.get("patch"), "-")}
-        back = {x.strip() for x in add if len(re.sub(r"//.*|[\s{}()\[\];,]", "", x)) >= 8} & gone
-        if len(back) >= MOVED_BACK_MIN:
-            return f"re-inlines {len(back)} lines removed from its per-tool modules into {h['filename']}"
-    return None
-
-
-def hands_off_verdict(paths, patches, holds):
-    """(held, why) for the hands-off paths a PR hits. patches() gives pulls/N/files; it raising means held."""
-    allowed = []
-    for p in paths:
-        if holds["path_modes"].get(p, "never") == "never":
-            return True, f"touches {p} (hands-off path, mode never; see the holds file)"
-        try:
-            why = split_undone(patches(), p)
-        except Exception as e:
-            return True, f"touches {p}: diff unreadable, cannot check the #{SPLIT_PR} per-tool split ({str(e)[:100]}); buffered to be safe"
-        if why:
-            return True, f"touches {p}: undoes the #{SPLIT_PR} per-tool split: {why} (hands-off path, mode split-undone; see the holds file)"
-        allowed.append(f"touches {p}: does not undo the #{SPLIT_PR} per-tool split (hands-off path, mode split-undone)")
-    return False, "; ".join(allowed)
 
 
 # ---------------- checks ----------------
 
-def norm_tier(t):
-    return {"low": "light", "light": "light", "standard": "standard", "high": "deep", "deep": "deep",
-            "human": "human"}.get((t or "").strip().lower())
+RISK = re.compile(rf"risk: *({'|'.join(TIERS)})\b")
 
 
 def declared_risk(labels, body):
-    """The strictest tier among risk:<tier> labels and `risk:` body lines, or None."""
-    found = [norm_tier(x.split(":", 1)[1]) for x in labels if x.startswith("risk:")]
-    found += [norm_tier(t) for t in re.findall(r"^risk: *(\w+)", body or "", re.M)]
-    known = [t for t in found if t]
-    return max(known, key=TIERS.index) if known else None
+    """The strictest tier among risk:<tier> labels and `risk:` body lines, or None. Only TIERS words count."""
+    found = [m.group(1) for x in labels if (m := RISK.fullmatch(x.replace("risk:", "risk: ", 1)))]
+    found += RISK.findall("\n".join(line for line in (body or "").splitlines() if line.startswith("risk:")))
+    return max(found, key=TIERS.index) if found else None
 
 
 def check_name(c):
@@ -241,12 +173,12 @@ def check_state(rollup):
     return "red", bad, runs
 
 
-def gate(pr, holds, hands_off=None, notes=None):
+def gate(pr, holds, notes=None):
     """The merge gate: exactly three checks at the PR head, every one run, returning [Reason] (empty = pass).
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
-    2. No hold row: hold, no-move, or a hands-off-path the diff hits (hands_off() -> None or (held, why)).
+    2. No hold row: hold, or a hands-off-path that names one of the PR's changed files.
        holds None (the file is unreadable) holds every PR.
-    3. A declared deep/human tier has a preapprove row at exactly this head. An undeclared tier does not block."""
+    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head."""
     notes = [] if notes is None else notes
     R, n, head = [], pr.get("number"), pr["headRefOid"]
     ci = [conclusion(c) for c in latest_checks(pr.get("statusCheckRollup")) if check_name(c) == GATE_CHECK]
@@ -256,25 +188,24 @@ def gate(pr, holds, hands_off=None, notes=None):
         R.append(Reason("ci", f"{GATE_CHECK} {'/'.join(sorted(set(ci))) or 'missing'}"))
     if holds is None:
         R.append(Reason("holds-unreadable", "holds file unreadable: every PR counts as held"))
-    elif n in holds["hold"] or n in holds["no_move"]:
-        R.append(Reason("hold", f"hold: #{n} has a {'hold' if n in holds['hold'] else 'no-move'} row in the holds file"))
-    elif hands_off and (hit := hands_off()):
-        if hit[0]:
-            R.append(Reason("hands-off", hit[1]))
-        else:
-            notes.append(hit[1])
+    elif n in holds["hold"]:
+        R.append(Reason("hold", f"hold: #{n} has a hold row in the holds file"))
+    elif hit := [p for p in holds["paths"] if any(re.search(r"(^|/)" + re.escape(p) + "$", f) for f in pr.get("files") or [])]:
+        R.append(Reason("hands-off", f"touches {hit[0]} (hands-off path, mode never; see the holds file)"))
     tier, pre = declared_risk(pr.get("labels") or [], pr.get("body")), (holds or {}).get("preapproved", {}).get(n)
-    if tier in ("deep", "human") and pre != head:
+    if tier is None:
+        R.append(Reason("no-tier", f"no risk tier ({'|'.join(TIERS)})"))
+    elif tier in ("deep", "human") and pre != head:
         R.append(Reason("risk", f"declared {tier}: needs Zane"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
-        notes.append(f"risk {tier or 'undeclared'}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
+        notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
     return R
 
 
 def blockers(pr, paused):
-    """What stops this job acting at all, outside the gate: GitHub cannot merge a draft, a conflict or an unknown
-    mergeability, and PAUSED stops every action."""
+    """What stops this job acting at all, outside the gate: a draft is not ready, GitHub cannot merge a conflict or
+    an unknown mergeability, and PAUSED stops every action."""
     R = [Reason("draft", "draft")] if pr.get("isDraft") else []
     if pr.get("mergeable") == "CONFLICTING":
         R.append(Reason("conflict", "merge conflict"))
@@ -285,48 +216,157 @@ def blockers(pr, paused):
     return R
 
 
-SKIP_CODES = {"holds-unreadable", "hold", "paused"}   # logged, nobody woken
-BUFFER_CODES = {"hands-off", "risk", "conflict"}      # needs onigiri or Zane, buffered once per head
+URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed")   # the kinds that POST
+ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}   # only Zane moves these
+SESSION_CODES = {"no-tier", "conflict"}                                   # the session that opened the PR fixes these
 
 
 def next_action(reasons, notes, pr, rerun_head=None):
-    """(action, why): merge | ready | rerun | buffer | wait | skip. why names every blocking reason."""
+    """(action, who, why): merge | rerun | wait, and who must act for a wait: zane | session | none. A draft waits on
+    nobody, because whoever opened it readies it when it is ready. why names every blocking reason."""
     codes = {r.code for r in reasons}
     why = "; ".join(r.text for r in reasons) or ", ".join(notes)
     if not reasons:
-        return "merge", "green, " + ", ".join(notes)
-    if codes & SKIP_CODES:
-        return "skip", why
-    if codes & BUFFER_CODES:
-        return "buffer", why
-    if "draft" in codes:   # only CI and mergeability are left: ready it so CI runs
-        return "ready", f"{why}; readied: " + ", ".join(notes)
+        return "merge", "none", "green, " + ", ".join(notes)
+    if "draft" in codes:
+        return "wait", "none", why
+    if codes & ZANE_CODES:
+        return "wait", "zane", why
+    if codes & SESSION_CODES:
+        return "wait", "session", why
     if "ci" not in codes:
-        return "wait", why
+        return "wait", "none", why
     state, names, runs = check_state(pr.get("statusCheckRollup"))
     if state == "red":
         if rerun_head != pr["headRefOid"] and runs:
-            return "rerun", "red once: " + ", ".join(sorted(names))[:150]
-        return "buffer", "red after rerun: " + ", ".join(sorted(names))[:150]
-    return "wait", why
+            return "rerun", "none", "red once: " + ", ".join(sorted(names))[:150]
+        return "wait", "session", "red after rerun: " + ", ".join(sorted(names))[:150]
+    return "wait", "none", why
 
 
-def merge_audit(merged, job_merged, known, me=ME):
-    """Merges this job did not make -> [(n, alert|log|ignore, by)]: alert for one as `me` (a hand merge or GitHub
-    auto-merge), log for another human, ignore a bot."""
+CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
+          "... on StatusContext { context state createdAt }")
+PAGE = "totalCount pageInfo { hasNextPage endCursor }"
+PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
+             f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
+             f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
+             f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
+OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE, first: 25, after: $after) { "
+            f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
+ONE_PR = f"query($n: Int!) {{ repository(owner: \"trycua\", name: \"cua\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
+MORE = ("query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) { repository(owner: \"trycua\", name: \"cua\") { "
+        f"pullRequest(number: $n) {{ files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
+        f"commits(last: 1) @include(if: $c) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100, after: $checks) {{ {PAGE} "
+        f"nodes {{ __typename {CHECKS} }} }} }} }} }} }} }} }} }}")
+
+
+def contexts_of(node):
+    return (((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
+
+
+def read_rest(node):
+    """Page the PR's files and checks past the first 100 each (MORE), in place, until GitHub says there are no more."""
+    files = node["files"]
+    checks = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False}}
+    while files["pageInfo"]["hasNextPage"] or checks["pageInfo"]["hasNextPage"]:
+        f, c = files["pageInfo"]["hasNextPage"], checks["pageInfo"]["hasNextPage"]
+        page = gh_json(["api", "graphql", "-F", f"n={node['number']}", "-F", f"f={str(f).lower()}", "-F", f"c={str(c).lower()}",
+                        *(["-f", f"files={files['pageInfo']['endCursor']}"] if f else []),
+                        *(["-f", f"checks={checks['pageInfo']['endCursor']}"] if c else []),
+                        "-f", f"query={MORE}"])["data"]["repository"]["pullRequest"]
+        if f:
+            files["nodes"] += page["files"]["nodes"]
+            files["pageInfo"] = page["files"]["pageInfo"]
+        if c:
+            more = contexts_of(page)["contexts"]
+            checks["nodes"] += more["nodes"]
+            checks["pageInfo"] = more["pageInfo"]
+    return node
+
+
+def from_graphql(node):
+    """One PullRequest node (with read_rest() done) as the fields gate(), blockers() and next_action() read, in
+    `gh pr view --json` shape. A count that does not match what was read raises, so the job never decides on a partial list
+    (a PR with more than 100 labels is an error for that PR, never a merge)."""
+    files = node["files"]
+    contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
+    labels = node["labels"]   # a risk:<tier> label is a gate input, so a partial list is never decided on either
+    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]) or \
+            labels["totalCount"] != len(labels["nodes"]):
+        raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
+                           f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
+                           f"{len(labels['nodes'])} of {labels['totalCount']} labels")
+    checks = []
+    for c in contexts["nodes"]:
+        if c["__typename"] == "CheckRun":
+            wf = ((c.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}
+            checks.append({"__typename": "CheckRun", "name": c["name"], "status": c["status"], "conclusion": c["conclusion"],
+                           "startedAt": c["startedAt"], "detailsUrl": c["detailsUrl"], "workflowName": wf.get("name") or ""})
+        else:
+            checks.append({"__typename": "StatusContext", "context": c["context"], "state": c["state"], "createdAt": c["createdAt"]})
+    return {"number": node["number"], "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
+            "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in labels["nodes"]],
+            "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
+
+
+DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused", "unreadable"}   # off the gate, PAUSED
+# or the PR's gate inputs could not be read in full
+QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
+               "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
+DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
+QUEUE_EVENTS = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { "
+                "timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT], last: 20) { nodes { "
+                "__typename ... on AddedToMergeQueueEvent { enqueuer { login } } ... on RemovedFromMergeQueueEvent { reason } } } } } }")
+
+
+def queue_merged_by(events):
+    """Who made the merge-queue entry that merged the PR: the enqueuer of the last AddedToMergeQueueEvent before a
+    RemovedFromMergeQueueEvent with reason `merged`, or None when no queue entry merged it (a merge outside the queue)."""
+    by = None
+    for e in events:
+        if e.get("__typename") == "AddedToMergeQueueEvent":
+            by = (e.get("enqueuer") or {}).get("login")
+        elif e.get("__typename") == "RemovedFromMergeQueueEvent":
+            if e.get("reason") == "merged":
+                return by
+            by = None
+    return None
+
+
+def should_dequeue(reasons, queued, entry, head, me=ME):
+    """True when GitHub's queue holds the job's own entry for this head and a gate reason or PAUSED now stands against it.
+    queued is state.json's queued record for the PR; entry is the PR's mergeQueueEntry, None when it is not queued."""
+    if not entry or not queued or queued.get("head") != head:
+        return False
+    if (entry.get("enqueuer") or {}).get("login") != me or (entry.get("headCommit") or {}).get("oid") != head:
+        return False
+    return bool({r.code for r in reasons} & DEQUEUE_CODES)
+
+
+def merge_audit(merged, job_heads, known):
+    """Merges of our PRs this job did not make -> [(n, by)], oldest first. job_heads is {n: head} from state.json landed
+    and queued; a head kept short (seeded from events.log) matches as a prefix. known is the ones already handled."""
     out = []
     for p in sorted(merged, key=lambda p: p.get("mergedAt") or ""):
-        n, by = p["number"], (p.get("mergedBy") or {}).get("login") or ""
-        if n in job_merged or str(n) in known:
+        n, head = p["number"], p.get("headRefOid") or ""
+        if str(n) in known or (job_heads.get(n) and head.startswith(job_heads[n])):
             continue
-        bot = (p.get("mergedBy") or {}).get("is_bot") or by.startswith("app/") or by.endswith("[bot]")
-        out.append((n, "ignore" if bot else "alert" if by == me else "log", by))
+        out.append((n, (p.get("mergedBy") or {}).get("login") or "?"))
     return out
 
 
-def job_merges(events):
-    """PR numbers this job (or the tick before it) merged: its `merged cua#N` events."""
-    return {int(m.group(1)) for x in events if (m := re.search(r"^\S+ merged cua#(\d+) ", x))}
+def seed_landed(events):
+    """state.json landed before it existed: the latest head events.log says the job queued (`merge-queued cua#N squash at
+    <head>`). A `merged` line counts only for a PR with no `merge-queued` line (the tick before #42 logged merged at
+    enqueue), because since #42 it names GitHub's head, which may be a push the job never queued."""
+    out, queued = {}, set()
+    for x in events:
+        if m := re.match(r"(\S+) (merged|merge-queued) cua#(\d+) squash at ([0-9a-f]+)", x):
+            at, kind, n, head = m.groups()
+            if kind == "merge-queued" or n not in queued:
+                out[n] = {"head": head, "at": at}
+            queued |= {n} if kind == "merge-queued" else set()
+    return out
 
 
 # ---------------- side effects ----------------
@@ -354,13 +394,32 @@ def post_webhook(kind, ident, reason):
                      attempts=1, timeout=8)
 
 
+def sha():
+    """The zstack commit this run is on; last-run and stderr (cron's tick.log) carry it."""
+    return subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
+
+
+def parity_problem():
+    """Why this host is not merged main and nothing else (hosts/check-parity's FAIL lines), or None."""
+    try:
+        r = subprocess.run([f"{PKG}/hosts/check-parity"], env={**ENV, "ONIGIRI_ROOT": ROOT}, capture_output=True, text=True, timeout=300)
+    except Exception as e:
+        return f"check-parity did not run: {type(e).__name__}: {str(e)[:150]}"
+    return None if r.returncode == 0 else "; ".join(x for x in (r.stdout + r.stderr).splitlines() if x.startswith("FAIL"))[:300] \
+        or f"check-parity exit {r.returncode}"
+
+
 class Job:
     def __init__(self, dry):
         self.dry = dry
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
-        self.can_act = not dry and not self.paused   # merge, ready, rerun
+        self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
-        self.s = {k: s.get(k, {}) for k in ("buffered", "rerun", "last_reason", "merges")}
+        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed")}
+        if "woken" not in s:   # once: the urgent keys the buffer had, so no wake goes out twice; the rest of it is dropped
+            self.s["woken"] = {k: v for k, v in s.get("buffered", {}).items() if k.split("|")[0] in URGENT}
+        if "landed" not in s:   # once, on the first run with this field
+            self.s["landed"] = seed_landed(read(EVENTS).splitlines() if os.path.exists(EVENTS) else [])
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -377,10 +436,13 @@ class Job:
             self.s["last_reason"][ident] = sig
             self.event(kind, ident, reason)
 
-    def buffer(self, kind, ident, head, reason, urgent=False):
+    def wake(self, kind, ident, head, reason):
+        """POST one urgent wake for this kind, id and head (or hour, or window), once it is sent: a failed, paused or dry
+        POST is tried again next pass. Returns whether it is handled: sent now or before, or not needed (the PR closed)."""
+        assert kind in URGENT, kind
         key = f"{kind}|{ident}|{head or '-'}"
-        if key in self.s["buffered"]:
-            return False
+        if key in self.s["woken"]:
+            return True
         m = re.fullmatch(rf"{SHORT}#(\d+)", ident or "")
         if m and kind != "unexpected-merge":   # re-read: a PR can merge or close mid-run (#6026)
             try:
@@ -389,17 +451,14 @@ class Job:
                 st = None   # unknown counts as open, so no alert is lost
             if st in ("CLOSED", "MERGED"):
                 self.decide("skipped", ident, head, f"{kind}: PR {st.lower()}, no alert")
-                return False
-        self.s["buffered"][key] = now()
-        item = {"time": now(), "kind": kind, "id": ident, "head": head, "reason": reason, **({"urgent": True} if urgent else {})}
-        if not self.dry:
-            with open(BUFFER, "a") as f:
-                f.write(json.dumps(item) + "\n")
-        self.event("urgent" if urgent else "buffer", ident, f"{kind}: {reason}")
-        if urgent:
-            sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
-            self.event("urgent", ident, sent)
-        return True
+                return True
+        self.event("urgent", ident, f"{kind}: {reason}")
+        sent = "not sent: dry run" if self.dry else "not sent: paused" if self.paused else post_webhook(kind, ident, reason)
+        self.event("urgent", ident, sent)
+        if sent.startswith("webhook sent") or sent == "webhook not configured":
+            self.s["woken"][key] = now()
+            return True
+        return False
 
     def holds(self):
         try:
@@ -407,52 +466,80 @@ class Job:
         except Exception as e:   # never act without holds: gate() holds every PR until the file reads again
             self.errors += 1
             self.event("error", "holds", f"{type(e).__name__}: {str(e)[:200]}")
-            self.buffer("holds-unreadable", "holds", now()[:13], f"{HOLDS_FILE}: {str(e)[:150]}", urgent=True)
+            self.wake("holds-unreadable", "holds", now()[:13], f"{HOLDS_FILE}: {str(e)[:150]}")
             return None
 
     def evaluate(self, p, holds):
-        """(reasons, notes) for one PR: gate() then blockers(). The run and --explain both call this."""
+        """(reasons, notes) for one PR (from_graphql's shape): gate() then blockers(). The run and --explain both call this."""
         n = p["number"]
-        p["labels"] = [x["name"] if isinstance(x, dict) else x for x in p.get("labels") or []]
-        p.update(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "mergeable,statusCheckRollup,files"]) or {})
-        p["files"] = [f["path"] if isinstance(f, dict) else f for f in p.get("files") or []]
-        cache = {}
-
-        def patches():
-            if "f" not in cache:
-                pages = gh_json(["api", f"repos/{REPO}/pulls/{n}/files?per_page=100", "--paginate", "--slurp"]) or []
-                cache["f"] = [f for page in pages for f in page]
-            return cache["f"]
-        hits = path_hits(p["files"], holds) if holds else []
         notes = []
-        reasons = gate(p, holds, (lambda: hands_off_verdict(hits, patches, holds)) if hits else None, notes)
-        return reasons + blockers(p, self.paused), notes
+        reasons = gate(p, holds, notes)
+        stop = blockers(p, self.paused)
+        for _ in range(MERGEABLE_REREADS):
+            if reasons or [r.code for r in stop] != ["mergeable"] or p.get("mergeable") != "UNKNOWN":
+                break
+            time.sleep(MERGEABLE_WAIT_S)
+            p.update(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "mergeable"]) or {})
+            stop = blockers(p, self.paused)
+        return reasons + stop, notes
 
     def merges(self, holds):
-        prs = gh_json(["pr", "list", "-R", REPO, "--state", "open", "--author", ME, "--limit", "100",
-                       "--json", "number,headRefOid,isDraft,labels,body,title"]) or []
-        for p in prs:
-            ident = f"{SHORT}#{p['number']}"
+        for ident in list(self.s["queued"]):   # merges requested by an earlier run that have since left the queue
             try:
+                self.landed(ident)
+            except Exception as e:
+                self.errors += 1
+                self.event("error", ident, f"queued merge: {type(e).__name__}: {str(e)[:150]}")
+        nodes, after = [], None
+        while True:   # one search, a page per 50 PRs
+            page = gh_json(["api", "graphql", "-f", f"q=repo:{REPO} is:pr is:open author:{ME}", "-f", f"query={OPEN_PRS}",
+                            *(["-f", f"after={after}"] if after else [])])["data"]["search"]
+            nodes += [x for x in page["nodes"] if x]
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        for node in nodes:
+            ident = f"{SHORT}#{node['number']}"
+            try:
+                try:
+                    p = from_graphql(read_rest(node))
+                except Exception as e:   # the gate cannot be read, so the job's own queue entry for this head comes out
+                    if ident in self.s["queued"]:
+                        self.dequeue(ident, node["number"], node["headRefOid"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
+                    raise
                 reasons, notes = self.evaluate(p, holds)
-                act, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
+                act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(ident))
+                if ident in self.s["queued"]:
+                    self.dequeue(ident, p["number"], p["headRefOid"], reasons, why)
                 if self.dry:   # one line per PR, even when the decision has not changed since the last run
-                    print(f"dry-run {ident} {p['headRefOid'][:9]} {act}: {why}"[:400])
-                self.apply(ident, p["number"], p["headRefOid"], act, why)
+                    print(f"dry-run {ident} {p['headRefOid'][:9]} {act}{f' who={who}' if who != 'none' else ''}: {why}"[:400])
+                self.apply(ident, p["number"], p["headRefOid"], act, who, why)
             except Exception as e:   # one PR's failure must not skip the rest
                 self.errors += 1
                 self.event("error", ident, f"merge: {type(e).__name__}: {str(e)[:150]}")
 
-    def apply(self, ident, n, head, act, why):
-        if act in ("skip", "wait"):
-            return self.decide("skipped", ident, head, why)
-        if act == "buffer":
-            return self.buffer("merge-blocked", ident, head, why)
+    def dequeue(self, ident, n, head, reasons, why):
+        """Take the job's own merge-queue entry out when the gate no longer passes (a hold row came, PAUSED, no tier).
+        dequeuePullRequest takes only the PR id, so an entry another actor makes between the read and the call would be
+        dequeued too; GitHub has no conditional form."""
+        q = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_ENTRY}"]) or {}
+        pull = ((q.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+        if not should_dequeue(reasons, self.s["queued"][ident], pull.get("mergeQueueEntry"), head):
+            return
+        if self.dry:
+            return self.decide("would-dequeue", ident, head, why)
+        rc, _, err = sh(["gh", "api", "graphql", "-f", f"id={pull['id']}", "-f", f"query={DEQUEUE}"])
+        if rc:
+            self.errors += 1
+            return self.event("error", ident, f"dequeue at {head[:9]}: {err.strip()[:150]}")
+        del self.s["queued"][ident]
+        self.event("merge-dequeued", ident, f"at {head[:9]}: {why}")
+
+    def apply(self, ident, n, head, act, who, why):
+        if act == "wait":
+            return self.decide("wait", ident, head, f"who={who}: {why}" if who != "none" else why)
         if not self.can_act:
             return self.decide("would-" + act, ident, head, why)
-        if act == "ready":
-            rc, _, err = sh(["gh", "pr", "ready", str(n), "-R", REPO])
-            return self.event("readied" if rc == 0 else "error", ident, why if rc == 0 else f"ready failed: {err.strip()[:150]}")
         if act == "rerun":
             _, _, runs = check_state(gh_json(["pr", "view", str(n), "-R", REPO, "--json", "statusCheckRollup"])["statusCheckRollup"])
             for rid in sorted(runs):
@@ -461,14 +548,51 @@ class Job:
             return self.event("rerun", ident, f"{len(runs)} run(s) at {head[:9]}: {why}")
         rc, _, err = sh(["gh", "pr", "merge", str(n), "-R", REPO, "--squash", "--match-head-commit", head], timeout=180)
         if rc:
-            return self.buffer("merge-failed", ident, head, f"gh pr merge: {err.strip()[:200]}")
-        return self.event("merged", ident, f"squash at {head[:9]}: {why}")
+            return self.wake("merge-failed", ident, head, f"gh pr merge: {err.strip()[:200]}")
+        # trycua/cua has a merge queue: gh exits 0 when it only queued, so `merged` waits for GitHub's MERGED
+        if self.s["queued"].get(ident, {}).get("head") != head:
+            self.s["queued"][ident] = {"head": head, "why": why}
+            self.once("merge-queued", ident, head, f"squash at {head[:9]}: {why}")
+        self.landed(ident)
+
+    def once(self, kind, ident, head, reason):
+        """Log `kind` for this PR and head unless events.log has it: a run that died before saving state logs it once."""
+        mark = f" {kind} {ident} squash at {head[:9]}"
+        if not os.path.exists(EVENTS) or not any(mark in x for x in read(EVENTS).splitlines()):
+            self.event(kind, ident, reason)
+
+    def landed(self, ident):
+        """Log `merged` once GitHub says a requested merge is MERGED at the head the job queued, through a merge-queue entry
+        ME made (queue_merged_by), with its mergedAt. Any other merge (a push dropped the job's entry, then someone else
+        merged it outside the queue or queued it) is not the job's: the record goes and merge-watch wakes for it. Drop it too
+        when GitHub closed it. The job runs as ME, so ME re-queueing the same head by hand after GitHub dropped the job's
+        entry reads as the job's; GitHub keeps nothing that tells the two apart."""
+        q, n = self.s["queued"][ident], ident.split("#")[1]
+        st = gh_json(["pr", "view", n, "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
+        by = None
+        if st.get("state") == "MERGED":
+            pull = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_EVENTS}"]) or {}).get("data") or {})
+                    .get("repository") or {}).get("pullRequest") or {}
+            by = queue_merged_by((pull.get("timelineItems") or {}).get("nodes") or [])
+        if st.get("state") == "MERGED" and ((st.get("headRefOid") or q["head"]) != q["head"] or by != ME):
+            self.event("merge-dropped", ident, f"merged at {(st.get('headRefOid') or q['head'])[:9]} through {by or 'no'} queue entry, "
+                                               f"the job queued {q['head'][:9]}: not the job's merge")
+        elif st.get("state") == "MERGED":
+            head = q["head"]
+            self.s["landed"][ident.split("#")[1]] = {"head": head, "at": now()}
+            self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
+        elif st.get("state") == "CLOSED":
+            self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
+        else:
+            return
+        del self.s["queued"][ident]
 
     def merge_watch(self):
-        """Urgent unexpected-merge wake for a trycua/cua PR merged as ME that this job did not merge. Its `merged
-        cua#N` events are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
+        """Urgent unexpected-merge wake for a trycua/cua PR by ME that this job did not merge, whoever merged it. The heads
+        in state.json landed and queued are the whole allow list. Covers merges since state merges.since: set on the first run, and moved
         up to WATCH_OVERLAP_S before this run only after a fetch that was not cut short, so no merge falls between two
-        windows; merges.seen keeps the ones already handled inside the overlap."""
+        windows; merges.seen keeps the ones already handled inside the overlap. A merge whose wake was not sent (paused, or
+        the POST failed) is not seen, and the window does not move past it, so the next pass sends it."""
         mw = self.s["merges"]
         known = mw.setdefault("seen", {})
         if not mw.get("since"):
@@ -476,34 +600,42 @@ class Job:
             return
         since = datetime.fromisoformat(mw["since"]).astimezone(ZoneInfo("UTC"))
         start = datetime.fromtimestamp(time.time() - WATCH_OVERLAP_S, SGT).isoformat(timespec="seconds")
-        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--limit", str(WATCH_LIMIT), "--search",
-                          f"merged:>={since.date().isoformat()}", "--json", "number,mergedBy,mergedAt,title,mergeCommit"]) or []
+        merged = gh_json(["pr", "list", "-R", REPO, "--state", "merged", "--author", ME, "--limit", str(WATCH_LIMIT), "--search",
+                          f"merged:>={since.date().isoformat()}", "--json", "number,headRefOid,mergedBy,mergedAt,title,mergeCommit"]) or []
         at_of = lambda p: datetime.fromisoformat(p["mergedAt"].replace("Z", "+00:00"))   # noqa: E731
         by_n = {p["number"]: p for p in merged if at_of(p) >= since}
-        events = read(EVENTS).splitlines() if os.path.exists(EVENTS) else []
-        for n, act, by in merge_audit(list(by_n.values()), job_merges(events), known):
+        heads = {int(k): v["head"] for k, v in self.s["landed"].items()}
+        heads.update({int(k.split("#")[1]): v["head"] for k, v in self.s["queued"].items()})
+        unsent = []
+        for n, by in merge_audit(list(by_n.values()), heads, known):
             p, ident = by_n[n], f"{SHORT}#{n}"
             at = at_of(p).astimezone(SGT).isoformat(timespec="seconds")
             sha = (p.get("mergeCommit") or {}).get("oid") or "-"
             why = f"merged by {by} at {at} as {sha[:9]}, not by the tick: {(p.get('title') or '')[:100]}"
-            if act == "alert":
-                self.buffer("unexpected-merge", ident, sha, why, urgent=True)
-            elif act == "log":
-                self.event("merge-noted", ident, why)
-            known[str(n)] = {"by": by, "at": at, "outcome": act}
+            if self.wake("unexpected-merge", ident, sha, why):
+                known[str(n)] = {"by": by, "at": at, "outcome": "alert"}
+            else:
+                unsent.append(at)
         if len(merged) >= WATCH_LIMIT:   # merges past the page are unseen: keep the window and wake a person, once per window
             self.errors += 1
-            why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges as {ME} by hand, then move merges.since"
+            why = f"{len(merged)} merged PRs since {mw['since']}, the fetch limit: check merges of PRs by {ME} by hand, then move merges.since"
             self.event("error", "merge-watch", why)
-            return self.buffer("merge-watch-overflow", "merge-watch", mw["since"], why, urgent=True)
-        mw["since"] = max(mw["since"], start)
+            return self.wake("merge-watch-overflow", "merge-watch", mw["since"], why)
+        mw["since"] = max(mw["since"], min([start, *unsent]))
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}   # older ones are outside the window
+        merged_at = {str(n): at_of(p).astimezone(SGT).isoformat(timespec="seconds") for n, p in by_n.items()}
+        # a seeded entry's at is when the job queued it, before GitHub merged it: keep it while its merge is in the window
+        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if max(v["at"], merged_at.get(k, "")) >= mw["since"]}
 
     def run(self):
         if self.paused:
             self.decide("paused", "tick", "-", self.paused)
         elif self.s["last_reason"].pop("tick", None):
             self.event("resumed", "tick", "PAUSED removed")
+        if not self.dry and (drift := parity_problem()):   # merging goes on; a person is woken, once an hour while it lasts
+            self.errors += 1
+            self.event("error", "parity", drift)
+            self.wake("parity", "host", now()[:13], drift)
         holds = self.holds()
         for name, fn in (("merge", lambda: self.merges(holds)), ("merge-watch", self.merge_watch)):
             try:
@@ -518,24 +650,25 @@ class Job:
             json.dump(self.s, f, indent=1, sort_keys=True)
         os.replace(tmp, STATE)
         with open(LAST, "w") as f:
-            f.write(f"{now()} {'ok' if not self.errors else f'{self.errors} error(s)'}{' paused' if self.paused else ''}\n")
+            f.write(f"{now()} zstack {sha()} {'ok' if not self.errors else f'{self.errors} error(s)'}{' paused' if self.paused else ''}\n")
 
     def explain(self, n):
         """--explain N: every reason for one PR and the action a run would take. Records nothing."""
-        p = gh_json(["pr", "view", str(n), "-R", REPO, "--json", "number,headRefOid,isDraft,labels,body,title,state,author"])
+        p = gh_json(["pr", "view", str(n), "-R", REPO, "--json", "state,author"])
+        p.update(from_graphql(read_rest(gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])))
         try:
             holds = parse_holds(read(HOLDS_FILE))
         except Exception as e:
             holds = None
             print(f"holds file unreadable: {e}")
         reasons, notes = self.evaluate(p, holds)
-        act, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
-        gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "risk"}
+        act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
+        gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk"}
         lines = [f"{SHORT}#{n} {p.get('state', '')} by {(p.get('author') or {}).get('login', '?')} at {p['headRefOid']}: "
                  f"{(p.get('title') or '')[:90]}", f"gate: {'pass' if not gate_codes & {r.code for r in reasons} else 'fail'}"]
         lines += [f"  {'gate' if r.code in gate_codes else 'blocker'} [{r.code}] {r.text}" for r in reasons]
         lines += [f"  note {x}" for x in notes]
-        lines.append(f"next action: {act}: {why}"[:400])
+        lines.append(f"next action: {act}{f' who={who}' if who != 'none' else ''}: {why}"[:400])
         print("\n".join(lines))
         return act == "merge"
 
@@ -558,5 +691,17 @@ def main(argv=None):
         Job(dry=a.dry_run).run()
 
 
+def run_on_main():
+    """Cron runs whatever is checked out, so a bare run first moves the package to origin/main and restarts on it. A
+    checkout that cannot move runs as it is, and hosts/check-parity reports it in run()."""
+    if os.environ.pop("ZSTACK_ENSURED", None):
+        return
+    if subprocess.run([f"{PKG}/bin/ensure-package-main"], stdout=subprocess.DEVNULL).returncode == 0:
+        os.execve(sys.executable, [sys.executable, os.path.abspath(__file__)], {**os.environ, "ZSTACK_ENSURED": "1"})
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        run_on_main()
+    print(f"zstack {sha()}", file=sys.stderr)
     main()

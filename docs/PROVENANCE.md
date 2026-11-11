@@ -7,7 +7,7 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 - **Model-invocable.** `disable-model-invocation: true` is stripped. In pi it hides a skill from the model instead of reserving it for a slash command.
 - **pi, not Cursor.** No `/loop`, cloud agents, `control-ui`, todo tool, Bugbot rubric, or `.cursor/` paths. Sessions are read from `~/.pi/agent/sessions/`, and PRs through `gh`.
 - **Repo-agnostic.** Project rules live in each repo's own `AGENTS.md`, and onigiri-mode's repo rules defer to it.
-- **Models per role live in the config.** pstack named a model per role inside its skills. zstack names none in skills or agent files. `config/models.json` maps each role to a provider and model, the `subagent` tool reads it by agent name, and the host launchers read it through `bin/model-for`.
+- **Models per role live in the config.** pstack named a model per role inside its skills. zstack names none in skills or agent files. `config/models.json` maps each role to a provider and model.
 
 ## Subagents
 
@@ -29,7 +29,7 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 ## Vendored verbatim
 
-`statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied byte for byte, with `statechart/scripts/` and its tests and corpus. Same MIT license and copyright as the rest of pstack.
+`statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied byte for byte with `statechart/scripts/`. The statechart's own test suite and corpus (`scripts/test/`, and the `fast-check` dev dependency in its `package.json`) are left upstream at that commit: no zstack CI step or session ran them. Same MIT license and copyright as the rest of pstack.
 
 None of the zstack changes above apply to them. They keep `disable-model-invocation: true`, so pi leaves them out of the model's skill list and they run only as `/skill:statechart`, `/skill:create-formal-verification-skill` and `/skill:maintain-formal-verification-skill`. Their text still says `/statechart` and other bare slash commands, and create still calls statechart "the pstack skill". The test workflow skips the bold-name check in these three directories, because the copied text uses lowercase bold as emphasis, such as maintain's outcome labels. Links such as `../statechart/SKILL.md` are still checked. To update them, copy the three directories again from a newer cursor/plugins commit and change the sha here.
 

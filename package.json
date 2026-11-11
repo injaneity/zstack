@@ -1,11 +1,11 @@
 {
   "name": "zstack",
   "version": "0.3.0",
-  "description": "pstack trimmed for pi: rigorous agent workflows, with a cold reviewer subagent at named steps.",
+  "description": "pstack trimmed for pi: rigorous agent workflows, with one verifier subagent that owns verification.",
   "license": "MIT",
   "keywords": ["pi-package", "skills", "workflow", "principles"],
   "pi": {
-    "extensions": ["./extensions/subagent/index.ts", "./extensions/tool-guard/index.ts"],
+    "extensions": ["./extensions/subagent/index.ts", "./extensions/tool-guard/index.ts", "./extensions/rule-guard/index.ts"],
     "skills": ["./skills"],
     "prompts": ["./prompts"]
   }
