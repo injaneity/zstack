@@ -1,11 +1,16 @@
 """Tests for bin/check-host against a fake pi, gh and claude in an empty HOME: each missing dependency is one FAIL line
 naming its fix and the exit is 1; with everything present it exits 0.
 Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
+import importlib.machinery
+import importlib.util
+import io
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 PKG = Path(__file__).resolve().parent.parent
 # fake pi: `pi list` prints $T/packages, `--list-models` prints $T/models, `-p` prints $T/answer-<provider> (exit 0) or fails.
@@ -92,6 +97,21 @@ class CheckHost(unittest.TestCase):
         (self.t / "root" / "hold-prs.txt").write_text("")
         _, lines = self.check("--offline")
         self.assertTrue(any(x.startswith("ok    holds:") for x in lines), lines)
+
+    def test_a_parity_check_that_dies_without_output_fails(self):
+        """check-parity that cannot run (killed, timed out) prints nothing; that is a FAIL, not a pass."""
+        self.ready()
+        loader = importlib.machinery.SourceFileLoader("check_host", str(PKG / "bin" / "check-host"))
+        ch = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(ch)
+        real = ch.run
+        dead = lambda cmd, env, **kw: (subprocess.CompletedProcess(cmd, 9, "", "") if cmd[0].endswith("check-parity")  # noqa: E731
+                                       else real(cmd, env, **kw))
+        out = io.StringIO()
+        with patch.dict(os.environ, self.env, clear=True), patch.object(ch, "run", dead), redirect_stdout(out), redirect_stderr(io.StringIO()):
+            rc = ch.main(["--offline"])
+        self.assertEqual(rc, 1)
+        self.assertIn("FAIL  parity: hosts/check-parity exited 9 without a FAIL line", out.getvalue())
 
     def test_a_bad_argument_is_usage(self):
         r = subprocess.run([str(PKG / "bin" / "check-host"), "--nope"], env=self.env, capture_output=True, text=True, timeout=30)

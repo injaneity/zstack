@@ -110,9 +110,12 @@ def main(argv):
     say("ok" if not gh.returncode else "FAIL", "gh: " + ("logged in" if not gh.returncode else f"not logged in ({last(gh)}); run `gh auth login`"))
 
     parity = run([os.path.join(PKG, "hosts", "check-parity")], {**env, "ONIGIRI_ROOT": root}, timeout=300)
-    for x in parity.stdout.splitlines()[1:]:
+    lines = [x for x in parity.stdout.splitlines() if x.startswith(("ok ", "FAIL "))]
+    for x in lines:
         level, _, msg = x.partition(" ")
         say("ok" if level == "ok" else "FAIL", f"parity {msg.strip()}")
+    if parity.returncode and not any(x.startswith("FAIL") for x in lines):
+        say("FAIL", f"parity: hosts/check-parity exited {parity.returncode} without a FAIL line: {last(parity)}")
 
     merge_host = env.get("ONIGIRI_MERGE_HOST")
     holds = os.path.join(root, "hold-prs.txt")
