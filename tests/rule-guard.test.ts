@@ -388,6 +388,8 @@ test("bin/hold-row is the sanctioned way to append a row relaying Zane's call; d
 		`ONIGIRI_ROOT=/srv/onigiri bin/hold-row add '${row}'`,
 		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add '${row}'"`,
 		`ssh vm 'bin/hold-row add "hold | 7400 | no | Zane 11 Nov 17:00 SGT: wait for bench"'`,
+		`bin/hold-row retire '${row}' 'Zane 11 Nov 18:00 SGT: stale pin'`,
+		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row replace '${row}' '${row.replace("a".repeat(40), "b".repeat(40))}'"`,
 	])
 		allowed(c, "/srv/onigiri");
 	// the helper does not launder a redirection or an edit on the same line

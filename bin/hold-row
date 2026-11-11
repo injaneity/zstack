@@ -2,15 +2,21 @@
 """hold-row: the one sanctioned way for a session to write the holds file, relaying Zane's explicit call.
 
   hold-row add '<kind> | <target> | <rules> | ... | <source>'
+  hold-row retire '<row as it stands in the file>' '<source>'
+  hold-row replace '<row as it stands in the file>' '<new row>'
 
-It appends exactly one row to $ONIGIRI_ROOT/hold-prs.txt (default /srv/onigiri, as hosts/vm/merge_job.py). The row's
+`add` appends exactly one row to $ONIGIRI_ROOT/hold-prs.txt (default /srv/onigiri, as hosts/vm/merge_job.py). The row's
 last column is its source: it must name Zane and the time of his call (`Zane 11 Nov 14:56 SGT`, or an ISO date and
 time). Under a lock it backs the file up to hold-prs.txt.bak-<time> first, writes the new file beside it and renames
 it in, then runs the merge job's parser (parse_holds) on the result and restores the backup if parsing fails. The new text is parsed
 before the rename too, so a rejected row never reaches the live file even when the run dies halfway. A row
-already in the file is not added again, so a rerun changes nothing. A file that does not exist is not created: on the
-mini, the synced copy is read-only and never written here. Exit 0 added or already there, 1 refused or restored,
-2 usage. Direct edits of the holds file stay blocked by rule-guard (docs/RULE-GUARD.md).
+already in the file is not added again, so a rerun changes nothing. `retire` turns the one line equal to the named row
+into `# retired <source>: <row>`, a comment the parser skips, so the file keeps its history; `replace` does that and puts
+the new row in its place, recording the new row's source. The source must name Zane and the time of his call, as for
+`add`, and both take the same lock, backup and parser checks. A row that matches no line or more than one is refused, and
+a second run finds the comment and changes nothing. A file that does not exist is not created: on the mini, the synced
+copy is read-only and never written here. Exit 0 done or already done, 1 refused or restored, 2 usage. Direct edits
+of the holds file stay blocked by rule-guard (docs/RULE-GUARD.md).
 """
 import fcntl
 import importlib.util
@@ -45,7 +51,7 @@ def check_row(row):
     f = [x.strip() for x in row.split("|")]
     if len(f) < 3 or not all(f[:2]) or row.lstrip().startswith("#"):
         return "a row is `kind | target | rules | ... | source`"
-    if not re.search(r"\bZane\b", f[-1]) or not WHEN.search(f[-1]):
+    if not source_ok(f[-1]):
         return f"the last column must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {f[-1]!r}"
     return None
 
@@ -61,23 +67,26 @@ def replace(holds, text):
     os.replace(tmp, holds)
 
 
-def add(row, holds):
-    why = check_row(row)
-    if why:
-        refuse(why)
+def source_ok(src):
+    return bool(re.search(r"\bZane\b", src)) and bool(WHEN.search(src))
+
+
+def edit(holds, change):
+    """Under the lock: read and parse the holds file, apply `change(old text) -> (new text, message)` (or None when it is
+    already done), parse the result, back up, rename it in, parse what landed and restore the backup if that fails."""
     if not os.path.isfile(holds):
-        refuse(f"{holds} does not exist; rows are appended only to the merge host's holds file")
+        refuse(f"{holds} does not exist; rows are written only to the merge host's holds file")
     with open(os.path.join(os.path.dirname(holds), ".hold-row.lock"), "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = mj.read(holds)
         try:
             mj.parse_holds(old)
         except ValueError as e:
-            refuse(f"the holds file is already unreadable ({e}); not adding to it")
-        if row.strip() in (x.strip() for x in old.splitlines()):
-            print(f"already there: {row.strip()}")
+            refuse(f"the holds file is already unreadable ({e}); not changing it")
+        done = change(old)
+        if done is None:
             return
-        new = old + ("" if not old or old.endswith("\n") else "\n") + row.strip() + "\n"
+        new, msg = done
         # parsed before it goes live too, so a run killed before the restore below never leaves it unreadable
         try:
             mj.parse_holds(new)
@@ -91,15 +100,71 @@ def add(row, holds):
         except ValueError as e:
             replace(holds, mj.read(backup))
             refuse(f"the merge job's parser rejects the result ({e}); restored {backup}")
-        print(f"added: {row.strip()}\nbackup: {backup}")
+        print(f"{msg}\nbackup: {backup}")
+
+
+def add(row, holds):
+    why = check_row(row)
+    if why:
+        refuse(why)
+
+    def change(old):
+        if row.strip() in (x.strip() for x in old.splitlines()):
+            print(f"already there: {row.strip()}")
+            return None
+        return old + ("" if not old or old.endswith("\n") else "\n") + row.strip() + "\n", f"added: {row.strip()}"
+    edit(holds, change)
+
+
+def retire(old_row, source, holds, new_row=None):
+    """Turn the one line equal to `old_row` into `# retired <source>: <old_row>`, and with `new_row` put that row right
+    after it. The comment keeps the history in the file, and the parser skips it. A second run finds the comment and
+    changes nothing."""
+    old_row = old_row.strip()
+    if old_row.splitlines() != [old_row] or not old_row or old_row.startswith("#"):
+        refuse("name the row to retire exactly as it stands in the file, one line")
+    if source.splitlines() != [source.strip()] or not source_ok(source):
+        refuse(f"the source must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {source!r}")
+    if new_row is not None:
+        why = check_row(new_row)
+        if why:
+            refuse(why)
+        new_row = new_row.strip()
+    tomb = f"# retired {source.strip()}: {old_row}"
+
+    def change(text):
+        lines = text.splitlines()
+        hits = [i for i, x in enumerate(lines) if x.strip() == old_row]
+        if not hits:
+            if tomb in (x.strip() for x in lines) and (new_row is None or new_row in (x.strip() for x in lines)):
+                print(f"already retired: {old_row}")
+                return None
+            refuse(f"no row in the file is exactly {old_row!r}")
+        if len(hits) > 1:
+            refuse(f"{len(hits)} rows are exactly {old_row!r}; retire them by hand")
+        if new_row is not None and new_row in (x.strip() for x in lines):
+            refuse(f"the new row is already in the file: {new_row!r}")
+        i = hits[0]
+        lines[i:i + 1] = [tomb] + ([new_row] if new_row is not None else [])
+        msg = f"retired: {old_row}" + (f"\nadded: {new_row}" if new_row is not None else "")
+        return "\n".join(lines) + "\n", msg
+    edit(holds, change)
 
 
 def main(argv):
-    if len(argv) != 2 or argv[0] != "add":
+    arity = {"add": 2, "retire": 3, "replace": 3}
+    if not argv or arity.get(argv[0]) != len(argv):
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(2)
     # a symlinked holds file keeps its link: the rename lands on the file it points to
-    add(argv[1], os.path.realpath(mj.HOLDS_FILE))
+    holds = os.path.realpath(mj.HOLDS_FILE)
+    if argv[0] == "add":
+        add(argv[1], holds)
+    elif argv[0] == "retire":
+        retire(argv[1], argv[2], holds)
+    else:
+        # the new row's source names Zane's call; the retired line records the same source
+        retire(argv[1], [x.strip() for x in argv[2].split("|")][-1], holds, argv[2])
 
 
 if __name__ == "__main__":

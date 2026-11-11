@@ -30,8 +30,8 @@ const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 // git global options that take the next word as their value.
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
-// the one sanctioned write: bin/hold-row, which appends a row relaying Zane's explicit call (Zane, 11 Nov)
-const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, append one row with `bin/hold-row add '<row>; Zane <date> <time>'` on the merge host; otherwise put the row you want under questions:.";
+// the one sanctioned writer: bin/hold-row, which adds, retires or replaces a row relaying Zane's explicit call (Zane, 11 Nov)
+const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, use `bin/hold-row add '<row>; Zane <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
 
 /**
  * Whether the word `w`, a path in a command run in `dir`, may name a real holds file. A path the guard can resolve
