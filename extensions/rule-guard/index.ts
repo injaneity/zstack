@@ -1,5 +1,5 @@
 // rule-guard: blocks the tool calls onigiri-mode's Hard rules ban outright (force-push, skipping the pre-push hook, merging
-// or rerunning CI in a repo the merge job owns, writing the holds file). See docs/RULE-GUARD.md.
+// or rerunning CI that really failed in a repo the merge job owns, writing the holds file). See docs/RULE-GUARD.md.
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -21,7 +21,17 @@ function originRepo(dir: string): string | null | undefined {
 	}
 }
 
-const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false, get ghRepo() { return process.env.GH_REPO || undefined; } };
+// Runs only for a rerun in an owned repo: GitHub's word on whether the run or job was cancelled or timed out.
+function ciConclusion(repo: string, kind: "run" | "job", id: string): string | undefined {
+	try {
+		const out = execFileSync("gh", ["api", `repos/${repo}/actions/${kind}s/${id}`, "--jq", ".conclusion // \"\""], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+		return out || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+const host: Host = { repoAt: originRepo, isFile: (p) => stat(p)?.isFile() ?? false, ciConclusion, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export default function (pi: ExtensionAPI) {
 	const ready = readyAllowed();

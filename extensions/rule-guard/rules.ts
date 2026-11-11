@@ -15,7 +15,13 @@ export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boo
 /** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
  * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
  * with ~) is an existing file. `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
-export interface Host { repoAt(dir: string): string | null | undefined; isFile(p: string): boolean; ghRepo?: string }
+export interface Host {
+	repoAt(dir: string): string | null | undefined;
+	isFile(p: string): boolean;
+	ghRepo?: string;
+	/** A workflow run's or job's conclusion in `repo` (owner/name), as GitHub reports it; undefined when it can't be told. */
+	ciConclusion?(repo: string, kind: "run" | "job", id: string): string | undefined;
+}
 const NO_HOST: Host = { repoAt: () => undefined, isFile: () => false };
 
 // A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
@@ -139,6 +145,31 @@ function ghApiWrites(w: string[]): boolean {
 const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
+// Zane, 11 Nov: cancelled or stuck CI is rerun without asking; only real failures go to him. A stuck job is cancelled
+// first (GitHub reruns only finished runs), so these two cover it.
+const RERUNNABLE = new Set(["cancelled", "timed_out"]);
+
+/** What a CI rerun targets: `gh run rerun <run> [--job <job>]`, or an actions runs/jobs rerun API path. */
+function rerunTarget(w: string[]): { kind: "run" | "job"; id: string } | undefined {
+	if (w[1] === "api") {
+		for (const a of w) {
+			const m = a.match(/\/actions\/(runs|jobs)\/([^/]+)\/rerun/);
+			if (m) return /^\d+$/.test(m[2]) ? { kind: m[1] === "runs" ? "run" : "job", id: m[2] } : undefined;
+		}
+		return undefined;
+	}
+	let run: string | undefined, job: string | undefined;
+	for (let i = 3; i < w.length; i++) {
+		const a = w[i];
+		const v = a === "-j" || a === "--job" ? w[++i] : a.match(/^(?:-j|--job=)(.+)$/)?.[1];
+		if (v !== undefined) job = v;
+		else if (a === "-R" || a === "--repo") i++;
+		else if (!a.startsWith("-")) run = a;
+	}
+	const target = job !== undefined ? { kind: "job" as const, id: job } : run !== undefined ? { kind: "run" as const, id: run } : undefined;
+	return target && /^\d+$/.test(target.id) ? target : undefined;
+}
+
 // gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
 
@@ -167,6 +198,16 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string
 	const repos = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
 	const hit = repos.find((r) => owned.has(r as string));
+	if (hit && act.includes("rerun")) {
+		// every owned repo the command might act in must report the run or job cancelled or timed out
+		const t = rerunTarget(w);
+		for (const r of new Set(repos.filter((r) => owned.has(r as string)) as string[])) {
+			const c = t && host.ciConclusion?.(r, t.kind, t.id);
+			if (!c || !RERUNNABLE.has(c))
+				return `${act} in ${r}: only a cancelled or timed-out run or job is rerun without asking (it is ${c ?? "unknown"}); a real failure goes to Zane`;
+		}
+		return undefined;
+	}
 	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
 }
 
