@@ -41,7 +41,9 @@ _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
-TOTAL, AUTO, FLOOR_GB, HUNG_MIN = 5, 3, 20, 180   # slots and the VM floor: the routine's rules (playbooks/hourly.md)
+FLOOR_GB, HUNG_MIN = 20, 180   # the VM floor and the hung mark: the routine's rules (playbooks/hourly.md)
+_slots = json.load(open(os.path.join(PKG, "config", "slots.json")))   # the one copy of the shared caps
+TOTAL, AUTO = int(_slots["total"]), int(_slots["auto"])
 MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 # merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
 LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
@@ -153,8 +155,8 @@ def all_facts():
 
 
 def slots(hosts):
-    """(running, auto running) across every host: the 5 total and 3 auto slots are shared. Only a running run holds one:
-    a run that hit a 429 is queued again and gave its slot back."""
+    """(running, auto running) across every host: the total and auto slots (config/slots.json) are shared. Only a running
+    run holds one: a run that hit a 429 is queued again and gave its slot back."""
     rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] == "running"]
     return len(rs), sum(r["auto"] for r in rs)
 

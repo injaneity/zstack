@@ -1,7 +1,7 @@
 #!/bin/bash
 # new-brief <id> <role> [<source>]: write $ONIGIRI_ROOT/review/<id>/brief.md from the one brief template, with the task
-# text from stdin, and print its path. <source> is `auto` for an hourly auto-pick (it counts toward the 3 auto slots)
-# and `chat` otherwise. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
+# text from stdin, and print its path. <source> is `auto` for an hourly auto-pick (it counts toward the auto slots,
+# config/slots.json) and `chat` otherwise. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
 # follow-ups:/questions: and the no-invented-limits line, so a launch never depends on who wrote it. Refuses to
 # overwrite a brief that exists. Then `bin/queue <id>` (or `bin/hourly launch`) starts it.
 set -eu
