@@ -61,7 +61,8 @@ RESUME = "Your run stopped on an upstream rate limit and is resumed in the same 
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
              "so this session is reopened to resolve it (fix {n} of {cap}, config/ci.json). Read the failing logs, fix the cause "
              "(update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
-             "comment. Rerun a cancelled or timed-out job yourself. If only Zane can decide it, say why under questions: and stop.")
+             "comment. Rerun a job that failed for a reason outside your diff (cancelled, timed out, a runner network failure) "
+             "yourself. If only Zane can decide it, say why under questions: and stop.")
 CI_CONFIG = os.path.join(PKG, "config", "ci.json")   # fix_attempts: how many red heads per PR reopen its thread
 
 
