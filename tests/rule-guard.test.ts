@@ -100,6 +100,11 @@ test("a cancelled or timed-out run in a merge-job repo is rerun without asking; 
 	blocked("gh run rerun --job 90 -R trycua/cua");
 	blocked("gh run rerun 7 --job 90 -R trycua/cua");
 	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/rerun-failed-jobs");
+	// only the endpoint counts, not a field naming a cancelled run
+	blocked("gh api -f x=repos/trycua/cua/actions/runs/7/rerun repos/trycua/cua/actions/runs/9/rerun");
+	blocked("gh api repos/trycua/cua/actions/runs/9/rerun -f x=repos/trycua/cua/actions/runs/7/rerun");
+	blocked("gh api -X POST repos/trycua/cua/actions/runs/7/rerun/../../9/rerun");
+	allowed("gh api -H 'Accept: x' -X POST /repos/trycua/cua/actions/runs/7/rerun");
 	blocked("gh run rerun 6 -R trycua/cua"); // conclusion unknown
 	blocked("gh run rerun -R trycua/cua"); // no run named: gh would prompt for one
 	blocked("gh run rerun $RUN -R trycua/cua");

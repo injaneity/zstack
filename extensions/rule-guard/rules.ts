@@ -149,14 +149,15 @@ const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 // first (GitHub reruns only finished runs), so these two cover it.
 const RERUNNABLE = new Set(["cancelled", "timed_out"]);
 
+// gh api options that take the next word as their value
+const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+
 /** What a CI rerun targets: `gh run rerun <run> [--job <job>]`, or an actions runs/jobs rerun API path. */
 function rerunTarget(w: string[]): { kind: "run" | "job"; id: string } | undefined {
 	if (w[1] === "api") {
-		for (const a of w) {
-			const m = a.match(/\/actions\/(runs|jobs)\/([^/]+)\/rerun/);
-			if (m) return /^\d+$/.test(m[2]) ? { kind: m[1] === "runs" ? "run" : "job", id: m[2] } : undefined;
-		}
-		return undefined;
+		// the endpoint is the first operand; a field value (`-f x=.../runs/7/rerun`) names nothing
+		const m = operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^\/?repos\/[^/]+\/[^/]+\/actions\/(runs|jobs)\/(\d+)\/rerun(?:-failed-jobs)?$/);
+		return m ? { kind: m[1] === "runs" ? "run" : "job", id: m[2] } : undefined;
 	}
 	let run: string | undefined, job: string | undefined;
 	for (let i = 3; i < w.length; i++) {
