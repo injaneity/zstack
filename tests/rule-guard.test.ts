@@ -181,6 +181,7 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	blocked(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -F query=@m.graphql -f q='enablePullRequestAutoMerge'`);
+	blocked(`gh api -X POST graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	allowed("gh pr ready 7040 -R trycua/cua --undo");
 	allowed("gh pr ready 33 -R injaneity/zstack", inCua);
 	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);
