@@ -113,18 +113,19 @@ class CheckHost(unittest.TestCase):
         self.assertTrue(any("`claude` CLI is not on PATH" in x for x in self.fails(lines)), lines)
 
     def test_the_merge_host_needs_the_holds_file(self):
+        """The host file's env names this host as the merge host; host_env is faked so nothing is written in the repo."""
         self.ready()
-        host = PKG / "hosts" / "checkhost-test"
-        host.mkdir()
-        self.addCleanup(lambda: (host / "host.sh").unlink() or host.rmdir())
-        (host / "host.sh").write_text("export ONIGIRI_MERGE_HOST=checkhost-test\n")
-        self.env["ONIGIRI_HOST"] = "checkhost-test"
-        _, lines = self.check("--offline")
-        self.assertTrue(any(x.startswith("FAIL  holds:") for x in lines), lines)
-        (self.t / "root").mkdir()
-        (self.t / "root" / "hold-prs.txt").write_text("")
-        _, lines = self.check("--offline")
-        self.assertTrue(any(x.startswith("ok    holds:") for x in lines), lines)
+        env = {**self.env, "ONIGIRI_HOST": "m", "ONIGIRI_MERGE_HOST": "m"}
+        ch = load()
+        for want in ("FAIL  holds:", "ok    holds:"):
+            out = io.StringIO()
+            with patch.dict(os.environ, self.env, clear=True), patch.object(ch, "CLAUDE_PIN", self.pin), \
+                    patch.object(ch.pr, "host_env", lambda cmd: (env, str(self.t / "root" / "review"))), \
+                    redirect_stdout(out), redirect_stderr(io.StringIO()):
+                ch.main(["--offline"])
+            self.assertTrue(any(x.startswith(want) for x in out.getvalue().splitlines()), out.getvalue())
+            (self.t / "root").mkdir(exist_ok=True)
+            (self.t / "root" / "hold-prs.txt").write_text("")
 
     def test_a_parity_check_that_dies_without_output_fails(self):
         """check-parity that cannot run (killed, timed out) prints nothing; that is a FAIL, not a pass."""
