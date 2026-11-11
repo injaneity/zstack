@@ -6,9 +6,10 @@
   hourly done [--linear ...]      after the pass: store the fingerprint and the snapshot status answers come from
   hourly log <host> <action> <item> <reason...>   append one pickup.log row (ts_sgt host action item reason free_gb)
   hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host>, then log the launch
-  hourly queue                    start every host's queued runs on that host, oldest since= first, while slots are
-                                  free: fresh ones, and 429'd ones in their own session once resume_at has passed
-                                  (PI_RUN_DRY=1: print the plan only)
+  hourly queue                    first reopen the thread that pushed each of our PRs red after the merge job's rerun
+                                  (bin/pi-run ci on its host), then start every host's queued runs on that host,
+                                  oldest since= first, while slots are free: fresh ones, and continuations (a 429's,
+                                  a red PR's) in their own session once resume_at has passed (PI_RUN_DRY=1: plan only)
   hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
   hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
   hourly facts | recv <id> [--drain]  what a peer is asked for over `on`: this host's facts as JSON; a brief on stdin
@@ -124,7 +125,72 @@ def facts():
     except OSError as e:
         merge = {"merge_last": f"unreadable: {e}"}
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": free_gb(r), "runs": runs, **merge}
+            "free_gb": free_gb(r), "runs": runs, "pushed": pushed(os.path.join(r, "review")), **merge}
+
+
+def pushed(review):
+    """{"<sha> <branch>": [id, utc time]} from every review/<id>/pushed (cua's pre-push hook writes `<sha> <branch> <utc time>`
+    per ref pushed to trycua/cua): the run that pushed each head to each branch last."""
+    rows = []
+    for sid in sorted(os.listdir(review)) if os.path.isdir(review) else []:
+        if os.path.isfile(p := os.path.join(review, sid, "pushed")):
+            rows += [(f[2], f"{f[0]} {f[1]}", sid) for f in (x.split() for x in open(p, errors="replace"))
+                     if len(f) == 3 and re.fullmatch(r"[0-9a-f]{40}", f[0])]
+    return {key: [sid, at] for at, key, sid in sorted(rows)}
+
+
+RED = re.compile(r"cua#(\d+) ([0-9a-f]{7,40}) wait who=session: (red after rerun: .*)")
+
+
+def owners(hosts, waits, branch_of):
+    """[(pr, full head, host, id, why)] for each merge-job wait that is our PR red after its rerun, with the run that last
+    pushed that head to the PR's own branch, on any host; a head no run pushed there (by hand, or before the hook recorded
+    pushes) is (pr, head, None, None, why). branch_of(pr) is the PR's (head sha, branch) from GitHub. A push of a PR's
+    current head to its own branch is up to date, so git hands the hook no ref line for it and a rejected later attempt
+    cannot take the head over."""
+    out = []
+    for w in waits:
+        if not (m := RED.fullmatch(w)):
+            continue
+        gh = branch_of(m[1])
+        hit = sorted((at, key.split()[0], h, sid) for h, f in hosts.items() for key, (sid, at) in (f.get("pushed") or {}).items()
+                     if key.startswith(m[2]) and key == f"{gh[0]} {gh[1]}")
+        _, sha, h, sid = hit[-1] if hit else (None, gh[0], None, None)
+        out.append((m[1], sha, h, sid, m[3]))
+    return out
+
+
+def branch_of(n):
+    """(head sha, head branch) of trycua/cua#n now, or ("unknown", "unknown") when GitHub cannot say."""
+    p = run(["gh", "pr", "view", n, "-R", "trycua/cua", "--json", "headRefOid,headRefName"])
+    try:
+        d = json.loads(p.stdout) if not p.returncode else {}
+    except ValueError:
+        d = {}
+    d = d if isinstance(d, dict) else {}
+    return (d["headRefOid"], d["headRefName"]) if d.get("headRefOid") and d.get("headRefName") else ("unknown", "unknown")
+
+
+def reopen(hosts, waits, dry):
+    """Give each red PR back to the thread that pushed its head (bin/pi-run ci on that host). One with no such thread, or
+    whose thread has spent its fix attempts, is printed for the pass: an unstick to file, or a needs-Zane item."""
+    for n, sha, h, sid, why in owners(hosts, waits, branch_of):
+        if sha == "unknown":
+            print(f"red cua#{n}: gh pr view failed, so its thread is unknown this pass")
+            continue
+        if sid is None:
+            print(f"red cua#{n} {sha[:9]}: no run pushed this head; file an unstick")
+            continue
+        if dry:
+            print(f"would reopen {h} {sid} for cua#{n} at {sha[:9]}: {why}")
+            continue
+        p = on(h, ["bin/pi-run", "ci", sid, n, sha, why])
+        if p.returncode == 0:
+            print(f"reopen {h} {sid}: {p.stdout.strip()}")
+            log(h, "ci-reopen", sid, f"cua#{n} at {sha[:9]}: {why}")
+        else:
+            err = (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1].removeprefix("pi-run: ")
+            print(f"red cua#{n} {sha[:9]}: {err}" + ("; needs Zane" if "spent" in err else ""))
 
 
 def free_gb(p):
@@ -238,8 +304,10 @@ def report(s, fp, last):
     for head, who in (("needs-Zane", "zane"), ("unstick", "session")):
         hits = [x for x in s["waits"] if f" wait who={who}: " in x]
         print(f"merge job {head}: {len(hits) or 'none'}")
+        own = {f"cua#{n} {sha[:9]}": f"{sid} on {h}" for n, sha, h, sid, _ in owners(s["hosts"], hits, branch_of) if sid}
         for x in hits:
-            print(f"  {x.replace(f' wait who={who}', '')}")
+            mine = own.get(" ".join(x.split()[:2]))
+            print(f"  {x.replace(f' wait who={who}', '')}" + (f"  (thread {mine}: bin/hourly queue reopens it)" if mine else ""))
     print(f"next: {os.path.join(PKG, 'skills', 'onigiri-mode', 'playbooks', 'hourly.md')}")
 
 
@@ -295,6 +363,11 @@ def drain():
         except OSError:
             pr.die(3, "queue: another hourly queue pass is running; nothing launched")
     hosts = all_facts()
+    errors = []
+    reopen(hosts, merge_waits(errors), dry)
+    for e in errors:
+        print(f"error: {e}: no red PR was reopened this pass")
+    hosts = all_facts() if not dry else hosts
     running, auto = slots(hosts)
     blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free
     for h in blind:

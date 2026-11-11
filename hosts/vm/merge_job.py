@@ -224,14 +224,16 @@ SESSION_CODES = {"no-tier", "conflict"}                                   # the 
 
 def next_action(reasons, notes, pr, rerun_head=None):
     """(action, who, why): merge | rerun | wait, and who must act for a wait: zane | session | none. A draft waits on
-    nobody, because whoever opened it readies it when it is ready. why names every blocking reason."""
+    nobody, because whoever opened it readies it when it is ready. why names every blocking reason. A red ci-gate on a
+    deep/human PR whose only other stop is its missing preapproval is the session's first (a preapproval pins the head,
+    so the fix push would void it): it is rerun once, then waits on the session, and the tier is Zane's once it is green."""
     codes = {r.code for r in reasons}
     why = "; ".join(r.text for r in reasons) or ", ".join(notes)
     if not reasons:
         return "merge", "none", "green, " + ", ".join(notes)
     if "draft" in codes:
         return "wait", "none", why
-    if codes & ZANE_CODES:
+    if codes & ZANE_CODES and not (codes & ZANE_CODES == {"risk"} and "ci" in codes and check_state(pr.get("statusCheckRollup"))[0] == "red"):
         return "wait", "zane", why
     if codes & SESSION_CODES:
         return "wait", "session", why
@@ -241,7 +243,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
     if state == "red":
         if rerun_head != pr["headRefOid"] and runs:
             return "rerun", "none", "red once: " + ", ".join(sorted(names))[:150]
-        return "wait", "session", "red after rerun: " + ", ".join(sorted(names))[:150]
+        return "wait", "session", "red after rerun: " + ", ".join(sorted(names))[:150] + "".join(f"; {r.text}" for r in reasons if r.code == "risk")
     return "wait", "none", why
 
 

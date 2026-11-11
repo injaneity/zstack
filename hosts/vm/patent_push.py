@@ -17,6 +17,14 @@ trycua/cua-staging, the public push is refused and:
   - otherwise the branch stays local and a blocked wake (wake.py, once per branch and head) tells Zane it is held for
     the private repo.
 A diff that cannot be read counts as held (fail closed).
+
+A push to trycua/cua from a pi session (PI_SESSION_ID, set by bin/pi-run) that the hook lets through whole appends
+`<sha> <branch> <utc time>` per ref to <root>/review/<id>/pushed. That file names the thread that pushed a PR's head,
+which owns its CI: bin/hourly reopens it when the PR goes red at that head (bin/pi-run ci), matching the PR's own head
+sha and branch and taking the latest push. The hook runs before git sends anything, so a push the remote then rejects is
+recorded too. For a branch already at the pushed sha git hands the hook no ref line (nothing to send), so a rejected
+attempt is one whose sha was not the branch's head at the time: it can name the owner only of a head that run made.
+
 """
 import os
 import re
@@ -139,11 +147,27 @@ def wake_hold(branch, sha, hits, root=ROOT):
     return status.startswith(("webhook sent", "not sent: dry run"))
 
 
+def record_push(sid, refs, root=ROOT):
+    """Note that session `sid` pushed each (sha, branch) to trycua/cua, in its own review dir only (a push from no pi run
+    records nothing)."""
+    d = os.path.join(root, "review", sid or "")
+    if not refs or not sid or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", sid) or not os.path.isdir(d):
+        return False
+    at = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    with open(os.path.join(d, "pushed"), "a") as f:
+        f.write("".join(f"{sha} {branch} {at}\n" for sha, branch in refs))
+    return True
+
+
+def is_public(url):
+    return bool(re.search(r"github\.com[:/]trycua/cua(\.git)?/?$", url or ""))
+
+
 def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
     """pre-push hook: argv = [remote name, remote url], stdin = "<local ref> <local sha> <remote ref> <remote sha>"
     lines. Returns the exit code (non-zero refuses the whole push)."""
     url = argv[1] if len(argv) > 1 else ""
-    refuse = 0
+    refuse, ok = 0, []
     for line in stdin.read().splitlines():
         f = line.split()
         if len(f) != 4 or f[1] == ZERO:  # malformed or a branch delete: nothing new is published
@@ -152,6 +176,7 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         hits = diff_hits(sha, cwd)
         act = choose_remote(url, hits, staging_ok or staging_push_ok)
         if act == "push":
+            ok.append((sha, remote_ref.removeprefix("refs/heads/")))
             continue
         refuse = 1
         branch = remote_ref.removeprefix("refs/heads/")
@@ -166,6 +191,8 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault and must not go to public "
                   f"trycua/cua. It stays local, and {woke}. Do not retry the push, push "
                   f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
+    if not refuse and is_public(url):   # one refused ref refuses the whole push, so nothing of it is recorded
+        record_push(os.environ.get("PI_SESSION_ID"), ok, root)
     return refuse
 
 

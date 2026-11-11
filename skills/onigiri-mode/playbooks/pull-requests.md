@@ -22,7 +22,7 @@ Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Har
 - `## Blast Radius`: who it touches and why that's safe or risky.
 - `## Verification`: one to three real runs and their outcomes. Perf gets one number, before and after.
 
-Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, unless the brief says to propose it first or not to merge yet: then open it as a draft and leave it one. Read `gh pr view` before describing its status. Post the URL. Then follow Hard rules' merge rule. Where it lets you merge, wait for `gh pr checks` to be green and `gh pr view <pr> --json mergeable` to say `MERGEABLE`, then confirm `state` is `MERGED`.
+Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, unless the brief says to propose it first or not to merge yet: then open it as a draft and leave it one. Read `gh pr view` before describing its status. Post the URL. Then follow Hard rules' merge rule. **You own its CI.** When your PR is red at a head you pushed, the hourly reopens this same session with the failing checks (`bin/pi-run ci`, at most `fix_attempts` times per PR, `config/ci.json`). Diagnose it as Land step 5 says, fix it, push, have the verifier check the new head, and post the verified comment; rerun a cancelled or timed-out job yourself. Put under `questions:` only what needs Zane's call. Where Hard rules let you merge, wait for `gh pr checks` to be green and `gh pr view <pr> --json mergeable` to say `MERGEABLE`, then confirm `state` is `MERGED`.
 
 ## Land
 

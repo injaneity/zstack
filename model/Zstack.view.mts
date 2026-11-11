@@ -6,7 +6,7 @@ export const state = (v: any) => {
     case "running": return "pi session working";
     case "failed": return v.woke ? "Failed, chat woken" : "Killed, wake at collect";
     case "done": return "Done, no trycua/cua PR";
-    case "open": return v.draft ? "Draft PR" : "Ready PR";
+    case "open": return v.fixing ? "Ready PR, its thread fixing red CI" : v.draft ? "Draft PR" : "Ready PR";
     case "inqueue": return v.byJob ? "In merge queue, job's entry" : "In merge queue, someone else's entry";
     case "merged": return v.by === "job" ? "Merged by the job" : "Merged outside the job";
   }
@@ -45,6 +45,8 @@ const steps: Record<string, string | null> = {
   QueueMerges: "queue merges",
   QueueDrops: "queue drops it",
   OtherMerges: "someone else merges it",
+  CiReopen: "red after the rerun: the hourly reopens the thread that pushed it",
+  ThreadFixes: "the thread pushes its fix, or exits with questions",
   Ends: null,
 };
 export const step = (action: string) => (action in steps ? steps[action] : action);

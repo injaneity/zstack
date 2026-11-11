@@ -6,9 +6,11 @@
 \* bin/PiRun.mutants.py, each of which must make TLC fail. tests/test_pi_run.py fails when bin/pi-run's step() is not
 \* that chart.
 \*
-\* One id is one attempt: a retry is a fresh id (onigiri-mode: nothing restarts a session), so collected is final. A 429
-\* sends the run back to queued with resume_at, which frees its slot; only the hourly queue drain starts it again, in the
-\* same pi session, once resume_at has passed.
+\* One id is one attempt: a retry is a fresh id (onigiri-mode: nothing restarts a session). A 429 sends the run back to
+\* queued with resume_at, which frees its slot; only the hourly queue drain starts it again, in the same pi session, once
+\* resume_at has passed. The one way out of collected is the run's own PR going red after the merge job's rerun, at a
+\* head the run pushed (Zane 11 Nov: "the thread itself should be responsible for resolving it"): `pi-run ci` queues the
+\* same session again the same way, at most FixAttempts times (config/ci.json fix_attempts; 2 here keeps TLC small).
 EXTENDS Naturals
 
 VARIABLES
@@ -21,20 +23,23 @@ VARIABLES
   finish,    \* the brief has a `wake: finish` line (run.json wake_finish)
   wake,      \* the wake sent for this attempt: "none", "done" or "failed" (run.json wake)
   reopened,  \* the running session reopened an earlier transcript
-  by         \* who started the running session: "drain" (bin/hourly queue) or "direct" (`pi-run <id> <role> <brief>`)
+  by,        \* who started the running session: "drain" (bin/hourly queue) or "direct" (`pi-run <id> <role> <brief>`)
+  why,       \* what the queued continuation waits to continue for: "limit" (a 429) or "ci" (its PR is red)
+  fixes      \* how many times its PR's red CI reopened the run (run.json ci: the heads, per PR)
 
-vars == <<state, cont, live, ended, killed, collects, finish, wake, reopened, by>>
+vars == <<state, cont, live, ended, killed, collects, finish, wake, reopened, by, why, fixes>>
+FixAttempts == 2
 
 Init ==
   /\ state = "absent" /\ cont = FALSE /\ live = FALSE /\ ended = FALSE /\ killed = FALSE /\ collects = 0
-  /\ finish = FALSE /\ wake = "none" /\ reopened = FALSE /\ by = "direct"
+  /\ finish = FALSE /\ wake = "none" /\ reopened = FALSE /\ by = "direct" /\ why = "limit" /\ fixes = 0
 
 Lost == state = "running" /\ ~live
 
 \* `pi-run queue <id>` (bin/queue): the run waits for the hourly drain.
 Queue ==
   /\ state = "absent" /\ state' = "queued"
-  /\ UNCHANGED <<cont, live, ended, killed, collects, finish, wake, reopened, by>>
+  /\ UNCHANGED <<cont, live, ended, killed, collects, finish, wake, reopened, by, why, fixes>>
 
 \* A fresh start, by the drain or directly (either of two racing launchers: the flock makes them take turns), with or
 \* without a `wake: finish` line in its brief. A 429's continuation is never started this way.
@@ -42,43 +47,53 @@ Start ==
   /\ state \in {"absent", "queued"} /\ ~cont
   /\ \E f \in BOOLEAN, b \in {"drain", "direct"} : finish' = f /\ by' = b
   /\ state' = "running" /\ live' = TRUE /\ reopened' = FALSE
-  /\ UNCHANGED <<cont, ended, killed, collects, wake>>
+  /\ UNCHANGED <<cont, ended, killed, collects, wake, why, fixes>>
 
 \* The hourly drain, once resume_at has passed: the same attempt continues its pi session.
 Resume ==
   /\ state = "queued" /\ cont
   /\ state' = "running" /\ live' = TRUE /\ cont' = FALSE /\ reopened' = TRUE /\ by' = "drain"
-  /\ UNCHANGED <<ended, killed, collects, finish, wake>>
+  /\ UNCHANGED <<ended, killed, collects, finish, wake, why, fixes>>
 
 \* pi stops on an upstream 429 (Claude Code or ChatGPT): back to the queue with resume_at. No wake, the slot is freed,
 \* and there is no result yet.
 Limit ==
   /\ state = "running" /\ live
-  /\ state' = "queued" /\ cont' = TRUE /\ live' = FALSE
-  /\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by>>
+  /\ state' = "queued" /\ cont' = TRUE /\ live' = FALSE /\ why' = "limit"
+  /\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes>>
 
 \* pi ends with rc 0 (ok) or not, and the supervisor sends and records the wake step() picks, then writes the rc.
 Exit ==
   /\ state = "running" /\ live
   /\ \E ok \in BOOLEAN : wake' = IF ~ok THEN "failed" ELSE IF finish THEN "done" ELSE "none"
   /\ state' = "exited" /\ live' = FALSE /\ ended' = TRUE
-  /\ UNCHANGED <<cont, killed, collects, finish, reopened, by>>
+  /\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes>>
 
 \* KILL or OOM: the supervisor and pi die and run.json still says running.
 Kill ==
   /\ state = "running" /\ live
   /\ live' = FALSE /\ ended' = TRUE /\ killed' = TRUE
-  /\ UNCHANGED <<state, cont, collects, finish, wake, reopened, by>>
+  /\ UNCHANGED <<state, cont, collects, finish, wake, reopened, by, why, fixes>>
 
 \* The pickup's `pi-run collect <id>`: takes an exited or lost run's result. A lost run's collect sends its failed wake.
 Collect ==
   /\ state = "exited" \/ Lost
   /\ state' = "collected" /\ collects' = collects + 1 /\ wake' = IF Lost THEN "failed" ELSE wake
-  /\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by>>
+  /\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes>>
 
+\* `pi-run ci <id> <pr> <head>` (bin/hourly queue, before it drains): the PR is red after the merge job's rerun at a
+\* head this run pushed, and it has fix attempts left. The collected run is queued again with resume_at now, for the
+\* drain to reopen in its own session. A new attempt result comes later, so the last one's is cleared.
+CiReopen ==
+  /\ state = "collected" /\ fixes < FixAttempts
+  /\ state' = "queued" /\ cont' = TRUE /\ why' = "ci" /\ fixes' = fixes + 1
+  /\ ended' = FALSE /\ killed' = FALSE /\ collects' = 0 /\ wake' = "none"
+  /\ UNCHANGED <<live, finish, reopened, by>>
+
+\* Collected with its PR green, merged, or its fix attempts spent: it stays collected.
 Done == state = "collected" /\ UNCHANGED vars
 
-Next == Queue \/ Start \/ Resume \/ Limit \/ Exit \/ Kill \/ Collect \/ Done
+Next == Queue \/ Start \/ Resume \/ Limit \/ Exit \/ Kill \/ Collect \/ CiReopen \/ Done
 \* The drain starts every queued run and resumes every continuation eventually; pi ends; the pickup collects.
 Spec == Init /\ [][Next]_vars /\ WF_vars(Start) /\ WF_vars(Resume) /\ WF_vars(Exit) /\ WF_vars(Collect)
 
@@ -98,8 +113,12 @@ DefaultIsFailuresOnly == state = "exited" /\ ~finish => wake \in {"none", "faile
 PauseIsSilent == cont => wake = "none" /\ ~ended /\ ~live
 \* Only the hourly drain reopens a session, and only a 429's continuation is reopened.
 ResumeGoesThroughTheQueue == state = "running" /\ reopened => by = "drain"
-\* Collected is final: a retry is a fresh id.
-CollectedIsFinal == [][state = "collected" => state' = "collected"]_vars
+\* Collected is final but for its own PR's red CI: a retry is a fresh id, and only CiReopen reopens it, as a continuation.
+CollectedIsFinal == [][state = "collected" => (state' = "collected" \/ (state' = "queued" /\ cont' /\ why' = "ci" /\ fixes' = fixes + 1))]_vars
+\* The thread fixes its PR's CI at most fix_attempts times; then it is Zane's.
+FixesCapped == fixes <= FixAttempts
+\* A CI continuation went through collect first: the run's last result was taken before its session reopened.
+CiReopenAfterCollect == [][(state' = "queued" /\ why' = "ci" /\ state # "queued") => state = "collected"]_vars
 \* Every attempt that ends is collected, and a 429's continuation runs again.
 EveryExitCollected == ended ~> collects = 1
 ContinuationRuns == cont ~> state = "running"
