@@ -59,7 +59,8 @@ MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5   # GitHub computes mergeability on t
 PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SGT = ZoneInfo("Asia/Singapore")
 # cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
-ENV = {**os.environ, "GH_CONFIG_DIR": os.path.expanduser("~/.config/gh"),
+# GH_CONFIG_DIR from the caller wins (the host file's or cron's), as in patent_push.py; ~/.config/gh is only the default.
+ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", os.environ.get("PATH") or "/usr/bin:/bin"])}
 
 Reason = namedtuple("Reason", "code text")
