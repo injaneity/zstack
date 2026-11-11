@@ -874,6 +874,14 @@ class CronEnv(unittest.TestCase):
                            env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}, capture_output=True, text=True, check=True)
         self.assertTrue({"/usr/local/bin", "/usr/bin", "/bin"} <= set(r.stdout.strip().split(os.pathsep)), r.stdout)
 
+    def test_the_callers_gh_config_dir_wins_and_home_is_the_default(self):
+        code = ("import importlib.util as u, sys; s = u.spec_from_file_location('m', sys.argv[1]); "
+                "m = u.module_from_spec(s); s.loader.exec_module(m); print(m.ENV['GH_CONFIG_DIR'])")
+        for extra, want in (({"GH_CONFIG_DIR": "/x/gh"}, "/x/gh"), ({}, "/h/.config/gh")):
+            r = subprocess.run([sys.executable, "-I", "-c", code, str(VM / "merge_job.py")],
+                               env={"PATH": "/usr/bin:/bin", "HOME": "/h", **extra}, capture_output=True, text=True, check=True)
+            self.assertEqual(r.stdout.strip(), want)
+
 
 class Webhook(unittest.TestCase):
     def test_posts_with_the_key_and_never_echoes_it(self):

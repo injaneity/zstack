@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""check-host: can this host run zstack? One `ok`, `warn` or `FAIL` line per check, exit 1 on any FAIL.
+
+  check-host            every check, then one real `pi -p` call per provider in config/models.json
+  check-host --offline  every check but the `pi -p` calls
+
+It reads the env bin/pi-run launches with ($ONIGIRI_HOST or ~/.config/onigiri/host names hosts/<name>/host.sh), so
+what it passes is what a launch sees. README's install section lists the dependencies it checks:
+  tools     pi, node, git, gh and python3 3.9 or newer on PATH
+  packages  pi lists npm:@ff-labs/pi-fff (the agents' search tools), and pi-claude-code at README's pinned commit when a
+            role uses claude-code
+  provider  `pi --list-models` lists a model of every provider a role uses, and the `claude` CLI is on PATH for claude-code
+  live      each provider answers one `pi -p`: a listed model can still refuse every request (a billing refusal does)
+  gh        `gh auth status` passes, so the hourly pass and the merge job can read PRs
+  parity    hosts/check-parity: the package at origin/main, the cua clone's pre-push hook, the agents dir
+  holds     $ONIGIRI_ROOT/hold-prs.txt exists on the merge host ($ONIGIRI_MERGE_HOST); without it every PR counts as held
+  webhook   ~/.config/onigiri-urgent-webhook exists (warn only: wakes are best effort)
+It changes nothing but the fetched origin/main ref.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+CLAUDE_PIN = "70abb65186592ca788b29b3db22c3160d629c41f"   # README: later pi-claude-code commits are refused as third-party usage
+_l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi-run"))
+pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
+_l.exec_module(pr)
+LOGIN = {"claude-code": "install the Claude Code CLI and run `claude auth login`, or export CLAUDE_CODE_OAUTH_TOKEN in the host file",
+         "openai-codex": "run `pi`, then `/login` and pick ChatGPT"}
+FAILS = []
+
+
+def say(level, msg):
+    print(f"{level:<5} {msg}")
+    if level == "FAIL":
+        FAILS.append(msg)
+
+
+def run(cmd, env, timeout=60, **kw):
+    try:
+        return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout, **kw)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: {e}")
+
+
+def last(p):
+    return ((p.stdout + p.stderr).strip().splitlines() or [f"exit {p.returncode}"])[-1][:240]
+
+
+def seats():
+    """{provider: (model, [roles])} from config/models.json, with the first model each provider is named with."""
+    out = {}
+    for role, v in json.load(open(os.path.join(PKG, "config", "models.json")))["roles"].items():
+        for s in v if isinstance(v, list) else [v]:
+            model, roles = out.setdefault(s["provider"], (s["model"], []))
+            roles.append(role)
+    return out
+
+
+def main(argv):
+    if argv not in ([], ["--offline"]):
+        print(__doc__, file=sys.stderr)
+        return 2
+    print(f"zstack {pr.sha()}", file=sys.stderr)
+    env, review = pr.host_env("list")
+    root = os.path.dirname(review)
+    host = env.get("ONIGIRI_HOST") or ""
+    say("ok", f"host file: {host or 'none, so a launch uses the calling shell env'}; root {root}")
+    path = env.get("PATH", "")
+
+    for tool in ("pi", "node", "git", "gh", "python3"):
+        where = shutil.which(tool, path=path)
+        say("ok" if where else "FAIL", f"tool {tool}: {where or 'not on PATH; install it, or put it on PATH in the host file'}")
+    py = run(["python3", "-c", "import sys, zoneinfo; print('%d.%d' % sys.version_info[:2])"], env)
+    say("ok" if not py.returncode else "FAIL",
+        "python3 version: " + (py.stdout.strip() if not py.returncode else "needs 3.9 or newer (zoneinfo): " + last(py)))
+
+    providers = seats()
+    listed = run(["pi", "list"], env).stdout
+    need = {"npm:@ff-labs/pi-fff": "pi install npm:@ff-labs/pi-fff@0.11.0 (the agents' fffind, ffgrep, fff-multi-grep)"}
+    if "claude-code" in providers:
+        need["earendil-works/pi-claude-code"] = f"pi install git:github.com/earendil-works/pi-claude-code@{CLAUDE_PIN} (pinned as README says)"
+    for pkg, how in need.items():
+        say("ok" if pkg in listed else "FAIL", f"package {pkg}: {'installed' if pkg in listed else 'missing; ' + how}")
+    if "claude-code" in providers and "earendil-works/pi-claude-code" in listed:
+        rows = listed.splitlines()   # `pi list`: a package line, then its checkout path
+        at = next(i for i, x in enumerate(rows) if "earendil-works/pi-claude-code" in x)
+        where = rows[at + 1].strip() if at + 1 < len(rows) else ""
+        head = run(["git", "-C", where, "rev-parse", "HEAD"], env).stdout.strip() if where else ""
+        if head == CLAUDE_PIN:
+            say("ok", f"package pi-claude-code revision: the pinned {CLAUDE_PIN[:9]}")
+        else:
+            say("FAIL", f"package pi-claude-code revision: {head[:9] or 'unknown'} at {where or '?'}, not the pinned {CLAUDE_PIN[:9]}; "
+                + need["earendil-works/pi-claude-code"])
+
+    models = run(["pi", "--list-models"], env, timeout=120).stdout.splitlines()
+    have = {x.split()[0] for x in models if x.split()}
+    if "claude-code" in providers and not shutil.which("claude", path=path):
+        say("FAIL", "provider claude-code: the `claude` CLI is not on PATH; npm install -g @anthropic-ai/claude-code")
+    for p, (_, roles) in providers.items():
+        say("ok" if p in have else "FAIL", f"provider {p} ({', '.join(dict.fromkeys(roles))}): " +
+            ("pi lists its models" if p in have else f"pi lists no {p} model, so bin/pi-run refuses these roles; {LOGIN.get(p, 'log in to it')}"))
+
+    if argv != ["--offline"]:
+        with tempfile.TemporaryDirectory() as cwd:
+            for p, (m, _) in providers.items():
+                if p not in have:
+                    continue
+                r = run(["pi", "-p", "--no-session", "--no-tools", "--provider", p, "--model", m, "Reply with the single word ok."],
+                        env, timeout=300, cwd=cwd)
+                good = not r.returncode and r.stdout.strip().lower().rstrip(".") == "ok"
+                say("ok" if good else "FAIL", f"live {p} {m}: " + ("answered" if good else f"did not answer ok (exit {r.returncode}): {last(r)}"))
+
+    gh = run(["gh", "auth", "status"], env)
+    say("ok" if not gh.returncode else "FAIL", "gh: " + ("logged in" if not gh.returncode else f"not logged in ({last(gh)}); run `gh auth login`"))
+
+    parity = run([os.path.join(PKG, "hosts", "check-parity")], {**env, "ONIGIRI_ROOT": root}, timeout=300)
+    lines = [x for x in parity.stdout.splitlines() if x.startswith(("ok ", "FAIL "))]
+    for x in lines:
+        level, _, msg = x.partition(" ")
+        say("ok" if level == "ok" else "FAIL", f"parity {msg.strip()}")
+    if parity.returncode and not any(x.startswith("FAIL") for x in lines):
+        say("FAIL", f"parity: hosts/check-parity exited {parity.returncode} without a FAIL line: {last(parity)}")
+
+    merge_host = env.get("ONIGIRI_MERGE_HOST")
+    holds = os.path.join(root, "hold-prs.txt")
+    if merge_host and merge_host == host:
+        say("ok" if os.path.isfile(holds) else "FAIL", f"holds: {holds} " + ("exists" if os.path.isfile(holds) else
+            "is missing; the merge job counts every PR as held until Zane writes it (docs/HOST.md, Holds file)"))
+    else:
+        say("ok", f"holds: not the merge host ({merge_host or 'ONIGIRI_MERGE_HOST unset'}), so the merge job does not run here")
+
+    key = os.path.expanduser("~/.config/onigiri-urgent-webhook")
+    say("ok" if os.path.isfile(key) else "warn", f"webhook: {key} " + ("exists" if os.path.isfile(key) else
+        "is missing, so wakes log `webhook not configured` and reach no one; only Zane places it"))
+    print(f"check-host: {len(FAILS)} failed" if FAILS else "check-host: every check passed")
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

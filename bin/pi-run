@@ -306,7 +306,7 @@ def launch(sid, role, brief, extra):
     if not any(x.split()[:1] == [provider] for x in ls.splitlines()):   # the 13:04 10 Nov "No API key" runs stop here
         die(4, f"{sid}: no {provider} credential in the launch env: `pi --list-models` lists no {provider} model "
                f"(host file: {env.get('ONIGIRI_HOST') or 'none'}). Log in, or name the host file that loads it with ONIGIRI_HOST "
-               "or ~/.config/onigiri/host. Nothing started.")
+               "or ~/.config/onigiri/host; bin/check-host lists what this host lacks. Nothing started.")
     if os.environ.get("PI_RUN_DRY"):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
