@@ -71,6 +71,12 @@ SCHEMA = {
         "private_repo": (repo, "owner/name"),
     },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
+    "pickup": {
+        "interval_s": (pos_int, "a positive integer"),
+        "deadline_s": (pos_int, "a positive integer"),
+        "label_hosts": (lambda v: isinstance(v, dict) and all(isinstance(x, str) and x.strip() for x in [*v, *v.values()]),
+                        "a table of label = host name"),
+    },
     "merge": {
         "repo": (repo, "owner/name"),
         "gate_check": (lambda v: isinstance(v, str) and v.strip() != "", "a check name"),
@@ -101,6 +107,8 @@ def validate(data):
         raise PolicyError("patent.private_repo must differ from patent.public_repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
+    if data["pickup"]["deadline_s"] >= data["pickup"]["interval_s"]:
+        raise PolicyError("pickup.deadline_s must be under pickup.interval_s, so a pass ends before the next one is due")
     return data
 
 

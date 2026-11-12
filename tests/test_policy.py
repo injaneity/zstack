@@ -85,6 +85,9 @@ class Policy(unittest.TestCase):
              "merge.tiers must be a non-empty list of distinct lowercase words"),
             ('preapprove_tiers = ["deep", "human"]', 'preapprove_tiers = ["deep", "hman"]', "merge.preapprove_tiers names hman"),
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
+            ("interval_s = 5400", "interval_s = 0", "pickup.interval_s must be a positive integer, not 0"),
+            ("deadline_s = 1200", "deadline_s = 5400", "pickup.deadline_s must be under pickup.interval_s"),
+            ('label_hosts = { Linux = "vm", macOS = "mini" }', 'label_hosts = { Linux = "" }', "pickup.label_hosts must be a table"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):

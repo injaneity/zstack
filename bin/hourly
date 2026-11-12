@@ -111,20 +111,27 @@ def activity_min(d):
     return int((time.time() - max([os.path.getmtime(p) for p in paths if os.path.exists(p)] or [0])) // 60)
 
 
+NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")   # a trycua/cua issue or PR a brief names
+
+
 def facts(full=True):
-    """This host: zstack sha and parity, free disk, and every run not collected; not full: only the runs."""
+    """This host: zstack sha and parity, free disk, and every run not collected, with the trycua/cua numbers its brief
+    names (bin/pickup's overlap rule); every review id here, collected or not (bin/pickup's taken items); and on the merge
+    host, the holds file it reads (bin/pickup's held rule), so a pickup never goes by a stale copy. Not full: only the runs."""
     r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
     if ls.returncode:   # runs unknown: report the host as an error, which every pass and the queue treat as unknown slots
         return {"error": "pi-run list: " + (ls.stderr.strip().splitlines() or [f"exit {ls.returncode}"])[-1][:200]}
     out = ls.stdout
-    runs = {}
+    runs, ids = {}, []
     for line in out.splitlines():
         sid, state, *kv = line.split()
+        ids.append(sid)
         if state == "collected":
             continue
         d, f = os.path.join(r, "review", sid), dict(x.split("=", 1) for x in kv)
         brief = open(os.path.join(d, "brief.md"), errors="replace").read() if os.path.exists(os.path.join(d, "brief.md")) else ""
-        f.update(state=state, pool=pool(state, pr.read_json(os.path.join(d, "run.json")) or {}, brief))
+        f.update(state=state, pool=pool(state, pr.read_json(os.path.join(d, "run.json")) or {}, brief),
+                 nums=sorted({int(n) for n in NUM.findall(brief)}))
         if state == "running" and full:
             f["idle_min"] = activity_min(d)
         runs[sid] = f
@@ -136,7 +143,10 @@ def facts(full=True):
         merge = {"merge_last": open(last, errors="replace").read().strip()} if os.path.exists(last) else {}
     except OSError as e:
         merge = {"merge_last": f"unreadable: {e}"}
-    return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
+    holds = os.path.join(r, "hold-prs.txt")
+    if os.path.isfile(holds) and os.environ.get("ONIGIRI_MERGE_HOST") == SELF:
+        merge["holds"] = open(holds, errors="replace").read()
+    return {"ids": ids, "sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
             "free_gb": free_gb(r), "runs": runs, "pools": 1, "pushed": pushed(os.path.join(r, "review")), **merge}
 
 
