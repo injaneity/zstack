@@ -84,7 +84,8 @@ CouldPick == Free > 0 /\ \E i \in Issues : Eligible(i)
 Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 
 Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
-  /\ auto = 0 /\ peer = 0 /\ hand = 0 /\ legacy \in {0, Legacy} /\ quick = 0 /\ blind = FALSE /\ pause \in BOOLEAN /\ strayed = FALSE /\ qhand = 0 /\ qauto = 0
+  /\ auto = 0 /\ peer = 0 /\ hand = 0 /\ legacy \in {0, Legacy} /\ quick = 0 /\ blind = FALSE /\ pause \in BOOLEAN
+  /\ strayed = FALSE /\ qhand = 0 /\ qauto = 0
   /\ ended = FALSE /\ dirty = TRUE /\ fair = TRUE /\ free = 0 /\ pc = "idle" /\ rows = {}
 
 \* ---------------- the world moves ----------------
