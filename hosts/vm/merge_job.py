@@ -180,7 +180,8 @@ def gate(pr, holds, notes=None):
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
     2. No hold row: hold, or a hands-off-path that names one of the PR's changed files.
        holds None (the file is unreadable) holds every PR.
-    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head."""
+    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head. A PR by another
+       author needs that row at this head whatever its tier."""
     notes = [] if notes is None else notes
     R, n, head = [], pr.get("number"), pr["headRefOid"]
     ci = [conclusion(c) for c in latest_checks(pr.get("statusCheckRollup")) if check_name(c) == GATE_CHECK]
@@ -202,6 +203,9 @@ def gate(pr, holds, notes=None):
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
         notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
+    if (author := pr.get("author", ME)) != ME and pre != head:
+        R.append(Reason("risk", f"PR by {author or '?'}: needs Zane"
+                        + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     return R
 
 
@@ -251,7 +255,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
 CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
           "... on StatusContext { context state createdAt }")
 PAGE = "totalCount pageInfo { hasNextPage endCursor }"
-PR_FIELDS = ("number state headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
+PR_FIELDS = ("number state author { login } headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
              f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
              f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
@@ -308,7 +312,8 @@ def from_graphql(node):
                            "startedAt": c["startedAt"], "detailsUrl": c["detailsUrl"], "workflowName": wf.get("name") or ""})
         else:
             checks.append({"__typename": "StatusContext", "context": c["context"], "state": c["state"], "createdAt": c["createdAt"]})
-    return {"number": node["number"], "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
+    return {"number": node["number"], "author": (node.get("author") or {}).get("login") or "",
+            "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
             "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in labels["nodes"]],
             "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
 
@@ -503,12 +508,20 @@ class Job:
                 break
             after = page["pageInfo"]["endCursor"]
         mine = {x["number"] for x in nodes}
-        for n in sorted(set((holds or {}).get("preapproved", {})) - mine):   # outside PRs Zane preapproved at a head
+        # outside PRs: those Zane preapproved, and those the job queued (so one whose row went is still dequeued)
+        queued = {int(k.split("#")[1]) for k in self.s["queued"]}
+        for n in sorted((set((holds or {}).get("preapproved", {})) | queued) - mine):
+            ident = f"{SHORT}#{n}"
             try:
                 node = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"]
-            except Exception as e:   # one unreadable row must not skip the rest
+            except Exception as e:   # one unreadable PR must not skip the rest; the job's own queue entry for it comes out
                 self.errors += 1
-                self.event("error", f"{SHORT}#{n}", f"preapproved PR: {type(e).__name__}: {str(e)[:150]}")
+                self.event("error", ident, f"outside PR: {type(e).__name__}: {str(e)[:150]}")
+                if ident in self.s["queued"]:
+                    try:
+                        self.dequeue(ident, n, self.s["queued"][ident]["head"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
+                    except Exception as e2:
+                        self.event("error", ident, f"dequeue: {type(e2).__name__}: {str(e2)[:150]}")
                 continue
             if node and node.get("state") == "OPEN":
                 nodes.append(node)

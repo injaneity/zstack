@@ -285,7 +285,8 @@ class Stage(unittest.TestCase):
         checks_ = [{**({k: v for k, v in c.items() if k != "workflowName"}),
                     **({"checkSuite": {"workflowRun": {"workflow": {"name": c["workflowName"]}}}} if c["__typename"] == "CheckRun" else {})}
                    for c in p["statusCheckRollup"]]
-        return {"number": n, "state": p["state"], "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
+        return {"number": n, "state": p["state"], "author": {"login": p["author"]},
+                "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
                 "mergeable": mergeable, "labels": {"totalCount": len(p["labels"]), "nodes": [{"name": x} for x in p["labels"][:100]]},
                 "files": page(p["files"], files), "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page(checks_, checks)}}}]}}
 
@@ -373,6 +374,30 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertEqual(self.calls, [])
         self.assertIn("who=zane", self.events()[-1])
+
+    def test_an_outside_light_pr_at_a_new_head_waits(self):
+        """A preapprove row pins an outside PR's head whatever its tier: a push past it never merges on green alone."""
+        self.add(5178, head=H2, author="Andrew9603")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        self.run_()
+        self.assertEqual(self.calls, [])
+        self.assertIn(f"PR by Andrew9603: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})", self.events()[-1])
+
+    def test_a_queued_outside_pr_whose_row_went_is_dequeued(self):
+        self.add(5178, body="risk: human\n", author="Andrew9603")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        self.queue = True
+        self.run_()
+        self.assertIn(5178, self.entries)
+        for holds in (HOLDS, "hodl | 1 | no | typo\n"):   # the row retired, or the file unreadable
+            self.entries[5178] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
+            st = json.loads((self.d / "tick/state.json").read_text())
+            st["queued"]["cua#5178"] = {"head": H, "why": "green"}
+            (self.d / "tick/state.json").write_text(json.dumps(st))
+            (self.d / "hold-prs.txt").write_text(holds)
+            self.run_()
+            self.assertNotIn(5178, self.entries, holds)
+            self.assertIn("merge-dequeued cua#5178", "\n".join(self.events()))
 
     def test_green_pr_is_squash_merged_at_its_head(self):
         self.add(6301)
