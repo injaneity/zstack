@@ -72,7 +72,8 @@ USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue 
 # ChatGPT's limit (which names the wait). Another 4xx is the request itself, so it would fail again: that stays a failure.
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
                    r"|You have hit your ChatGPT usage limit.*)")
-RESUME = "Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. Carry on with the task from where you stopped."
+RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
+          "Carry on with the task from where you stopped.")
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
              "so this session is reopened to resolve it (fix {n} of {cap}, ci.fix_attempts in config/policy.toml). Read the failing logs, "
              "fix the cause (update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
