@@ -5,9 +5,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
-import { checkBash, checkWrite, MERGE_OWNED, readyAllowed } from "../extensions/rule-guard/rules.ts";
+import { execFileSync } from "node:child_process";
+import { checkBash, checkWrite, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
-const OWNED = MERGE_OWNED;
+// the owned set as the extension loads it: config/policy.toml's merge.repo through the real bin/policy
+const OWNED = mergeOwned(() => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" }));
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
 // and /scratch is a directory outside any checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
@@ -449,4 +451,16 @@ test("the real holds paths are this host's config, matched on the filesystem wit
 	} finally {
 		fs.rmSync(t, { recursive: true, force: true });
 	}
+});
+
+test("the owned repo is config/policy.toml's merge.repo, and an unreadable policy refuses every merge and ready", () => {
+	assert.deepEqual(OWNED, new Set(["trycua/cua"]));
+	assert.deepEqual(mergeOwned(() => '{"merge": {"repo": "TryCua/Cua"}}'), new Set(["trycua/cua"]));
+	for (const dump of [() => { throw new Error("policy: missing merge.repo"); }, () => "not json", () => "{}", () => '{"merge": {"repo": "cua"}}'])
+		assert.equal(mergeOwned(dump), null);
+	for (const c of ["gh pr merge 33 -R injaneity/zstack --squash", "gh pr ready 1", "gh api -X PUT repos/x/y/pulls/1/merge",
+		"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"])
+		assert.match(checkBash(c, null, host, "/zs") ?? "", /bin\/policy dump failed/, c);
+	for (const c of ["gh pr view 1", "gh run rerun 9 --failed", "gh pr merge 1 --help", "git push"])
+		assert.equal(checkBash(c, null, host, "/zs"), undefined, c);
 });

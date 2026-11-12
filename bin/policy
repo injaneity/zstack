@@ -64,6 +64,12 @@ SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
     "slots": {"total": (pos_int, "a positive integer"), "auto": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
+    "patent": {
+        "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
+        "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
+        "public_repo": (repo, "owner/name"),
+        "private_repo": (repo, "owner/name"),
+    },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
     "pickup": {
         "interval_s": (pos_int, "a positive integer"),
@@ -97,6 +103,8 @@ def validate(data):
                 raise PolicyError(f"missing {name}.{k}")
             if not check(sec[k]):
                 raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
+    if data["patent"]["public_repo"].lower() == data["patent"]["private_repo"].lower():   # GitHub names ignore case
+        raise PolicyError("patent.private_repo must differ from patent.public_repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
     if data["pickup"]["deadline_s"] >= data["pickup"]["interval_s"]:

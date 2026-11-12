@@ -71,7 +71,13 @@ class Policy(unittest.TestCase):
              'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
             ("[slots]", "[slots", "is not TOML"),
             ('me = "injaneity"', 'me = ""', "people.me must be a GitHub login"),
-            ('repo = "trycua/cua"', 'repo = "trycua"', "merge.repo must be owner/name"),
+            ('held_words = ["teleport", "keyvault", "pairing"]', "held_words = []", "patent.held_words must be a non-empty list"),
+            ('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
+            ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),
+            ('private_repo = "trycua/cua-staging"', 'private_repo = "trycua/cua"', "patent.private_repo must differ"),
+            ('private_repo = "trycua/cua-staging"', 'private_repo = "TryCua/CUA"', "patent.private_repo must differ"),
+            ('public_repo = "trycua/cua"\n', "", "missing patent.public_repo"),
+            ('\nrepo = "trycua/cua"', '\nrepo = "trycua"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
             ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
             ('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard", "de.p", "deep", "human"]',
@@ -143,6 +149,31 @@ class Policy(unittest.TestCase):
         self.assertIn("merge_job: missing merge.gate_check", r.stderr)
         self.assertEqual((root / "hold-prs.txt").read_text(), "hold | 1 | no | x\n")
         self.assertEqual(sorted(p.name for p in root.iterdir()), ["hold-prs.txt"])   # no backup or temp file either
+
+    def test_a_push_is_refused_without_the_patent_policy(self):
+        """cua's pre-push hook with no readable [patent] refuses every push, so a held change can never go out unread."""
+        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        for f in ("patent_push.py", "wake.py", "pre-push"):
+            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+        self.write(SHIPPED.replace('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["Teleport"]'))
+        r = subprocess.run([str(self.pkg / "hosts/vm/pre-push"), "origin", "https://github.com/trycua/cua"],
+                           input=f"refs/heads/x {'a' * 40} refs/heads/x {'0' * 40}\n", capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("patent hold: config/policy.toml is unreadable (patent.held_words must be", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_push_under_a_python_without_tomllib_still_reads_the_patent_policy(self):
+        """bin/policy falls back to vendor/tomli, so the hook still holds a pairing push on the mini's /usr/bin/python3."""
+        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        for f in ("patent_push.py", "wake.py"):
+            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+        (self.pkg / "notoml").mkdir()
+        (self.pkg / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
+        code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('pp', sys.argv[1]); "
+                "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp); print(pp.held_hits(['src/pairing.rs'], ''))")
+        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "hosts/vm/patent_push.py")], capture_output=True, text=True,
+                           env={**self.env, "PYTHONPATH": str(self.pkg / "notoml")}, timeout=60)
+        self.assertEqual((r.returncode, r.stdout), (0, "['src/pairing.rs']\n"), r.stderr)
 
     def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
         self.write(SHIPPED.replace("schema = 1", "schema = true"))
