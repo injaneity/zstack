@@ -24,7 +24,8 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml"):
+        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
+                  "config/rules.toml", "config/state.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
         shutil.copytree(PKG / "vendor", self.pkg / "vendor")   # bin/policy's tomllib before python3 3.11

@@ -22,7 +22,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
-RULES = PKG / "skills" / "onigiri-mode" / "hard-rules.md"
+RULES = subprocess.run([sys.executable, str(PKG / "bin" / "policy"), "rules"], capture_output=True, text=True, check=True).stdout
 # fake pi: `--list-models` lists a claude-code model only when $TEST_TOKEN (its credential) is set, and never openai-codex.
 # A run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
 # pi does, so a forwarded signal is visible.
@@ -270,7 +270,7 @@ class Launcher(unittest.TestCase):
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args[args.index("--session-id") + 1], "cua-1")
         self.assertEqual(args[args.index("--name") + 1], "role:coding")
-        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))
+        self.assertEqual(Path(args[args.index("--append-system-prompt") + 1]).read_text(), RULES)
         wakes = [json.loads(line) for line in self.log("cua-1").splitlines() if line.startswith("{")]
         self.assertEqual([(w["kind"], w["id"]) for w in wakes], [("failed", "cua-1")])
         mid = json.loads((self.t / "session-wake").read_text())
@@ -281,30 +281,30 @@ class Launcher(unittest.TestCase):
         self.finished("rules")
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args.count("--append-system-prompt"), 1)
-        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))   # the file, so pi reads main's text
+        rules = Path(args[args.index("--append-system-prompt") + 1])   # rendered at the start, so pi reads main's text
+        self.assertEqual(rules, self.t / "root" / "review" / "rules" / "rules.md")
+        self.assertEqual(rules.read_text(), RULES)
         self.assertEqual((self.t / "int-ignored").read_text().strip(), "False")
 
-    def test_the_hard_rules_are_one_file_and_the_skill_holds_no_second_copy(self):
-        rules, skill = RULES.read_text(), (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text()
-        self.assertTrue(rules.startswith("## Hard rules\n"))
-        self.assertEqual([x for x in rules.splitlines() if x.startswith("## ")], ["## Hard rules"])
-        heads = [x for x in rules.splitlines() if x.startswith("### ")]
-        self.assertEqual(heads, ["### Work", "### Patent hold", "### Commits and PR text", "### Checks", "### Scope",
-                                 "### Merging", "### Changing these rules"])
+    def test_the_skill_holds_no_second_copy_of_the_hard_rules(self):
+        skill = (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text()
+        heads = [x for x in RULES.splitlines() if x.startswith("### ")]
+        self.assertEqual(len(heads), 7)
         self.assertEqual([h for h in heads if h in skill], [])
-        self.assertIn("(hard-rules.md)", skill)
+        self.assertIn("`config/rules.toml`", skill)
 
-    def test_no_hard_rules_file_starts_nothing(self):
+    def test_no_hard_rules_starts_nothing(self):
+        """A missing or unreadable config/rules.toml starts no pi: a session never runs without its rules."""
         pkg = self.t / "pkg"
-        for sub in ("bin", "config", "hosts/vm", "skills/onigiri-mode"):
+        for sub in ("bin", "config", "hosts/vm"):
             (pkg / sub).mkdir(parents=True)
-        for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "hosts/vm/wake.py"):
+        for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "config/state.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
         shutil.copytree(PKG / "vendor", pkg / "vendor")   # bin/policy before python3 3.11
-        for text in (None, "  \n"):
+        for text in (None, "  \n", (PKG / "config/rules.toml").read_text().replace("trycua/cua-staging", "trycua/elsewhere")):
             if text is not None:
-                (pkg / "skills/onigiri-mode/hard-rules.md").write_text(text)
+                (pkg / "config/rules.toml").write_text(text)
             r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "norules", "coding", str(self.t / "brief.md")],
                                capture_output=True, text=True, env=self.env, timeout=30)
             self.assertEqual(r.returncode, 2, r.stderr)

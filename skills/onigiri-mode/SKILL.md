@@ -15,7 +15,7 @@ license: MIT
 
 ## Hard rules
 
-The rules are [`hard-rules.md`](hard-rules.md), beside this file, and nowhere else. `bin/pi-run` appends that file to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, reads that file now.
+The rules are `config/rules.toml` in the zstack package, and nowhere else. `bin/pi-run` renders them with `bin/policy rules` and appends them to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, runs `bin/policy rules` now. The values the code enforces are `config/policy.toml`, and the runtime state files are `config/state.toml`; this skill and its playbooks name those keys and never restate their values.
 
 ## Non-negotiables
 
@@ -54,7 +54,7 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs the agents in the package's `
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.
 - **No nesting.** A child has no `subagent` tool, and a brief never asks its `bash` to start `pi`. Without the tool or the agent, do that step yourself and say so.
-- **No new gate.** A verifier's pass is evidence for your PR comment, not a merge gate. The merge rule in Hard rules is unchanged.
+- **No new gate.** A verifier's pass is evidence for your run report, not a merge gate. The merge rule in Hard rules is unchanged.
 
 ## Autonomy
 
@@ -103,7 +103,7 @@ For the chat only. A pi session skips this section.
 - **Setup.** `pi install git:github.com/injaneity/zstack`.
 - **Hourly.** The routine is one line: "run zstack hourly at main; relay what it returns". That pass is `playbooks/hourly.md`.
 - **Launch.** Write the brief with `<zstack>/bin/new-brief <id> <role>` (task text on stdin), then `bin/queue <id>` for the next hourly pass, or run `<zstack>/bin/pi-run <id> <role> <brief-file>` now. It detaches pi in `review/<id>/` and returns. The role picks the model from `config/policy.toml` `[models]`, never a skill. `bin/pi-run` loads the host file named by `ONIGIRI_HOST` or `~/.config/onigiri/host` itself, and refuses to start (exit 4) when the role's provider has no credential. Run it on the machine that does the work, never in the chat.
-- **The brief** carries the task, its constraints and the repo path. `bin/new-brief` adds the rest: the Hard rules pointer, the verified-comment rule, `follow-ups:` and `questions:`, the no-invented-limits line and `wake: finish`, so the run wakes you with a `done` event when it exits 0, not only on failure. pi picks its own playbook. Report back what pi did, with the PR URL.
+- **The brief** carries the task, its constraints and the repo path. `bin/new-brief` adds the rest: the Hard rules pointer, `follow-ups:` and `questions:`, the no-invented-limits line and `wake: finish`, so the run wakes you with a `done` event when it exits 0, not only on failure. pi picks its own playbook. Report back what pi did, with the PR URL.
 - **A 429** (Claude Code or ChatGPT usage limit), or an incomplete Claude Code upstream response, puts the run back in the queue with `resume_at`, with no failed wake and its slot freed. The hourly drain resumes it in the same session.
 - **A red PR** belongs to the thread that pushed its head (Zane, 11 Nov: "the thread itself should be responsible for resolving it"). Once the merge job's one rerun is red too, `bin/hourly queue` reopens that run in its own session with the failure, at most `fix_attempts` times per PR (`config/policy.toml` `[ci]`). It reaches you only when no run pushed that head, the attempts are spent, or the thread's `questions:` ask for you.
 - **A failed run** (rc != 0) wakes you when it exits. A lost one (KILL or OOM) wakes you when the hourly pass collects it. To retry, file it again under a fresh id: `pi-run` refuses to start a collected id, because nothing restarts a session. Its own PR's red CI is the one thing that reopens it.

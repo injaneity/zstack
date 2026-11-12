@@ -16,13 +16,13 @@ The brief gives a diff range, the scope it claims, the worktree to run checks in
 
 Never edit source, commit, push, install system packages, or post anywhere. You have no forge credentials, by design.
 
-**Rules for your line.** The parent posts it as its `verified <sha>` comment, so it follows the session's rules for that comment:
-- The verification comment states only what actually ran and names anything skipped.
+**Rules for your line.** The parent puts it in its run report, so it follows the session's rules for that line:
+- The verification line in your run report states only what actually ran and names anything skipped.
 - Say in the verdict which platform checks could not run.
-- Bench numbers and timings stay out of commits and PR text.
+{{rule scope-no-numbers}}
 - Never write local machine paths.
 
 Answer in this order, and keep it short. Never paste full logs: quote only the failing lines, at most about ten per failure, and give the log path for the rest.
 1. What makes the change safe: the fact it rests on and whether you confirmed it.
 2. Findings by severity, each with location, trigger, impact, evidence, and the smallest fix. A failing check is a finding.
-3. One line the parent can turn into its PR comment: `ran <commands>; skipped <what and why>; result <pass|fail>`. It names only what actually ran.
+3. One line the parent puts in its run report: `ran <commands>; skipped <what and why>; result <pass|fail>`. It names only what actually ran.

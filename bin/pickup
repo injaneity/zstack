@@ -152,12 +152,12 @@ def task(c, h):
                 f"{ME}. Read the issue and its thread, fix it with a test, and open a PR whose body says `Fixes #{c['n']}`.\n")
     if c["kind"] == "unstick":
         return (f"trycua/cua#{c['n']}{head}: {c['url']}\n\nKind: unstick our PR. The merge job waits on a session: {c['why']}. "
-                "Update it from main, fix the cause, push, have the verifier check the new head, and post the verified comment. "
+                "Update it from main, fix the cause, push, and have the verifier check the new head. "
                 "If main or another PR already has its change, close it instead and say what replaced it.\n")
     who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"] in h["review_only"] else \
         "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
     return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
-            "requested of injaneity. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
+            f"requested of {ME}. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
             "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n")
 
 

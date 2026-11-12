@@ -2,7 +2,7 @@
 # new-brief <id> <role> [<source>]: write $ONIGIRI_ROOT/review/<id>/brief.md from the one brief template, with the task
 # text from stdin, and print its path. <source> is the slot pool its run counts in (config/policy.toml [slots]): `auto` for an
 # hourly auto-pick, `quick` for the quick-check lane (in no pool; role research is quick too), and `chat` otherwise,
-# which is the hand pool. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
+# which is the hand pool. Every brief carries the Hard rules pointer, `wake: finish`,
 # follow-ups:/questions: and the no-invented-limits line, so a launch never depends on who wrote it. Refuses to
 # overwrite a brief that exists. Then `bin/queue <id>` (or `bin/hourly launch`) starts it.
 set -eu
@@ -28,8 +28,7 @@ source: $source
 
 $task
 
-Follow onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md in zstack; bin/pi-run appends them to your system prompt).
-After verifying, and again after every push to the PR, post a PR comment on its own: \`verified <full 40-character head sha>: ran <what>; skipped <what>; result <pass/fail>\`.
+Follow onigiri-mode's Hard rules (config/rules.toml in zstack; bin/pi-run appends them to your system prompt).
 End the report (report.md in this directory, and your final message) with \`follow-ups:\` and \`questions:\`, each "none" when empty. Put PR URLs in it.
 No invented limits: a restriction must trace to Zane's words or the policy. If you think one is needed, put it under questions: instead of applying it.
 wake: finish

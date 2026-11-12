@@ -1,7 +1,7 @@
 // Vendored from pi 1.4.0, @earendil-works/pi-coding-agent examples/extensions/subagent/index.ts.
 // Copyright (c) 2025 Mario Zechner. MIT License, see LICENSE.
-// zstack changes, and only these: (a) the child's system prompt is its role prompt from agents/<name>.md plus a
-// line placing it in the pipeline, and never the session's Hard rules;
+// zstack changes, and only these: (a) the child's system prompt is its role prompt from agents/<name>.md, with each
+// {{rule <id>}} line rendered from config/rules.toml, plus a line placing it in the pipeline, and never the session's Hard rules;
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
 // are told not to sleep or poll; (d) only the package's own agents/ load, never a user's or a project's, so every host
 // runs the agents on main; (e) children get an environment without forge or git credentials; (f) a child's
@@ -32,7 +32,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
-import { buildChildPrompt, onSeatProblem } from "./prompt.ts";
+import { buildChildPrompt, expandRules, onSeatProblem, ruleIds } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "policy.toml");
@@ -242,8 +242,18 @@ async function runSingleAgent(
 		}
 	};
 
+	let rolePrompt: string;
+	try {   // the {{rule <id>}} lines, from config/rules.toml through bin/policy, the one reader; a rule it cannot render runs nothing
+		const ids = ruleIds(agent.systemPrompt);
+		const lines = ids.length ? execFileSync("python3", ["-I", POLICY, "rules", ...ids], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }).split("\n") : [];
+		rolePrompt = expandRules(agent.systemPrompt, (id) => lines[ids.indexOf(id)]);
+	} catch (error) {
+		const why = String((error as { stderr?: unknown }).stderr ?? "").trim() || (error as Error).message;
+		return { ...currentResult, exitCode: 1, stderr: `cannot render the rules agents/${agent.name}.md quotes: ${why}` };
+	}
+
 	try {
-		const tmp = await writePromptToTempFile(agent.name, buildChildPrompt(agent.systemPrompt));
+		const tmp = await writePromptToTempFile(agent.name, buildChildPrompt(rolePrompt));
 		tmpPromptDir = tmp.dir;
 		tmpPromptPath = tmp.filePath;
 		args.push("--append-system-prompt", tmpPromptPath);

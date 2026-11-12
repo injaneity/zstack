@@ -123,7 +123,7 @@ class CheckHost(unittest.TestCase):
         self.shadowed_python3("tomllib")
         _, lines = self.check("--offline")
         self.assertEqual(self.fails(lines), [], lines)
-        self.assertTrue(any(x.startswith("ok    python3 runs bin/policy: policy: ") and x.endswith("is valid") for x in lines), lines)
+        self.assertTrue(any(x.startswith("ok    python3 runs bin/policy: policy: ") and x.endswith(" are valid") for x in lines), lines)
 
     def test_a_python3_without_zoneinfo_fails(self):
         self.ready()

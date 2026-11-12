@@ -46,8 +46,9 @@ $ONIGIRI_HOST when set, else the name in ~/.config/onigiri/host, names hosts/<na
 for the host's paths and env (ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief), so
 a launch from any shell (nohup, ssh, cron) loads it. A start then asks pi for the role's model in that env and
 exits 4, before any run state or wake, when pi lists none of the provider's models there (no credential). The role picks provider and
-model through bin/model-for. onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md) are appended to the system
-prompt as that file. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
+model through bin/model-for. onigiri-mode's Hard rules (config/rules.toml, rendered by bin/policy rules into
+review/<id>/rules.md at each start) are appended to the system prompt as that file. A start first moves the package to
+origin/main (bin/ensure-package-main). The shipped host files
 then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
 """
 import calendar
@@ -63,7 +64,6 @@ import time
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
-RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
          "| pi-run list [<state>...]")
@@ -76,8 +76,8 @@ RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream 
           "Carry on with the task from where you stopped.")
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
              "so this session is reopened to resolve it (fix {n} of {cap}, ci.fix_attempts in config/policy.toml). Read the failing logs, "
-             "fix the cause (update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
-             "comment. Rerun a job that failed for a reason outside your diff (cancelled, timed out, a runner network failure) "
+             "fix the cause (update from main when it is not in your diff), push, and have the verifier check the new head. "
+             "Rerun a job that failed for a reason outside your diff (cancelled, timed out, a runner network failure) "
              "yourself. If only Zane can decide it, say why under questions: and stop.")
 
 
@@ -398,18 +398,23 @@ def launch(sid, role, brief, extra):
     if os.environ.get("PI_RUN_DRY"):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
-    if not os.path.isfile(RULES) or not open(RULES).read().strip():
-        die(2, f"no Hard rules in {RULES}")
+    pol = policy()
+    try:   # config/rules.toml through bin/policy, rendered now so pi reads main's text
+        rules = pol.render(pol.rules())
+    except pol.PolicyError as e:
+        die(2, f"no Hard rules: {e}")
     env.pop("PI_RUN_DRAIN", None)
     env.pop("PI_RUN_COUNTED", None)
     env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0")
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
-           "--append-system-prompt", RULES, *extra, "-p", "--", text]
+           "--append-system-prompt", os.path.join(d, "rules.md"), *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check(d, sid, r.run, **f)
         if continuation(r.run) != cont or (r.run or {}).get("ci_now") != (run or {}).get("ci_now"):   # the setup above is stale
             die(3, f"{sid}: its state changed during setup; nothing started")
+        with open(os.path.join(d, "rules.md"), "w") as fh:
+            fh.write(rules)
         if not cont:
             with open(os.path.join(d, "brief.full.md"), "w") as fh:
                 fh.write(text)
