@@ -12,6 +12,7 @@ hold-prs.txt (docs/HOST.md, Holds file). Needs python3 3.11 or newer (tomllib).
 """
 import json
 import os
+import re
 import sys
 import tomllib
 
@@ -31,6 +32,20 @@ def seat(v):
     return isinstance(v, dict) and set(v) == {"provider", "model"} and all(isinstance(x, str) and x.strip() for x in v.values())
 
 
+def names(v):
+    """A list of distinct non-empty strings (it may be empty)."""
+    return isinstance(v, list) and all(isinstance(x, str) and x.strip() for x in v) and len(set(v)) == len(v)
+
+
+def words(v):
+    """Distinct lowercase words: the merge job builds its risk regex from them, so nothing else may appear."""
+    return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
+
+
+def repo(v):
+    return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
+
+
 def seats(v):
     """One seat, or a non-empty list of them: a role run as a race has one seat per side (the designers)."""
     return seat(v) or isinstance(v, list) and bool(v) and all(seat(x) for x in v)
@@ -44,6 +59,14 @@ SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
     "slots": {"total": (pos_int, "a positive integer"), "auto": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
+    "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
+    "merge": {
+        "repo": (repo, "owner/name"),
+        "gate_check": (lambda v: isinstance(v, str) and v.strip() != "", "a check name"),
+        "never_rerun": (names, "a list of distinct check names"),
+        "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
+        "preapprove_tiers": (words, "a list of distinct lowercase words"),
+    },
 }
 
 
@@ -63,6 +86,8 @@ def validate(data):
                 raise PolicyError(f"missing {name}.{k}")
             if not check(sec[k]):
                 raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
+    if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
+        raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
     return data
 
 

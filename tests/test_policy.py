@@ -65,6 +65,14 @@ class Policy(unittest.TestCase):
             ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }',
              'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
             ("[slots]", "[slots", "is not TOML"),
+            ('me = "injaneity"', 'me = ""', "people.me must be a GitHub login"),
+            ('repo = "trycua/cua"', 'repo = "trycua"', "merge.repo must be owner/name"),
+            ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
+            ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
+            ('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard", "de.p", "deep", "human"]',
+             "merge.tiers must be a non-empty list of distinct lowercase words"),
+            ('preapprove_tiers = ["deep", "human"]', 'preapprove_tiers = ["deep", "hman"]', "merge.preapprove_tiers names hman"),
+            ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):
@@ -96,6 +104,37 @@ class Policy(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("ci.fix_attempts must be a positive integer, not -1", r.stderr)
         self.assertEqual(json.loads((run / "run.json").read_text())["state"], "collected")
+
+    def test_the_merge_job_runs_no_gate_without_its_policy(self):
+        """A merge gate whose rules cannot be read merges nothing: the job exits before any gh call, naming why."""
+        (self.pkg / "hosts" / "vm").mkdir(parents=True)
+        for f in ("merge_job.py", "wake.py"):
+            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+        (self.pkg / "bin" / "gh").write_text("#!/bin/sh\necho called >> \"$0.log\"\n")
+        (self.pkg / "bin" / "gh").chmod(0o755)
+        self.write(SHIPPED.replace('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard"]'))
+        env = {**self.env, "PATH": f"{self.pkg / 'bin'}:{self.env['PATH']}", "ZSTACK_ENSURED": "1"}
+        r = subprocess.run([sys.executable, str(self.pkg / "hosts/vm/merge_job.py"), "--dry-run"], capture_output=True, text=True,
+                           env=env, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("merge_job: merge.preapprove_tiers names deep, human, which merge.tiers lacks", r.stderr)
+        self.assertFalse((self.pkg / "bin" / "gh.log").exists())
+
+    def test_hold_row_writes_nothing_without_the_merge_gates_policy(self):
+        """bin/hold-row checks every write with the merge job's parser, so a policy that stops the job stops the write."""
+        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        for f in ("merge_job.py", "wake.py"):
+            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+        shutil.copy2(PKG / "bin" / "hold-row", self.pkg / "bin" / "hold-row")
+        root = Path(self.env["ONIGIRI_ROOT"])
+        root.mkdir(parents=True)
+        (root / "hold-prs.txt").write_text("hold | 1 | no | x\n")
+        self.write(SHIPPED.replace('gate_check = "ci-gate"', ""))
+        r = self.run_("add", "hold | 2 | no | Zane 12 Nov 15:00 SGT", prog="bin/hold-row")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("merge_job: missing merge.gate_check", r.stderr)
+        self.assertEqual((root / "hold-prs.txt").read_text(), "hold | 1 | no | x\n")
+        self.assertEqual(sorted(p.name for p in root.iterdir()), ["hold-prs.txt"])   # no backup or temp file either
 
     def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
         self.write(SHIPPED.replace("schema = 1", "schema = true"))
