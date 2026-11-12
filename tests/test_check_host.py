@@ -7,6 +7,7 @@ import importlib.util
 import io
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -44,6 +45,7 @@ class CheckHost(unittest.TestCase):
         for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH), ("claude", "#!/bin/sh\n"), ("node", "#!/bin/sh\n")):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
+        (t / "bin" / "python3").symlink_to(sys.executable)   # the interpreter running the tests, not the host's /usr/bin one
         self.env = {"PATH": f"{t}/bin:/usr/bin:/bin", "HOME": str(t), "T": str(t), "ONIGIRI_HOST": "",
                     "ONIGIRI_ROOT": str(t / "root"), "PI_CODING_AGENT_DIR": str(t / "agent")}
         # the pi-claude-code checkout `pi list` names: a real git repo, so its HEAD is a real sha
@@ -105,6 +107,15 @@ class CheckHost(unittest.TestCase):
         _, lines = self.check()
         self.assertTrue(any(x.startswith("FAIL  live claude-code claude-opus-5-5") and "refused" in x for x in lines), lines)
         self.assertTrue(any(x.startswith("ok    live openai-codex") for x in lines), lines)
+
+    def test_a_python3_without_tomllib_fails(self):
+        """The mini's /usr/bin/python3 is 3.9: it has zoneinfo but no tomllib, which config/policy.toml's reader needs."""
+        self.ready()
+        (self.t / "bin" / "python3").unlink()
+        (self.t / "bin" / "python3").write_text("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'tomllib'\" >&2; exit 1\n")
+        (self.t / "bin" / "python3").chmod(0o755)
+        _, lines = self.check("--offline")
+        self.assertIn("FAIL  python3 version: needs 3.11 or newer (tomllib): ModuleNotFoundError: No module named 'tomllib'", lines)
 
     def test_claude_code_needs_the_claude_cli_on_path(self):
         self.ready()
