@@ -60,11 +60,12 @@ tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest fi
 preapprove_tiers = ["deep", "human"]
 
 # The scheduled pickup pass, bin/pickup (model/Pickup.tla), on the mini's launchd timer (hosts/mini/install-pickup.sh).
-# `interval_s` is its StartInterval (Zane, 12 Nov 11:10 SGT: start at 90 min, "reduce to 30min if it works correctly");
+# `interval_s` is its StartInterval (Zane, 12 Nov 11:10 SGT: start at 90 min, "reduce to 30min if it works correctly";
+# it did, so 30 min from 12 Nov);
 # a pass still running at `deadline_s` is killed and wakes the chat failed. `label_hosts` maps a trycua/cua platform
 # label to the one host that can do its work (playbooks/hourly.md step 3); an item with none or several goes to the
 # launch host.
 [pickup]
-interval_s = 5400
+interval_s = 1800
 deadline_s = 1200
 label_hosts = { Linux = "vm", macOS = "mini" }

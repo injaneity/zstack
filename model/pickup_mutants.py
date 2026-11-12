@@ -26,7 +26,7 @@ M = [
     ("held-picked", "a pick that does not read the holds",
      [("Eligible(i) == i \\notin taken /\\ blocker[i] = \"none\"", "Eligible(i) == i \\notin taken /\\ blocker[i] # \"zane\"")],
      "HeldNeverPicked"),
-    ("silent-pass-wakes", "every pass wakes the chat (a status report each 90 minutes)",
+    ("silent-pass-wakes", "every pass wakes the chat (a status report every pass)",
      [("WakeOk(p) == pc[p] = \"wake\" /\\ lock = p /\\ (had \\/ failed) /\\ ~woke", "WakeOk(p) == pc[p] = \"wake\" /\\ lock = p /\\ ~woke"),
       ("End(p) == pc[p] = \"wake\" /\\ lock = p /\\ (woke \\/ ~(had \\/ failed))", "End(p) == pc[p] = \"wake\" /\\ lock = p /\\ woke")],
      "WakeIffOutputOrFailure"),
