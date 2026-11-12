@@ -5,7 +5,8 @@ hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge s
 A bare run first moves the package checkout to origin/main (bin/ensure-package-main) and restarts on it, then runs
 hosts/check-parity: a host whose package, hook or agents differ from main raises an urgent parity wake.
 
-For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
+For every open PR by ME, and every open PR by another author that has a preapprove row (Zane's call, pinned to its
+head), it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
 tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
 of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
@@ -179,7 +180,8 @@ def gate(pr, holds, notes=None):
     1. ci-gate SUCCESS (SKIPPED, NEUTRAL, pending or missing is not; other checks are ci-gate's business).
     2. No hold row: hold, or a hands-off-path that names one of the PR's changed files.
        holds None (the file is unreadable) holds every PR.
-    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head."""
+    3. A tier from TIERS is declared, and a deep/human one has a preapprove row at exactly this head. A PR by another
+       author needs that row at this head whatever its tier."""
     notes = [] if notes is None else notes
     R, n, head = [], pr.get("number"), pr["headRefOid"]
     ci = [conclusion(c) for c in latest_checks(pr.get("statusCheckRollup")) if check_name(c) == GATE_CHECK]
@@ -201,6 +203,9 @@ def gate(pr, holds, notes=None):
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
         notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
+    if (author := pr.get("author", ME)) != ME and pre != head:
+        R.append(Reason("risk", f"PR by {author or '?'}: needs Zane"
+                        + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     return R
 
 
@@ -250,7 +255,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
 CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
           "... on StatusContext { context state createdAt }")
 PAGE = "totalCount pageInfo { hasNextPage endCursor }"
-PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
+PR_FIELDS = ("number state author { login } headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
              f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
              f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
@@ -307,7 +312,8 @@ def from_graphql(node):
                            "startedAt": c["startedAt"], "detailsUrl": c["detailsUrl"], "workflowName": wf.get("name") or ""})
         else:
             checks.append({"__typename": "StatusContext", "context": c["context"], "state": c["state"], "createdAt": c["createdAt"]})
-    return {"number": node["number"], "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
+    return {"number": node["number"], "author": (node.get("author") or {}).get("login") or "",
+            "headRefOid": node["headRefOid"], "isDraft": node["isDraft"], "title": node["title"],
             "body": node["body"], "mergeable": node["mergeable"], "labels": [x["name"] for x in labels["nodes"]],
             "files": [x["path"] for x in files["nodes"]], "statusCheckRollup": checks}
 
@@ -501,6 +507,24 @@ class Job:
             if not page["pageInfo"]["hasNextPage"]:
                 break
             after = page["pageInfo"]["endCursor"]
+        mine = {x["number"] for x in nodes}
+        # outside PRs: those Zane preapproved, and those the job queued (so one whose row went is still dequeued)
+        queued = {int(k.split("#")[1]) for k in self.s["queued"]}
+        for n in sorted((set((holds or {}).get("preapproved", {})) | queued) - mine):
+            ident = f"{SHORT}#{n}"
+            try:
+                node = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"]
+            except Exception as e:   # one unreadable PR must not skip the rest; the job's own queue entry for it comes out
+                self.errors += 1
+                self.event("error", ident, f"outside PR: {type(e).__name__}: {str(e)[:150]}")
+                if ident in self.s["queued"]:
+                    try:
+                        self.dequeue(ident, n, self.s["queued"][ident]["head"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
+                    except Exception as e2:
+                        self.event("error", ident, f"dequeue: {type(e2).__name__}: {str(e2)[:150]}")
+                continue
+            if node and node.get("state") == "OPEN":
+                nodes.append(node)
         for node in nodes:
             ident = f"{SHORT}#{node['number']}"
             try:
@@ -667,7 +691,7 @@ class Job:
         reasons, notes = self.evaluate(p, holds)
         act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
         gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk"}
-        lines = [f"{SHORT}#{n} {p.get('state', '')} by {(p.get('author') or {}).get('login', '?')} at {p['headRefOid']}: "
+        lines = [f"{SHORT}#{n} {p.get('state', '')} by {p.get('author') or '?'} at {p['headRefOid']}: "
                  f"{(p.get('title') or '')[:90]}", f"gate: {'pass' if not gate_codes & {r.code for r in reasons} else 'fail'}"]
         lines += [f"  {'gate' if r.code in gate_codes else 'blocker'} [{r.code}] {r.text}" for r in reasons]
         lines += [f"  note {x}" for x in notes]
