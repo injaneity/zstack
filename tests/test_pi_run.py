@@ -491,6 +491,54 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertIn("once that has passed", r.stderr)
 
+    def cargo_target(self, sid, rel, mb=2):
+        t = self.t / "root" / "review" / sid / rel
+        (t / "debug").mkdir(parents=True)
+        (t / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        (t / "debug" / "blob").write_bytes(os.urandom(mb * 1_000_000))
+        return t
+
+    def test_collect_deletes_the_runs_idle_cargo_targets_keeps_held_ones_and_logs_the_gb(self):
+        self.start("pr1")
+        self.finished("pr1")
+        d = self.t / "root" / "review" / "pr1"
+        idle = self.cargo_target("pr1", "wt/libs/x/target", mb=3)
+        idle2 = self.cargo_target("pr1", "wt2/target")
+        held = self.cargo_target("pr1", "wt3/target")
+        src = d / "wt" / "libs" / "x" / "src.rs"
+        src.write_text("fn main() {}\n")
+        notcargo = d / "wt" / "web" / "target"   # a dir named target that cargo did not make
+        notcargo.mkdir(parents=True)
+        outside = self.cargo_target("pr1", "scratch/target")   # not under a wt* worktree
+        other = self.cargo_target("other", "wt/target")         # another run's
+        (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")   # a link out is never followed
+        (d / "wt3" / "src").mkdir()
+        holder = subprocess.Popen(["/bin/sh", "-c", "exec sleep 30"], cwd=d / "wt3" / "src")   # a live shell in that worktree
+        self.addCleanup(holder.kill)
+        r = self.pi_run("collect", "pr1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "pr1 attempt=1 rc=0\n")
+        self.assertFalse(idle.exists() or idle2.exists())
+        for kept in (held, src, notcargo, outside, other):
+            self.assertTrue(kept.exists(), kept)
+        line = next(x for x in r.stderr.splitlines() if x.startswith("pi-run: pr1: "))
+        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted wt/libs/x/target wt2/target; kept wt3/target ")
+        self.assertIn("pi-run collect: freed ", self.log("pr1"))
+
+    def test_collect_deletes_nothing_when_lsof_gives_no_answer_or_the_run_is_live(self):
+        self.start("pr2", hang=True)
+        t = self.cargo_target("pr2", "wt/target")
+        self.assertEqual(self.pi_run("collect", "pr2").returncode, 3)   # running: refused, nothing touched
+        self.assertTrue(t.exists())
+        (self.t / "hang").unlink()
+        self.finished("pr2")
+        (self.t / "bin" / "lsof").write_text("#!/bin/sh\nexit 1\n")
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr2", PATH=f"{self.t}/bin:/usr/bin:/bin")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(t.exists())
+        self.assertIn("kept 1 target/ dir(s): lsof gave no answer", r.stderr)
+
     def test_a_lost_runs_collect_sends_one_failed_wake(self):
         self.start("gone", hang=True)
         wait_for(lambda: (self.t / "pi-pid").exists())

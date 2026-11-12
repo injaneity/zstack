@@ -27,7 +27,9 @@ step() is the whole lifecycle:
   running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT) or an incomplete Claude
                                       Code upstream response (LIMIT): no wake, the slot is freed, resume_at is the reset
                                       time pi names (else now), since is kept
-  exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first
+  exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first, and
+                                      then deletes cargo's target/ dirs under review/<id>/wt* whose worktree lsof
+                                      shows no process holding (prune), and logs the GB freed to stderr and run.log
   collected   --ci------>  queued     its PR's ci-gate is red after the merge job's rerun, at a head this run pushed
                                       (review/<id>/pushed, written by cua's pre-push hook): resume_at = now and ci_now
                                       names the PR, head and failure, so the drain reopens the same session with them.
@@ -53,6 +55,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -485,9 +488,85 @@ def collect(sid):
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
         r.write(done)
+        line = prune(d)   # under the lock, so no `pi-run ci` reopen or drain start of this id runs while it deletes
+        if line:
+            print(f"pi-run: {sid}: {line}", file=sys.stderr)
+            with open(os.path.join(d, "run.log"), "a") as fh:
+                fh.write(f"pi-run collect: {line}\n")
     rc = r.run["rc"]
     print(f"{sid} attempt={r.run['attempt']} " + (f"rc={rc}" if rc is not None else "lost"))
     return 0
+
+
+def build_dirs(d):
+    """Cargo's target/ dirs (each holds cargo's CACHEDIR.TAG) under the run's own wt* worktrees, as (target, worktree) real
+    paths inside d.
+    A symlink is never followed, so nothing outside the review dir is a candidate."""
+    real, found = os.path.realpath(d), []
+    for wt in sorted(os.listdir(d)):
+        top = os.path.join(d, wt)
+        if not wt.startswith("wt") or os.path.islink(top) or not os.path.isdir(top):
+            continue
+        for root, dirs, _ in os.walk(top):
+            dirs[:] = [x for x in dirs if x not in (".git", "node_modules") and not os.path.islink(os.path.join(root, x))]
+            if "target" in dirs and os.path.isfile(os.path.join(root, "target", "CACHEDIR.TAG")):
+                dirs.remove("target")
+                t = os.path.realpath(os.path.join(root, "target"))
+                if t.startswith(real + os.sep):
+                    found.append((t, os.path.realpath(top)))
+    return found
+
+
+def open_paths():
+    """Every path some process has open or as its cwd, from one `lsof -Fn` snapshot, or None when lsof cannot say."""
+    lsof = shutil.which("lsof", path=os.environ.get("PATH", "") + ":/usr/sbin:/usr/bin")   # cron's PATH has no /usr/sbin
+    try:
+        p = subprocess.run([lsof or "lsof", "-n", "-P", "-w", "-Fn"], capture_output=True, text=True, errors="replace", timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    paths = [x[1:] for x in p.stdout.splitlines() if x.startswith("n/")]
+    return paths if paths else None   # lsof exits 1 when one process's files are unreadable; no paths at all is no answer
+
+
+def disk_bytes(path):
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for x in dirs + files:
+            try:
+                total += os.lstat(os.path.join(root, x)).st_blocks * 512
+            except OSError:
+                pass
+    return total
+
+
+def prune(d):
+    """At collect: delete the cargo target/ dirs under the run's wt* worktrees when no process holds anything in that
+    worktree open (lsof), and say how much that freed. A held one, and every one when lsof cannot answer, is kept. Never raises: a prune that fails
+    must not cost the collect."""
+    try:
+        targets = build_dirs(d)
+        if not targets:
+            return ""
+        held = open_paths()
+        if held is None:
+            return f"kept {len(targets)} target/ dir(s): lsof gave no answer"
+        freed, gone, kept = 0, [], []
+        for t, wt in targets:   # anything open in the worktree (a shell's cwd, an editor, cargo) may be a live session's
+            if any(x == wt or x.startswith(wt + os.sep) for x in held):
+                kept.append(t)
+                continue
+            size = disk_bytes(t)
+            shutil.rmtree(t, ignore_errors=True)
+            if not os.path.exists(t):
+                freed += size
+                gone.append(t)
+            else:
+                kept.append(t)
+        rel = lambda xs: " ".join(os.path.relpath(x, os.path.realpath(d)) for x in xs)   # noqa: E731
+        return (f"freed {freed / 1e9:.1f} GB: deleted {rel(gone) or 'no target/ dir'}"
+                + (f"; kept {rel(kept)} (held open or not removable)" if kept else ""))
+    except Exception as e:   # noqa: BLE001
+        return f"prune failed: {type(e).__name__}: {e}"
 
 
 def continuation(run):
