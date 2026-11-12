@@ -13,6 +13,7 @@ export const step = (action: string, from: any, to: any) => {
 	}
 	if (action === "Collect") return from.state === "running" ? "pi-run collect <id> [sends the failed wake]" : "pi-run collect <id>";
 	return ({ Queue: "pi-run queue <id>", Start: "pi-run <id> <role> <brief>, or the hourly drain", Kill: "KILL or OOM",
-		Limit: "pi stops on an upstream 429 [frees its slot]", Resume: "hourly drain, after resume_at [same session]", Done: null,
+		Limit: "pi stops on an upstream 429 [resumes left, frees its slot]",
+		LimitSpent: "pi stops on an upstream 429 [resume.cap spent, sends the failed wake]", Resume: "hourly drain, after resume_at [same session]", Done: null,
 		CiReopen: "its PR is red after the rerun, at a head it pushed [fix attempts left]" } as Record<string, string | null>)[action] ?? action;
 };

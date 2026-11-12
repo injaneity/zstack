@@ -16,9 +16,9 @@ stateDiagram-v2
   s0 --> s1: pi-run queue #60;id>
   s0 --> s2: pi-run #60;id> #60;role> #60;brief>, or the hourly drain
   s1 --> s2: pi-run #60;id> #60;role> #60;brief>, or the hourly drain
-  s2 --> s4: pi exits rc != 0
+  s2 --> s4: pi exits rc != 0 or pi stops on an upstream 429 [resume.cap spent, sends the failed wake]
   s2 --> s5: pi exits rc 0 [no wake: finish]
-  s2 --> s6: pi stops on an upstream 429 [frees its slot]
+  s2 --> s6: pi stops on an upstream 429 [resumes left, frees its slot]
   s2 --> s7: KILL or OOM
   s2 --> s3: pi exits rc 0 [brief has wake: finish]
   s3 --> s8: pi-run collect #60;id>

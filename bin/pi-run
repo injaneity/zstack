@@ -26,7 +26,9 @@ step() is the whole lifecycle:
                                       and the brief has a `wake: finish` line, else none
   running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT) or an incomplete Claude
                                       Code upstream response (LIMIT): no wake, the slot is freed, resume_at is the reset
-                                      time pi names (else now), since is kept
+                                      time pi names (else now), since is kept, limit_resumes + 1
+  running     --limit-->   exited     the same, once limit_resumes has reached resume.cap (config/policy.toml): the run
+                                      ends failed, and the failed wake names the cap and pi's last line
   exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first, and
                                       then deletes cargo's target/ dirs under review/<id>/wt* whose worktree lsof
                                       shows no process holding (prune), and logs the GB freed to stderr and run.log
@@ -135,6 +137,15 @@ def utc(t=None):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
 
+def resume_cap():
+    """config/policy.toml resume.cap: how many times one run id resumes after an upstream limit. A bad policy stops the launch."""
+    pol = policy()
+    try:
+        return pol.load()["resume"]["cap"]
+    except pol.PolicyError as e:
+        die(2, str(e))
+
+
 def step(run, event, alive=False, **f):
     """The transition function: the run after `event`, or Refused. run is None before the first queue or start."""
     s = run["state"] if run else "absent"
@@ -161,8 +172,9 @@ def step(run, event, alive=False, **f):
                 "ci": {**(run.get("ci") or {}), f["pr"]: heads + [f["head"]]},
                 "ci_now": {"pr": f["pr"], "head": f["head"], "why": f["why"], "n": len(heads) + 1, "cap": f["cap"]}}
     if event == "exit" and s == "running" and run["pid"] == f["pid"]:
-        if f["rc"] and f.get("resume_at"):
-            return {**run, "state": "queued", "rc": f["rc"], "resume_at": f["resume_at"]}
+        n = run.get("limit_resumes", 0)
+        if f["rc"] and f.get("resume_at") and n < f["cap"]:
+            return {**run, "state": "queued", "rc": f["rc"], "resume_at": f["resume_at"], "limit_resumes": n + 1}
         wake = "failed" if f["rc"] else "done" if run.get("wake_finish") else None
         return {**run, "state": "exited", "rc": f["rc"], "wake": wake}
     if event == "collect" and s in ("exited", "lost"):
@@ -268,21 +280,26 @@ def host_env(cmd):
     return env, os.path.join(env.get("ONIGIRI_ROOT") or os.path.expanduser("~/onigiri"), "review")
 
 
-def limit_until(d, attempt, rc, got):
-    """When pi stopped on an upstream usage limit (its last log line), the UTC time to resume at, else None."""
+def last_line(d, attempt):
+    """The attempt's last non-blank line of run.log, stripped, or "" when there is none."""
     try:
         with open(os.path.join(d, "run.log"), errors="replace") as f:
-            last = ([x for x in f.read().split(f"== attempt {attempt}\n")[-1].splitlines() if x.strip()] or [""])[-1]
+            return ([x for x in f.read().split(f"== attempt {attempt}\n")[-1].splitlines() if x.strip()] or [""])[-1].strip()
     except OSError:
-        return None
-    if not rc or got or not LIMIT.fullmatch(last.strip()):
+        return ""
+
+
+def limit_until(last, rc, got):
+    """When pi stopped on an upstream usage limit (its last log line), the UTC time to resume at, else None."""
+    if not rc or got or not LIMIT.fullmatch(last):
         return None
     m = re.search(r"Try again in ~(\d+) min", last)
     return utc(time.time() + 60 * int(m.group(1)) if m else None)
 
 
-def supervise(d, sid, cmd, env):
-    """The forked child: owns the run until pi exits, then writes exited, or queued after a 429. Never returns."""
+def supervise(d, sid, cmd, env, cap):
+    """The forked child: owns the run until pi exits, then writes exited, or queued after a 429 while fewer than `cap`
+    resumes have been spent. Never returns."""
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
@@ -313,12 +330,20 @@ def supervise(d, sid, cmd, env):
         rc = 128 + got[0] if proc is None else proc.wait()
     killed, rc = rc < 0, 128 - rc if rc < 0 else rc   # a signal-killed pi is a failure, whatever it printed last
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
-        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=limit_until(d, r.run["attempt"], rc, got or killed))
+        last = last_line(d, r.run["attempt"])
+        until = limit_until(last, rc, got or killed)
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap)
+        why = f"{sid} exited rc={rc}"
         if done["state"] == "queued":
-            print(f"pi-run: back in the queue after an upstream limit; the hourly drain resumes it after {done['resume_at']}", flush=True)
+            print(f"pi-run: back in the queue after an upstream limit ({done['limit_resumes']} of {cap} resumes); "
+                  f"the hourly drain resumes it after {done['resume_at']}", flush=True)
+        elif until:
+            why += (f": stopped on an upstream limit again after {cap} resumes, the resume.cap in config/policy.toml, "
+                    f"so it ends failed. pi's last line: {last}")
+            print(f"pi-run: {why}", flush=True)
         if done.get("wake"):
             try:   # best effort: a wake that cannot even start must not cost the exit record
-                subprocess.run([sys.executable, WAKE, done["wake"], f"{sid} exited rc={rc}", f"rc={rc}",
+                subprocess.run([sys.executable, WAKE, done["wake"], why, f"rc={rc}",
                                 *report_fields(d, done["attempt"])], env=env)
             except OSError as e:
                 print(f"pi-run: wake not sent: {e}", flush=True)
@@ -385,6 +410,7 @@ def launch(sid, role, brief, extra):
     if pm.returncode:
         die(2, pm.stderr.strip())
     provider, model = pm.stdout.split()
+    cap = resume_cap()
     check(d, sid, run, **f)   # refuse before setup; checked again under the lock below
     try:   # pi lists a provider's models only when it has a credential (a model missing from pi's catalog still runs)
         ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
@@ -420,7 +446,7 @@ def launch(sid, role, brief, extra):
             os.close(r.fd)   # the lock stays the launcher's until run.json names this child
             gate is None or os.close(gate)   # and slots.lock until run.json counts this run
             try:
-                supervise(d, sid, cmd, env)
+                supervise(d, sid, cmd, env, cap)
             finally:
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
