@@ -1148,6 +1148,7 @@ class PatentPush(unittest.TestCase):
             Path(tmp, "bin").mkdir()
             Path(tmp, "bin/gh").write_text("#!/bin/sh\nexit 1\n")   # no staging access, and no network
             Path(tmp, "bin/gh").chmod(0o755)
+            Path(tmp, "bin/python3").symlink_to(sys.executable)   # 3.11 or newer for config/policy.toml
             env = {"PATH": f"{tmp}/bin:/usr/bin:/bin", "HOME": tmp, "GH_CONFIG_DIR": f"{tmp}/gh", "ONIGIRI_WAKE_DRY": "1"}
             g("worktree", "add", "-qb", "onigiri/w", f"{tmp}/wt", cwd=work)
             Path(tmp, "wt/pairing.rs").write_text("fn pair() {}\n")

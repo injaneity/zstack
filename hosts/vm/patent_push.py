@@ -26,6 +26,8 @@ recorded too. For a branch already at the pushed sha git hands the hook no ref l
 attempt is one whose sha was not the branch's head at the time: it can name the owner only of a head that run made.
 
 """
+import importlib.machinery
+import importlib.util
 import os
 import re
 import subprocess
@@ -33,14 +35,28 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# Not preceded by a letter or digit, so "repairing" passes; "src/pairing.rs", "ws_pairing" and "KeyVault" still hit
-# (Zane 27 Oct t753u). Generated lockfiles are skipped entirely, path and lines (a crate named teleport-e2e is not
-# patent work).
-HELD = re.compile(r"(?<![a-z0-9])(teleport|keyvault|pairing)", re.I)
-LOCKFILE = re.compile(r"(^|/)(Cargo\.lock|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|uv\.lock"
-                      r"|poetry\.lock|pdm\.lock|Pipfile\.lock|bun\.lockb?|composer\.lock|Gemfile\.lock|go\.sum"
-                      r"|flake\.lock|Package\.resolved|packages\.lock\.json|gradle\.lockfile|pubspec\.lock|mix\.lock)$")
-STAGING = "trycua/cua-staging"
+# The held words, the skipped lockfiles and both repos are config/policy.toml [patent], read through bin/policy. A word
+# not preceded by a letter or digit hits, in any case, so "repairing" passes; "src/pairing.rs", "ws_pairing" and
+# "KeyVault" still hit (Zane 27 Oct t753u). Generated lockfiles are skipped entirely, path and lines (a crate named
+# teleport-e2e is not patent work). A policy bin/policy refuses refuses every push: with no rule, nothing is published.
+PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_pol = os.path.join(PKG, "bin", "policy")
+_spec = importlib.util.spec_from_file_location("policy", _pol, loader=importlib.machinery.SourceFileLoader("policy", _pol))
+policy = importlib.util.module_from_spec(_spec)
+try:
+    _spec.loader.exec_module(policy)
+except ImportError as e:   # tomllib is 3.11 or newer (bin/check-host); the mini's /usr/bin/python3 is 3.9
+    sys.exit(f"patent hold: {sys.executable} cannot read config/policy.toml ({e}), so nothing is pushed. Put python3 3.11 or "
+             "newer first on PATH (bin/check-host). Do not retry the push, push elsewhere or skip the hook.")
+try:
+    POLICY = policy.load()
+    PATENT, ME = POLICY["patent"], POLICY["people"]["me"]
+except policy.PolicyError as e:
+    sys.exit(f"patent hold: config/policy.toml is unreadable ({e}), so nothing is pushed until it is fixed. Do not retry "
+             "the push, push elsewhere or skip the hook; say so in your report.")
+HELD = re.compile(r"(?<![a-z0-9])(" + "|".join(map(re.escape, PATENT["held_words"])) + ")", re.I)
+LOCKFILE = re.compile(r"(^|/)(" + "|".join(map(re.escape, PATENT["skip_lockfiles"])) + ")$")
+PUBLIC, STAGING = PATENT["public_repo"], PATENT["private_repo"]
 STAGING_URL = f"https://github.com/{STAGING}"
 ZERO = "0" * 40
 ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")   # events.log lives here
@@ -49,8 +65,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # wake.py sits 
 import wake  # noqa: E402
 
 
+def on_github(repo, url):
+    return bool(re.search(rf"github\.com[:/]{re.escape(repo)}(\.git)?/?$", url or ""))
+
+
 def is_staging(url):
-    return bool(re.search(r"github\.com[:/]trycua/cua-staging(\.git)?/?$", url or ""))
+    return on_github(STAGING, url)
 
 
 def held_hits(paths, diff):
@@ -139,7 +159,7 @@ def wake_hold(branch, sha, hits, root=ROOT):
     except OSError:
         pass
     reason = (f"held for the private repo: the diff touches pairing, Teleport or Keyvault ({'; '.join(hits)[:200]}), "
-              f"so it was not pushed to public trycua/cua. {STAGING} is not pushable as injaneity, so the branch "
+              f"so it was not pushed to public {PUBLIC}. {STAGING} is not pushable as {ME}, so the branch "
               f"stays local. Zane: grant push on {STAGING} or say where it goes.")
     status = wake.post("blocked", f"{ident} {reason}")
     with open(log, "a") as f:
@@ -160,7 +180,7 @@ def record_push(sid, refs, root=ROOT):
 
 
 def is_public(url):
-    return bool(re.search(r"github\.com[:/]trycua/cua(\.git)?/?$", url or ""))
+    return on_github(PUBLIC, url)
 
 
 def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
@@ -185,11 +205,11 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
             if rc == 0:
                 out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault, so it was pushed to the private "
                           f"repo {STAGING}, not to {url}. Open or update its PR there: gh pr create -R {STAGING} "
-                          f"--head {branch}. Never push it to trycua/cua.\n")
+                          f"--head {branch}. Never push it to {PUBLIC}.\n")
                 continue
         woke = "Zane has been woken" if wake_hold(branch, sha, hits, root) else "Zane was woken earlier, or the wake failed (events.log)"
         out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault and must not go to public "
-                  f"trycua/cua. It stays local, and {woke}. Do not retry the push, push "
+                  f"{PUBLIC}. It stays local, and {woke}. Do not retry the push, push "
                   f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
     if not refuse and is_public(url):   # one refused ref refuses the whole push, so nothing of it is recorded
         record_push(os.environ.get("PI_SESSION_ID"), ok, root)
