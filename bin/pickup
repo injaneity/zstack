@@ -35,11 +35,9 @@ import io
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import redirect_stdout
 
@@ -420,40 +418,48 @@ def main(argv):
     dry = argv == ["--dry"]
     pr.on_main(argv, __file__)
     os.environ["ZSTACK_ENSURED"] = "1"   # the package is at main for this pass: the launches it starts here do not move it
-    d = os.path.join(hourly.root(), "pickup") if not dry else tempfile.mkdtemp(prefix="pickup-dry-")
-    os.makedirs(d, exist_ok=True)
     if not dry:
+        d = os.path.join(hourly.root(), "pickup")
+        os.makedirs(d, exist_ok=True)
         lock = os.open(os.path.join(d, "pickup.lock"), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             hourly.log(hourly.SELF, "pass-locked", "-", "another pickup pass holds the lock; this one did nothing")
             return print("pickup: another pass holds the lock; nothing done") or 0
-    ts, out_path = hourly.now(), os.path.join(d, "last.json")
-    if os.path.exists(out_path) and not dry:
-        os.unlink(out_path)
+    ts = hourly.now()
     sys.stdout.flush()
     sys.stderr.flush()
+    rfd, wfd = os.pipe()   # the child's report comes back on a pipe: a pass leaves no scratch file, dry or not
     child = os.fork()
     if child == 0:
+        os.close(rfd)
         os.setpgid(0, 0)
         try:
-            out = run_pass(dry)
-            write(out_path, out)
+            out = json.dumps(run_pass(dry)).encode()
             sys.stdout.flush()
+            while out:
+                out = out[os.write(wfd, out):]
             os._exit(0)
         except BaseException:   # noqa: BLE001  the parent reports the pass as failed with this traceback in the log
             import traceback
             traceback.print_exc()
             sys.stderr.flush()
             os._exit(1)
+    os.close(wfd)
     try:
         os.setpgid(child, child)   # as the child does, so a kill at the deadline cannot miss its group
     except OSError:
         pass
     deadline = int(os.environ.get("PICKUP_DEADLINE_S") or CFG["deadline_s"])
-    failed, end = None, time.monotonic() + deadline
+    failed, end, got = None, time.monotonic() + deadline, []
+    os.set_blocking(rfd, False)
     while True:
+        try:   # drain the pipe as the child writes, so a report larger than the pipe buffer never blocks it
+            while chunk := os.read(rfd, 1 << 16):
+                got.append(chunk)
+        except BlockingIOError:
+            pass
         pid, status = os.waitpid(child, os.WNOHANG)
         if pid:
             failed = None if os.waitstatus_to_exitcode(status) == 0 else f"the pass exited {os.waitstatus_to_exitcode(status)}"
@@ -471,25 +477,26 @@ def main(argv):
                     time.sleep(0 if reaped else 0.2)
             failed = f"the pass hit its {deadline}s deadline and was killed"
             break
-        time.sleep(0.5)
+        time.sleep(0.2)
     out = None
     if not failed:
+        os.set_blocking(rfd, True)
+        while chunk := os.read(rfd, 1 << 16):
+            got.append(chunk)
         try:
-            out = json.load(open(out_path))
-        except (OSError, ValueError) as e:
+            out = json.loads(b"".join(got))
+        except ValueError as e:
             failed = f"the pass left no report: {e}"
+    os.close(rfd)
     state = read_state()
     if dry and out:   # the dry child's outbox, with the results it would have collected
         state["unsent"] = out.pop("unsent", state["unsent"])
     status = deliver(state, out, failed, dry, ts)
-    if dry:
-        shutil.rmtree(d, ignore_errors=True)
     if not dry:
         write(state_path(), state)
         hourly.log(hourly.SELF, "pass-end", "-", f"{'failed: ' + failed + '; ' if failed else ''}wake: {status or 'none, nothing new'}")
     print(f"pickup: {'failed: ' + failed + '; ' if failed else ''}wake: {status or 'none, nothing new'}")
     return 1 if failed else 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
