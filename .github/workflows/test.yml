@@ -26,7 +26,7 @@ jobs:
             case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
           done
       - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
-        run: bin/policy check && bin/policy get slots.hand && bin/policy dump > /dev/null
+        run: bin/policy check && bin/policy get slots.hand && bin/policy dump > /dev/null && bin/policy rules > /dev/null
       - name: bin/hourly starts under 3.9 (the queue pass dry, and the facts a peer is asked for)
         env:
           ZSTACK_ENSURED: "1"
@@ -56,9 +56,9 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: config/policy.toml is valid (bin/policy check, the one parser)
-        run: bin/policy check
-      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy and config-reference tests
+      - name: config/policy.toml, rules.toml and state.toml are valid (bin/policy check, the one parser)
+        run: bin/policy check && bin/policy rules > /dev/null
+      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
@@ -96,9 +96,9 @@ jobs:
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pickup-model.sh
       - name: the merge gate is three checks, and verification is not one of them
         run: |
-          # Zane, 10 Nov: a verified comment is posted, but merging needs only ci-gate green, no hold row, and a preapproval for deep/human
-          if grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif' \
-              skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/hard-rules.md skills/onigiri-mode/SKILL.md; then
+          # Zane, 10 Nov: merging needs only ci-gate green, no hold row, and a preapproval for deep/human
+          if bin/policy rules | cat - skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/SKILL.md |
+              grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif'; then
             echo "a line above makes verification a merge condition"; exit 1
           fi
       - name: skills and agent types have frontmatter
