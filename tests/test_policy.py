@@ -65,6 +65,12 @@ class Policy(unittest.TestCase):
             ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }',
              'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
             ("[slots]", "[slots", "is not TOML"),
+            ('me = "injaneity"', 'me = ""', "people.me must be a GitHub login"),
+            ('repo = "trycua/cua"', 'repo = "trycua"', "merge.repo must be owner/name"),
+            ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
+            ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
+            ('preapprove_tiers = ["deep", "human"]', 'preapprove_tiers = ["deep", "hman"]', "merge.preapprove_tiers names hman"),
+            ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):
@@ -96,6 +102,21 @@ class Policy(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("ci.fix_attempts must be a positive integer, not -1", r.stderr)
         self.assertEqual(json.loads((run / "run.json").read_text())["state"], "collected")
+
+    def test_the_merge_job_runs_no_gate_without_its_policy(self):
+        """A merge gate whose rules cannot be read merges nothing: the job exits before any gh call, naming why."""
+        (self.pkg / "hosts" / "vm").mkdir(parents=True)
+        for f in ("merge_job.py", "wake.py"):
+            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+        (self.pkg / "bin" / "gh").write_text("#!/bin/sh\necho called >> \"$0.log\"\n")
+        (self.pkg / "bin" / "gh").chmod(0o755)
+        self.write(SHIPPED.replace('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard"]'))
+        env = {**self.env, "PATH": f"{self.pkg / 'bin'}:{self.env['PATH']}", "ZSTACK_ENSURED": "1"}
+        r = subprocess.run([sys.executable, str(self.pkg / "hosts/vm/merge_job.py"), "--dry-run"], capture_output=True, text=True,
+                           env=env, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("merge_job: merge.preapprove_tiers names deep, human, which merge.tiers lacks", r.stderr)
+        self.assertFalse((self.pkg / "bin" / "gh.log").exists())
 
     def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
         self.write(SHIPPED.replace("schema = 1", "schema = true"))

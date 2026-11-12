@@ -26,3 +26,17 @@ auto = 5
 # How many red heads per PR reopen the thread that pushed them (bin/pi-run ci, bin/hourly queue). Past that the PR is Zane's.
 [ci]
 fix_attempts = 3
+
+# Who "we" are: the login whose PRs the merge job merges and the hourly pass counts as ours.
+[people]
+me = "injaneity"
+
+# The trycua/cua merge gate (hosts/vm/merge_job.py, the one merger there; Hard rules, Merging). The gate is three checks
+# at the PR head: `gate_check` green, no hold row in the ledger, and a tier from `tiers` declared, with a preapprove row
+# pinned to the head for a tier in `preapprove_tiers`. Never reword or loosen without Zane's explicit ok.
+[merge]
+repo = "trycua/cua"
+gate_check = "ci-gate"          # it owns red checks and which platform lanes a PR needs
+never_rerun = ["cla"]           # not required on trycua/cua main: never rerun, never a reason to wait
+tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest first; a PR declaring none never merges
+preapprove_tiers = ["deep", "human"]

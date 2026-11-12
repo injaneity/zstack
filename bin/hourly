@@ -45,10 +45,11 @@ SGT = ZoneInfo("Asia/Singapore")
 FLOOR_GB, HUNG_MIN = 20, 180   # the VM floor and the hung mark: the routine's rules (playbooks/hourly.md)
 _pol = pr.policy()
 try:
-    _slots = _pol.load()["slots"]   # the one copy of the shared caps, config/policy.toml [slots]
+    _policy = _pol.load()
 except _pol.PolicyError as e:
     pr.die(2, f"hourly: {e}")
-TOTAL, AUTO = _slots["total"], _slots["auto"]
+TOTAL, AUTO = _policy["slots"]["total"], _policy["slots"]["auto"]   # the one copy of the shared caps, config/policy.toml [slots]
+REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]   # the repo the merge job owns, and whose PRs are ours
 MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 # merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
 LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
@@ -166,7 +167,7 @@ def owners(hosts, waits, branch_of):
 
 def branch_of(n):
     """(head sha, head branch) of trycua/cua#n now, or ("unknown", "unknown") when GitHub cannot say."""
-    p = run(["gh", "pr", "view", n, "-R", "trycua/cua", "--json", "headRefOid,headRefName"])
+    p = run(["gh", "pr", "view", n, "-R", REPO, "--json", "headRefOid,headRefName"])
     try:
         d = json.loads(p.stdout) if not p.returncode else {}
     except ValueError:
@@ -240,13 +241,13 @@ def auto_free(hosts):
 def snapshot(linear):
     hosts = all_facts()
     def gh(*a):
-        p = run(["gh", "pr", "list", "-R", "trycua/cua", "--state", "open", "--limit", "2000", *a])
+        p = run(["gh", "pr", "list", "-R", REPO, "--state", "open", "--limit", "2000", *a])
         if p.returncode:
             errors.append(f"gh pr list {a[0]} {a[1]}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
         return json.loads(p.stdout) if not p.returncode and p.stdout.strip() else []
     errors = []
-    ours = gh("--author", "injaneity", "--json", "number,headRefOid")
-    others = gh("--search", "-author:injaneity", "--json", "number,author")
+    ours = gh("--author", ME, "--json", "number,headRefOid")
+    others = gh("--search", f"-author:{ME}", "--json", "number,author")
     bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
     waits = merge_waits(errors)
     mh = HOST[0].get("ONIGIRI_MERGE_HOST")
