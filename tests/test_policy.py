@@ -70,6 +70,7 @@ class Policy(unittest.TestCase):
             ('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
             ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),
             ('private_repo = "trycua/cua-staging"', 'private_repo = "trycua/cua"', "patent.private_repo must differ"),
+            ('private_repo = "trycua/cua-staging"', 'private_repo = "TryCua/CUA"', "patent.private_repo must differ"),
             ('public_repo = "trycua/cua"\n', "", "missing patent.public_repo"),
             ('\nrepo = "trycua/cua"', '\nrepo = "trycua"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
