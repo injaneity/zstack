@@ -264,8 +264,8 @@ class Stage(unittest.TestCase):
         self.lists, self.reads, self.queue_events = [], [], {}
         self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
 
-    def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE"):
-        self.prs[n] = {"number": n, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
+    def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE", author="injaneity"):
+        self.prs[n] = {"number": n, "author": author, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
                        "mergeable": mergeable, "state": "OPEN", "mergedAt": None, "files": [{"path": x} for x in files],
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
 
@@ -285,7 +285,8 @@ class Stage(unittest.TestCase):
         checks_ = [{**({k: v for k, v in c.items() if k != "workflowName"}),
                     **({"checkSuite": {"workflowRun": {"workflow": {"name": c["workflowName"]}}}} if c["__typename"] == "CheckRun" else {})}
                    for c in p["statusCheckRollup"]]
-        return {"number": n, "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
+        return {"number": n, "state": p["state"], "author": {"login": p["author"]},
+                "headRefOid": p["headRefOid"], "isDraft": p["isDraft"], "title": p["title"], "body": p["body"],
                 "mergeable": mergeable, "labels": {"totalCount": len(p["labels"]), "nodes": [{"name": x} for x in p["labels"][:100]]},
                 "files": page(p["files"], files), "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": page(checks_, checks)}}}]}}
 
@@ -294,7 +295,8 @@ class Stage(unittest.TestCase):
             query = args[-1].split("=", 1)[1]
             kv = dict(a.split("=", 1) for a in args[2:-1] if "=" in a)
             if "search(" in query:
-                return {"data": {"search": {"nodes": [self.node(n) for n, p in self.prs.items() if p["state"] == "OPEN"],
+                return {"data": {"search": {"nodes": [self.node(n) for n, p in self.prs.items()
+                                                      if p["state"] == "OPEN" and p["author"] == "injaneity"],
                                             "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
             n = int(kv["n"])
             if "mergeQueueEntry" in query:
@@ -353,6 +355,49 @@ class Stage(unittest.TestCase):
 
     def of(self, cmd):
         return [c for c in self.calls if c[:3] == cmd]
+
+    def test_an_outside_pr_merges_only_with_a_preapprove_row_at_its_head(self):
+        """cua#5178 (12 Nov): Zane preapproved an outside PR at its head, but the search reads only PRs by ME, so it sat."""
+        self.add(5178, body="risk: human\n", author="Andrew9603")
+        self.add(5179, author="Andrew9603")   # an outside PR with no row is never read
+        self.add(5417, head=H2)
+        self.prs[5417]["state"] = "CLOSED"   # a stale row for a closed PR is read and skipped
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n"
+                                             f"preapprove | #5417 | no | {H2} | Zane, test\n")
+        self.run_()
+        self.assertEqual(self.calls, [["gh", "pr", "merge", "5178", "-R", "trycua/cua", "--squash", "--match-head-commit", H]])
+        self.assertNotIn(5179, self.reads)
+
+    def test_an_outside_pr_preapproved_at_another_head_waits(self):
+        self.add(5178, head=H2, body="risk: human\n", author="Andrew9603")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        self.run_()
+        self.assertEqual(self.calls, [])
+        self.assertIn("who=zane", self.events()[-1])
+
+    def test_an_outside_light_pr_at_a_new_head_waits(self):
+        """A preapprove row pins an outside PR's head whatever its tier: a push past it never merges on green alone."""
+        self.add(5178, head=H2, author="Andrew9603")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        self.run_()
+        self.assertEqual(self.calls, [])
+        self.assertIn(f"PR by Andrew9603: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})", self.events()[-1])
+
+    def test_a_queued_outside_pr_whose_row_went_is_dequeued(self):
+        self.add(5178, body="risk: human\n", author="Andrew9603")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        self.queue = True
+        self.run_()
+        self.assertIn(5178, self.entries)
+        for holds in (HOLDS, "hodl | 1 | no | typo\n"):   # the row retired, or the file unreadable
+            self.entries[5178] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
+            st = json.loads((self.d / "tick/state.json").read_text())
+            st["queued"]["cua#5178"] = {"head": H, "why": "green"}
+            (self.d / "tick/state.json").write_text(json.dumps(st))
+            (self.d / "hold-prs.txt").write_text(holds)
+            self.run_()
+            self.assertNotIn(5178, self.entries, holds)
+            self.assertIn("merge-dequeued cua#5178", "\n".join(self.events()))
 
     def test_green_pr_is_squash_merged_at_its_head(self):
         self.add(6301)
@@ -967,7 +1012,7 @@ class Cli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "h").write_text(HOLDS)
             p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "injaneity"}, title="t")
-            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable")},
+            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable", "author")},
                     "labels": {"totalCount": 0, "nodes": []},
                     "files": {"totalCount": 1, "nodes": [{"path": "README.md"}], "pageInfo": {"hasNextPage": False}},
                     "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"totalCount": 0, "nodes": [],
@@ -980,6 +1025,8 @@ class Cli(unittest.TestCase):
                 self.assertFalse(mj.Job(dry=True).explain(6400))
             self.assertEqual(sorted(os.listdir(d)), ["h"])
         text = out.getvalue()
+        self.assertIn("cua#6400 OPEN by injaneity at", text)
+        self.assertNotIn("PR by", text)
         self.assertIn("gate: fail", text)
         self.assertIn("gate [risk] declared deep", text)
         self.assertIn("blocker [conflict] merge conflict", text)
