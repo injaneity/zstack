@@ -322,7 +322,7 @@ class Pickup(unittest.TestCase):
         r = subprocess.run([str(self.pkg / "hosts" / "mini" / "install-pickup.sh"), "print"], capture_output=True, text=True,
                            env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("<key>StartInterval</key><integer>5400</integer>", r.stdout)   # config/policy.toml [pickup] interval_s
+        self.assertIn("<key>StartInterval</key><integer>1800</integer>", r.stdout)   # config/policy.toml [pickup] interval_s
         self.assertIn(f"<string>{self.pkg}/bin/pickup</string>", r.stdout)
         for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):   # never a supervisor or a respawn
             self.assertNotIn(banned, r.stdout)
