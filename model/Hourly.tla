@@ -133,8 +133,9 @@ ChatStartsNow == pc # "drain" /\ quick < MaxQuick /\ quick' = quick + 1 /\ dirty
 PeerFlips == pc \in {"idle", "collect"} /\ blind' = ~blind /\ dirty' = TRUE
   /\ UNCHANGED <<pause, strayed, todo, blocker, auto, peer, hand, legacy, quick, qhand, qauto, ended, fair, free, pc, rows>>
 \* An auto pause on the peer is set ($ONIGIRI_ROOT/auto-pause gains a row) or lifts (the row goes, or the run it waits
-\* on ends). Only the picks read it, and `bin/hourly launch` reads it again under slots.lock before each one starts, so
-\* a flip between passes and between picks covers every time it can change. Not in the fingerprint: a pause changes
+\* on ends). The picks and the drain read it: `bin/hourly launch` reads it again before each pick starts, and the drain
+\* before each queued run. A row written while a launch is already deciding applies from the next launch decision, so
+\* the model flips it between passes and between picks, and a drain step reads it atomically. Not in the fingerprint: a pause changes
 \* where a pick goes, not whether there is one.
 PauseFlips == pc \in {"idle", "pick"} /\ pause' = ~pause
   /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, strayed, qhand, qauto, ended, dirty, fair, free, pc, rows>>

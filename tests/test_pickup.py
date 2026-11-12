@@ -340,6 +340,10 @@ class Pickup(unittest.TestCase):
         self.assertIn("would launch mini cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
         pause.write_text("other-host\n")   # a pause on another host leaves this one alone
         self.assertIn("would launch vm cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
+        pause.write_text("vm\nmini\n")   # both paused: nothing is picked, each item skipped for its host
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertNotIn("would launch", out)
+        self.assertIn("skip cua-10: host", out)
 
     def test_an_unstick_is_picked_only_for_a_red_pr_no_thread_owns(self):
         self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate",

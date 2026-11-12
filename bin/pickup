@@ -124,7 +124,7 @@ def launch_host(hosts, needs=None):
     if needs:
         return needs if needs in ok else None
     peers = [h for h in ok if h != hourly.SELF]
-    return peers[0] if peers else hourly.SELF
+    return peers[0] if peers else hourly.SELF if hourly.SELF in ok else None
 
 
 def rule(c, h, prs, live, zane, hosts):
