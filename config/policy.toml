@@ -1,0 +1,28 @@
+# zstack policy: the standing rules, gates and model config, in one versioned file. Every reader goes through bin/policy,
+# the one parser, which refuses an unknown, missing or mistyped key. CI and hosts/check-parity run `bin/policy check`.
+# The per-PR hold and preapprove rows are not here: they stay in the merge host's append-only ledger, hold-prs.txt
+# (docs/HOST.md, Holds file). A value that came from Zane names his call in its comment.
+schema = 1
+
+# The provider and model each role runs on: bin/pi-run and bin/model-for for a launch, the subagent tool for a child.
+# A list is a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the
+# parent's model when its seat fails (extensions/subagent/prompt.ts); the other agents do.
+[models]
+coding = { provider = "claude-code", model = "claude-opus-5-5" }
+explorer = { provider = "openai-codex", model = "gpt-6.1-terra" }
+designer = [
+  { provider = "claude-code", model = "claude-opus-5-5" },
+  { provider = "openai-codex", model = "gpt-6.1-terra" },
+]
+verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }
+research = { provider = "claude-code", model = "claude-opus-5-5" }
+
+# The shared pi slots across both hosts (Zane, 11 Nov: "increase the number of slots to 7, auto pickup to 5"). bin/hourly
+# reads them: `total` runs at once, `auto` of them hourly auto-launches (playbooks/hourly.md step 2).
+[slots]
+total = 7
+auto = 5
+
+# How many red heads per PR reopen the thread that pushed them (bin/pi-run ci, bin/hourly queue). Past that the PR is Zane's.
+[ci]
+fix_attempts = 3
