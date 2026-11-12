@@ -4,7 +4,7 @@
 \* and HourlyLive.cfg (every pass ends), model/Hourly.mmd is the chart HourlyChart.cfg draws, every mutant in
 \* model/hourly_mutants.py fails on HourlySmall.cfg with the rule it names (three of them put back zstack main 4e08648,
 \* before the pickup fix), and QuickLane.cfg (a probe for an open question) still breaks.
-\* Runs start and end, and the chat queues, at any time, also inside a pass. The pass reads its slots twice, at step 0
+\* Runs start and end, and the chat queues, at any time inside a pass but the drain (see RunEnds). The pass reads its slots twice, at step 0
 \* and after the drain, and then counts its own picks, as bin/hourly's slots: and queue lines do.
 \*
 \* What it holds the pass to (Zane 12 Nov: "is the issue pickup working?", and the statechart brief):
@@ -80,19 +80,21 @@ Files(i) == pc = "idle" /\ i \notin todo /\ todo' = todo \cup {i} /\ dirty' = TR
   /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, queued, ended, free, pc, rows>>
 Moves(i) == pc = "idle" /\ i \in todo /\ todo' = todo \ {i} /\ dirty' = TRUE
   /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, queued, ended, free, pc, rows>>
-\* A running run exits, at any time: its slot frees and it waits for a collect.
-RunEnds == ended' = TRUE /\ dirty' = TRUE
+\* bin/hourly queue reads every host's runs and the queue once, then counts its own launches. A run that starts, ends or is
+\* queued while it drains is invisible to it and to step 5, which goes by the drain's "slots now" line: the same as that
+\* step coming right after the drain. So the world moves at any time except during the drain.
+\* A running run exits: its slot frees and it waits for a collect.
+RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
   /\ \/ auto > 0 /\ auto' = auto - 1 /\ UNCHANGED <<peer, chat, quick>>
      \/ peer > 0 /\ peer' = peer - 1 /\ UNCHANGED <<auto, chat, quick>>
      \/ chat > 0 /\ chat' = chat - 1 /\ UNCHANGED <<auto, peer, quick>>
      \/ quick > 0 /\ quick' = quick - 1 /\ UNCHANGED <<auto, peer, chat>>
   /\ UNCHANGED <<todo, blocker, blind, queued, free, pc, rows>>
-\* The chat queues a run (bin/queue), at any time: a chat brief, or an auto one (`new-brief ... auto`). The drain reads
-\* its list once, so a run queued while it drains is the next pass's.
+\* The chat queues a run (bin/queue): a chat brief, or an auto one (`new-brief ... auto`).
 ChatQueues == pc # "drain" /\ queued = "none" /\ queued' \in {"chat", "auto"} /\ dirty' = TRUE
   /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, blind, ended, free, pc, rows>>
-\* The chat starts a run itself, now, at any time (the quick-check lane): no slot check.
-ChatStartsNow == quick < MaxQuick /\ quick' = quick + 1 /\ dirty' = TRUE
+\* The chat starts a run itself, now (the quick-check lane): no slot check.
+ChatStartsNow == pc # "drain" /\ quick < MaxQuick /\ quick' = quick + 1 /\ dirty' = TRUE
   /\ UNCHANGED <<todo, blocker, auto, peer, chat, blind, queued, ended, free, pc, rows>>
 \* The peer stops or starts answering (`bin/hourly facts` over ssh): an error in the fingerprint.
 PeerFlips == pc = "idle" /\ blind' = ~blind /\ dirty' = TRUE

@@ -10,7 +10,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 jar=${TLA2TOOLS:-$(mise where "http:tla2tools[url=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar,checksum=sha256:936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88]@1.7.4")/tla2tools.jar}
 java=${JAVA:-$(mise which java --tool java@temurin-25)}
 cp "$src"/model/Hourly.tla "$src"/model/*.cfg "$tmp/"
-tlc() { (cd "$tmp" && "$java" -cp "$jar" tlc2.TLC -workers 2 -metadir "$tmp/meta-$1" -config "$1.cfg" Hourly.tla); }
+tlc() { (cd "$tmp" && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 2 -metadir "$tmp/meta-$1" -config "$1.cfg" Hourly.tla); }
 tlc Hourly > "$tmp/hourly.out" 2>&1
 grep -q "Model checking completed. No error has been found." "$tmp/hourly.out" ||
   { tail -30 "$tmp/hourly.out"; echo "FAIL  TLC did not pass model/Hourly.cfg"; exit 1; }
