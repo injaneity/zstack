@@ -50,6 +50,10 @@ for s in verify-cua-driver verify-cua-spaces; do
 done
 ```
 
+## Vendored Python
+
+`vendor/tomli` is tomli 2.2.1, the TOML parser CPython 3.11 adopted as `tomllib`. The `.py` files and `LICENSE` are copied byte for byte from the PyPI sdist `tomli-2.2.1.tar.gz` (sha256 `cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff`), and `py.typed` is left out. MIT, Taneli Hukkinen. `bin/policy` imports `tomllib` and falls back to it on python3 3.9 and 3.10, which the mini's `/usr/bin/python3` is. It is vendored, not pip-installed, so a host needs no install step and every host parses `config/policy.toml` with the same code. To update it, copy `src/tomli/*.py` and `LICENSE` from a newer sdist and change the version and sha here.
+
 ## Dropped
 
 | Dropped | Why |
