@@ -152,16 +152,19 @@ Collects == pc = "collect" /\ pc' = "drain" /\ ended' = FALSE
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
   /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, dirty, fair, free>>
 \* Step 4, `bin/hourly queue`: every queued run in turn, each started while its own pool has room and every host's runs
-\* are known; one that cannot start waits, and the next is tried.
+\* are known; one that cannot start waits, and the next is tried. A queued auto run may be in either host's queue
+\* (`there`: the peer's), and one in a paused peer's queue waits.
 CanDrainHand == qhand > 0 /\ ~HandWaits(blind)
-CanDrainAuto == qauto > 0 /\ ~AutoWaits(blind)
+CanDrainAuto(there) == qauto > 0 /\ ~AutoWaits(blind) /\ (there => ~pause)
 Drains == pc = "drain" /\ rows' = rows \cup {<<"run", "launch">>}
-  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto>>
-     \/ CanDrainAuto /\ qauto' = qauto - 1 /\ auto' = auto + 1 /\ UNCHANGED <<qhand, hand>>
-  /\ UNCHANGED <<todo, blocker, peer, legacy, quick, blind, pause, strayed, ended, dirty, fair, free, pc>>
+  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto, peer, strayed>>
+     \/ \E there \in BOOLEAN : CanDrainAuto(there) /\ qauto' = qauto - 1 /\ UNCHANGED <<qhand, hand>>
+        /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
+        /\ strayed' = (strayed \/ (there /\ pause))
+  /\ UNCHANGED <<todo, blocker, legacy, quick, blind, pause, ended, dirty, fair, free, pc>>
 \* The queue ends with its `queue: ... auto free <n>` line, which step 5 goes by. A run left queued waited fairly only
 \* when its pool is full or a host is unknown.
-DrainDone == pc = "drain" /\ ~CanDrainHand /\ ~CanDrainAuto /\ pc' = "pick" /\ free' = Free
+DrainDone == pc = "drain" /\ ~CanDrainHand /\ ~CanDrainAuto(FALSE) /\ pc' = "pick" /\ free' = Free
   /\ rows' = (IF qhand + qauto > 0 THEN rows \cup {<<"run", "wait">>} ELSE rows)
   /\ fair' = (fair /\ (qhand > 0 => (blind \/ HandN >= Hand)) /\ (qauto > 0 => (blind \/ auto + peer >= Auto)))
   /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, dirty>>
@@ -213,7 +216,7 @@ QuickNotCounted == fair
 HeldOrZaneNeverPicked == \A i \in Issues : <<i, "launch">> \in rows => blocker[i] \notin {"held", "zane"}
 \* A pass that starts ends, so the pass-end rules above are reached: no pass hangs between its steps.
 EveryPassEnds == [](pc \notin {"idle"} => <>(pc = "idle"))
-\* "Pause it": no auto run starts on the peer while it has an auto pause.
+\* "Pause it": no auto run starts on the peer while it has an auto pause, picked or drained.
 NoAutoOnPausedPeer == ~strayed
 \* Every pass leaves its `pass` row.
 EveryPassLogs == pc \in {"skipped", "end"} => <<"pass", "candidates">> \in rows

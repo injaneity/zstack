@@ -288,12 +288,14 @@ def paused(hosts, host):
     """Why no new auto-pool run may start on `host` now, or "". $ONIGIRI_ROOT/auto-pause, on the host that runs the pickup
     and the drain (the mini), has one row per pause: `<host>` holds until the row is removed; `<host> until <run host>
     <run id>` holds while that run is not exited, lost or collected, so it ends by itself. A row naming a run on a host
-    whose runs are unknown holds, and so does a row for the host this cannot read. Hand and quick runs never pause (Zane, 12 Nov
+    whose runs are unknown holds, and so does a row for the host this cannot read, or a file it cannot read. Hand and quick runs never pause (Zane, 12 Nov
     19:01 SGT, keeping new auto runs off the VM while a bench runs there: "yeah pause it")."""
     try:
         lines = open(os.path.join(root(), "auto-pause"), errors="replace").read().splitlines()
-    except OSError:
+    except FileNotFoundError:
         return ""
+    except OSError as e:   # a pause file that is there but cannot be read holds every host's auto launches
+        return f"auto launches on {host} paused: auto-pause unreadable: {e.strerror}"
     for line in lines:
         f = line.split("#", 1)[0].split()
         if not f or f[0] != host:

@@ -42,13 +42,13 @@ M = [
     ("drain-past-hand-pool", "the drain starts a queued hand run with the hand pool full",
      [("CanDrainHand == qhand > 0 /\\ ~HandWaits(blind)", "CanDrainHand == qhand > 0 /\\ ~blind")], "HandCap"),
     ("drain-ignores-auto-cap", "the drain starts a queued auto brief with the auto pool full",
-     [("CanDrainAuto == qauto > 0 /\\ ~AutoWaits(blind)", "CanDrainAuto == qauto > 0 /\\ ~blind")], "AutoCap"),
+     [("CanDrainAuto(there) == qauto > 0 /\\ ~AutoWaits(blind)", "CanDrainAuto(there) == qauto > 0 /\\ ~blind")], "AutoCap"),
     ("pick-on-step-0-count", "step 5 goes by step 0's slots: line, before the drain filled slots",
-     [("/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = free")],
+     [("/\\ ~CanDrainAuto(FALSE) /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrainAuto(FALSE) /\\ pc' = \"pick\" /\\ free' = free")],
      "AutoCap"),
     ("queue-line-ignores-blind-peer", "the queue's auto free line counts a peer that dropped after step 0 as idle",
-     [("DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free",
-       "DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = CodeFree")],
+     [("DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto(FALSE) /\\ pc' = \"pick\" /\\ free' = Free",
+       "DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto(FALSE) /\\ pc' = \"pick\" /\\ free' = CodeFree")],
      "AutoCap"),
     ("shared-total", "the 7-total cap before the slot split: a hand launch waits while auto and quick runs fill a total",
      [("HandWaits(unknown) == unknown \\/ HandN >= Hand",
@@ -65,6 +65,9 @@ M = [
      "HandCap"),
     ("pick-ignores-pause", "a pick goes to the peer at main with the floor free though it has an auto pause",
      [("/\\ free > 0 /\\ (there => ~blind /\\ ~pause)", "/\\ free > 0 /\\ (there => ~blind)")], "NoAutoOnPausedPeer"),
+    ("drain-ignores-pause", "the drain starts a queued auto run in a paused peer's queue",
+     [("CanDrainAuto(there) == qauto > 0 /\\ ~AutoWaits(blind) /\\ (there => ~pause)",
+       "CanDrainAuto(there) == qauto > 0 /\\ ~AutoWaits(blind)")], "NoAutoOnPausedPeer"),
 ]
 
 

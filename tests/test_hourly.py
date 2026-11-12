@@ -499,6 +499,12 @@ class Hourly(unittest.TestCase):
         self.assertIn("would launch test-vm va: auto pool", dry)
         j.unlink()   # collected or gone: still lifted
         self.assertIn("would launch test-vm va: auto pool", self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1"))
+        (local / "auto-pause").chmod(0)   # a pause file that is there but unreadable holds every host's auto launches
+        self.addCleanup((local / "auto-pause").chmod, 0o644)
+        dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
+        self.assertIn("wait test-vm va: auto launches on test-vm paused: auto-pause unreadable", dry)
+        self.assertIn("wait local la: auto launches on local paused: auto-pause unreadable", dry)
+        self.assertIn("would launch test-vm vh: hand pool", dry)
 
     def test_a_peer_before_the_pools_has_every_run_counted_as_hand(self):
         old = {"sha": "s", "at_main": True, "parity": [], "free_gb": 25,
