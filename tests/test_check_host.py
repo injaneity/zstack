@@ -109,10 +109,13 @@ class CheckHost(unittest.TestCase):
         self.assertTrue(any(x.startswith("ok    live openai-codex") for x in lines), lines)
 
     def test_a_python3_without_tomllib_fails(self):
-        """The mini's /usr/bin/python3 is 3.9: it has zoneinfo but no tomllib, which config/policy.toml's reader needs."""
+        """The mini's /usr/bin/python3 is 3.9: it has zoneinfo but no tomllib, which config/policy.toml's reader needs. The
+        fake is the real interpreter with only tomllib shadowed, so a check that stops importing tomllib passes it."""
         self.ready()
+        (self.t / "notoml").mkdir()
+        (self.t / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
         (self.t / "bin" / "python3").unlink()
-        (self.t / "bin" / "python3").write_text("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'tomllib'\" >&2; exit 1\n")
+        (self.t / "bin" / "python3").write_text(f'#!/bin/sh\nPYTHONPATH="{self.t}/notoml" exec "{sys.executable}" "$@"\n')
         (self.t / "bin" / "python3").chmod(0o755)
         _, lines = self.check("--offline")
         self.assertIn("FAIL  python3 version: needs 3.11 or newer (tomllib): ModuleNotFoundError: No module named 'tomllib'", lines)
