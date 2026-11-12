@@ -36,16 +36,19 @@ def seats(v):
     return seat(v) or isinstance(v, list) and bool(v) and all(seat(x) for x in v)
 
 
-# Each section: {key: (check, what it must be)}, or ("*", check, what) when any key names an entry (a role).
+# Each section: {key: (check, what it must be)}. Every key is required and no other is allowed: [models] names exactly
+# the roles bin/pi-run launches and the agents in agents/, so a misspelt verifier is an error, not a child that runs
+# on the parent's model.
+SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 SCHEMA = {
-    "models": ("*", seats, "a {provider, model} table or a non-empty list of them"),
+    "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
     "slots": {"total": (pos_int, "a positive integer"), "auto": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
 }
 
 
 def validate(data):
-    if data.get("schema") != 1:
+    if type(data.get("schema")) is not int or data["schema"] != 1:
         raise PolicyError(f"schema must be 1, not {data.get('schema')!r}")
     for key in data.keys() - SCHEMA.keys() - {"schema"}:
         raise PolicyError(f"unknown key {key}")
@@ -53,8 +56,6 @@ def validate(data):
         sec = data.get(name)
         if not isinstance(sec, dict) or not sec:
             raise PolicyError(f"[{name}] is missing or empty")
-        if isinstance(spec, tuple):
-            spec = {k: spec[1:] for k in sec}
         for k in sec.keys() - spec.keys():
             raise PolicyError(f"unknown key {name}.{k}")
         for k, (check, want) in spec.items():
