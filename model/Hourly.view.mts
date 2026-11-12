@@ -1,6 +1,6 @@
 // The reader's words for Hourly.tla: one hourly pickup pass after another.
 export const title = "zstack hourly pickup: a pass that could pick never ends silently";
-const TOTAL = 7, AUTO = 5;   // config/slots.json, as Hourly.cfg sets them
+const TOTAL = 7, AUTO = 5;   // config/policy.toml [slots], as Hourly.cfg sets them
 // Hourly.tla's CouldPick: an auto slot known free (none while the peer is unreachable) and a Todo no rule blocks.
 const could = (v: any) => {
   const seenAuto = v.auto + (v.blind ? 0 : v.peer);

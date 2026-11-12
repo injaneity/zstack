@@ -26,7 +26,7 @@ M = [
      [("/\\ live' = FALSE /\\ why' = \"limit\"\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes>>",
        "/\\ live' = FALSE /\\ why' = \"limit\" /\\ wake' = \"failed\"\n"
        "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes>>")], "PauseIsSilent"),
-    ("ci-fix-uncapped", "a red PR reopens its thread past config/ci.json fix_attempts",
+    ("ci-fix-uncapped", "a red PR reopens its thread past config/policy.toml ci.fix_attempts",
      [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state = \"collected\" /\\ fixes < FixAttempts + 1")], "FixesCapped"),
     ("ci-reopen-before-collect", "a red PR reopens a thread whose result the pickup has not taken",
      [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state \\in {\"collected\", \"exited\"} /\\ fixes < FixAttempts")],

@@ -45,6 +45,7 @@ class Hourly(unittest.TestCase):
         for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH)):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
+        (t / "bin" / "python3").symlink_to(sys.executable)   # 3.11 or newer for bin/policy; the mini's /usr/bin one is 3.9
         (t / "ours.json").write_text(json.dumps([{"number": 1, "headRefOid": "a" * 40}]))
         (t / "others.json").write_text(json.dumps([{"number": 2, "author": {"login": "f-trycua"}},
                                                    {"number": 3, "author": {"login": "app/dependabot", "is_bot": True}}]))

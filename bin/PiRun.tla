@@ -10,7 +10,7 @@
 \* queued with resume_at, which frees its slot; only the hourly queue drain starts it again, in the same pi session, once
 \* resume_at has passed. The one way out of collected is the run's own PR going red after the merge job's rerun, at a
 \* head the run pushed (Zane 11 Nov: "the thread itself should be responsible for resolving it"): `pi-run ci` queues the
-\* same session again the same way, at most FixAttempts times (config/ci.json fix_attempts; 2 here keeps TLC small).
+\* same session again the same way, at most FixAttempts times (config/policy.toml ci.fix_attempts; 2 here keeps TLC small).
 EXTENDS Naturals
 
 VARIABLES

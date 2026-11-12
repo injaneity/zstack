@@ -13,7 +13,7 @@
 \*  - A pass with a free auto slot ends with every Todo launched, or skipped by its own row naming one of the five rules:
 \*    held, owned by an open PR, overlaps a live run, waits on Zane, the launch host can't do it.
 \*  - The caps are never exceeded: auto-launches stay within auto 5, auto-launches and drained runs within total 7
-\*    (config/slots.json). Runs the chat starts itself with `pi-run <id>` (the quick-check lane) are outside the cap.
+\*    (config/policy.toml [slots]). Runs the chat starts itself with `pi-run <id>` (the quick-check lane) are outside the cap.
 \*  - A held or Zane-waiting Todo is never picked.
 \*  - Every pass writes a row, and every pass that starts ends.
 \*

@@ -22,7 +22,7 @@ PR's CI reopened it: ci {pr: [heads]}, ci_now}. step() is the whole lifecycle:
   collected   --ci------>  queued     its PR's ci-gate is red after the merge job's rerun, at a head this run pushed
                                       (review/<id>/pushed, written by cua's pre-push hook): resume_at = now and ci_now
                                       names the PR, head and failure, so the drain reopens the same session with them.
-                                      Once per PR and head, at most fix_attempts heads per PR (config/ci.json).
+                                      Once per PR and head, at most ci.fix_attempts heads per PR (config/policy.toml).
   collected is otherwise final: a retry is a fresh id (onigiri-mode: nothing restarts a session)
 
 lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
@@ -59,11 +59,25 @@ USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue 
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status 429, .*\)|You have hit your ChatGPT usage limit.*)")
 RESUME = "Your run stopped on an upstream rate limit and is resumed in the same session. Carry on with the task from where you stopped."
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
-             "so this session is reopened to resolve it (fix {n} of {cap}, config/ci.json). Read the failing logs, fix the cause "
-             "(update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
+             "so this session is reopened to resolve it (fix {n} of {cap}, ci.fix_attempts in config/policy.toml). Read the failing logs, "
+             "fix the cause (update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
              "comment. Rerun a job that failed for a reason outside your diff (cancelled, timed out, a runner network failure) "
              "yourself. If only Zane can decide it, say why under questions: and stop.")
-CI_CONFIG = os.path.join(PKG, "config", "ci.json")   # fix_attempts: how many red heads per PR reopen its thread
+
+
+_POLICY = []
+
+
+def policy():
+    """bin/policy, the one reader of config/policy.toml, as a module, loaded once so its PolicyError is one class."""
+    if not _POLICY:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(mod)
+        _POLICY.append(mod)
+    return _POLICY[0]
 
 
 class Refused(Exception):
@@ -434,9 +448,14 @@ def ci(sid, pr_n, head, why):
     d = os.path.join(root, sid)
     if not os.path.exists(os.path.join(d, "run.json")):
         die(3, f"{sid}: no run")
+    pol = policy()
+    try:
+        cap = pol.load()["ci"]["fix_attempts"]
+    except pol.PolicyError as e:
+        die(2, f"{sid}: {e}")
     with Run(d) as r:
         try:
-            r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=int(json.load(open(CI_CONFIG))["fix_attempts"])))
+            r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=cap))
         except Refused as e:
             die(3, f"{sid}: {e}")
     n = r.run["ci_now"]

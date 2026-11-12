@@ -5,7 +5,7 @@
 // (b) PI_SUBAGENT_DEPTH >= 1 skips registering the tool, and children get depth + 1; (c) children
 // are told not to sleep or poll; (d) only the package's own agents/ load, never a user's or a project's, so every host
 // runs the agents on main; (e) children get an environment without forge or git credentials; (f) a child's
-// provider and model come from config/models.json by agent name, with an auth preflight that falls back to the
+// provider and model come from config/policy.toml [models] by agent name (through bin/policy dump), with an auth preflight that falls back to the
 // parent model with a warning, except for the verifier, which refuses; (g) children save a session named role:<agent>, under sessions/subagents/.
 // Upstream's parallel and chain modes and its custom renderers are removed; pi's default
 // tool renderer shows the result.
@@ -22,7 +22,7 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -35,7 +35,9 @@ import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { buildChildPrompt, onSeatProblem } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");
+const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "policy.toml");
+// bin/policy is the one parser of that file; this reads its JSON dump, never the TOML itself.
+const POLICY = path.join(PACKAGE_DIR, "bin", "policy");
 // Children are saved apart from top-level sessions, so resuming or `pi --continue` never picks one up.
 const CHILD_SESSIONS = path.join(getAgentDir(), "sessions", "subagents");
 // Unset means a top-level session. A value that is set but not a non-negative integer fails closed.
@@ -62,14 +64,15 @@ interface Seat {
 	model: string;
 }
 
-// The seat config/models.json gives an agent, keyed by agent name. A role whose value is a list has one seat
+// The seat config/policy.toml [models] gives an agent, keyed by agent name. A role whose value is a list has one seat
 // per variant (1-based), as the two designers do. No entry means the agent runs on the parent's model.
 function seatFor(agent: string, variant: number | undefined): { seat?: Seat; label: string; error?: string } {
 	let roles: Record<string, unknown>;
 	try {
-		roles = JSON.parse(fs.readFileSync(MODELS_CONFIG, "utf-8")).roles ?? {};
+		roles = JSON.parse(execFileSync("python3", ["-I", POLICY, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] })).models;
 	} catch (error) {
-		return { label: agent, error: `cannot read ${MODELS_CONFIG}: ${(error as Error).message}` };
+		const why = String((error as { stderr?: unknown }).stderr ?? "").trim() || (error as Error).message;
+		return { label: agent, error: `cannot read ${MODELS_CONFIG}: ${why}` };
 	}
 	const isSeat = (v: any): v is Seat => typeof v?.provider === "string" && typeof v?.model === "string";
 	const entry = Object.hasOwn(roles, agent) ? roles[agent] : undefined;
@@ -336,7 +339,7 @@ const SubagentParams = Type.Object({
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	variant: Type.Optional(
-		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from config/models.json" }),
+		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from config/policy.toml [models]" }),
 	),
 });
 
