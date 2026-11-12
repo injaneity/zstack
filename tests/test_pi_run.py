@@ -56,7 +56,7 @@ class Step(unittest.TestCase):
     def test_queue_then_start_opens_the_first_attempt_and_keeps_its_queue_place(self):
         q = pr.step(None, "queue", since="2026-11-10T01:00:00Z", role="research")
         self.assertEqual(q, {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
-                             "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "research"})
+                             "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "research", "pool": "hand"})
         self.assertEqual(pr.step(q, "queue", since="later", role="coding"), q)   # queued twice: still the first place
         self.assertEqual(pr.step(q, "start", pid=5, start="s", wake_finish=True, now="2026-11-10T02:00:00Z"),
                          {**q, "state": "running", "attempt": 1, "pid": 5, "start": "s", "wake_finish": True})
@@ -297,7 +297,7 @@ class Launcher(unittest.TestCase):
         pkg = self.t / "pkg"
         for sub in ("bin", "config", "hosts/vm", "skills/onigiri-mode"):
             (pkg / sub).mkdir(parents=True)
-        for f in ("bin/pi-run", "bin/model-for", "bin/policy", "config/policy.toml", "hosts/vm/wake.py"):
+        for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
         for text in (None, "  \n"):
