@@ -555,6 +555,21 @@ class Launcher(unittest.TestCase):
         self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
         self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
 
+    def test_a_build_started_after_the_second_lsof_gets_a_fresh_target_that_prune_never_deletes(self):
+        """Once renamed aside, the old build is reachable only by its aside name: cargo started later makes a new target/."""
+        self.start("pr5")
+        self.finished("pr5")
+        t = self.cargo_target("pr5", "wt/target")
+        (self.t / "bin" / "lsof").write_text(   # the second snapshot is clean, then a build starts in the worktree
+            '#!/bin/sh\nn=$(cat "$T/lsof-n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/lsof-n"\n'
+            f'[ "$n" -ge 1 ] && mkdir -p "{t}/debug" && echo new > "{t}/debug/fresh"\necho p1; echo n/\n')
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")   # the later build's target/ is untouched
+        self.assertFalse((t / "debug" / "blob").exists())                 # the old build went
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+
     def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
         self.start("pr4")
         self.finished("pr4")
