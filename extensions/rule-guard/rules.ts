@@ -4,8 +4,21 @@ import * as path from "node:path";
 import { fold } from "./holds.ts";
 import { base, commands, program } from "./shell.ts";
 
-/** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger). */
-export const MERGE_OWNED: ReadonlySet<string> = new Set(["trycua/cua"]);
+/** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger), or null
+ * when they can't be told. */
+export type Owned = ReadonlySet<string> | null;
+
+/** The merge job's repo, `merge.repo` in config/policy.toml, from `dump` (bin/policy dump's JSON; the caller runs it, so
+ * this stays pure). A dump that fails or lacks the key is null: with the owned repo unknown, every merge and ready is
+ * refused, as an unreadable holds file holds every PR. */
+export function mergeOwned(dump: () => string): Owned {
+	try {
+		const repo = JSON.parse(dump())?.merge?.repo;
+		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
+	} catch {
+		return null;
+	}
+}
 
 /** Whether the session's brief allows merging, so it may ready its own draft. The launcher sets $ONIGIRI_READY_ALLOWED
  * from the brief's `merge: allowed` header; the extension reads it once at load, so the session can't set it later. */
@@ -190,11 +203,12 @@ const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", 
 // gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
 
-function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string>, host: Host, ready: boolean): string | undefined {
-	if (!owned.size || w[0] !== "gh") return undefined;
+function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
+	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
+	const who = owned ? `${[...owned].join(", ")} is merged only by its merge job` : "the repo the merge job owns is unknown (bin/policy dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
-		return `a GraphQL ready, merge or auto-merge mutation while ${[...owned].join(", ")} is merged only by its merge job`;
+		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
 	// a flag, not the value of the option before it (`--subject --help`)
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
@@ -203,6 +217,7 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string
 		w[1] === "pr" && w[2] === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
 	if (!act) return undefined;
+	if (!owned) return `${act} while ${who}`;
 	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one,
 	// and a remote shell never had it
 	const pre = raw.slice(0, raw.length - w.length);
@@ -219,7 +234,7 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: ReadonlySet<string
 		return pattern!.replace(/\{owner\}/g, o).replace(/\{repo\}/g, n);
 	};
 	const repos = pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
-	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${[...owned].join(", ")} is merged only by its merge job`;
+	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${who}`;
 	const hit = repos.find((r) => owned.has(r as string));
 	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
 }
@@ -272,7 +287,7 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 }
 
 /** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
-export function checkBash(command: string, owned: ReadonlySet<string>, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
+export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
 	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
 	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
 	// bodies included. The bare reads go first, then quotes and backslashes, as the shell joins `ONIGIRI_READY_""ALLOWED`
