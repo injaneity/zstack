@@ -58,7 +58,7 @@ jobs:
           done
       - name: config/policy.toml is valid (bin/policy check, the one parser)
         run: bin/policy check
-      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host and policy tests
+      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy and config-reference tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
