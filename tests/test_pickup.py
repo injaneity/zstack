@@ -55,7 +55,7 @@ class Pickup(unittest.TestCase):
             (t / "bin" / name).chmod(0o755)
         self.github(issues=[], reviews=[], open_=[])
         self.pkg = t / "pkg"   # the package, with parity stubbed ok: a test checkout is not main
-        for sub in ("bin", "hosts", "config", "skills/onigiri-mode"):
+        for sub in ("bin", "hosts", "config", "vendor", "skills/onigiri-mode"):
             shutil.copytree(PKG / sub, self.pkg / sub, ignore=shutil.ignore_patterns("playbooks"))
         (self.pkg / "hosts" / "check-parity").write_text("#!/bin/bash\necho ok\n")
         self.bin = self.pkg / "bin"

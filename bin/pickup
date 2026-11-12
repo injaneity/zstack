@@ -18,7 +18,7 @@ hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/po
      before (a review id on a host, or a launch row) is launched on the launch host, or skipped with one pickup.log row
      naming the one rule that holds: held, pr, overlap, zane, host (playbooks/hourly.md step 5).
   4. Reports four lists, as the chat's pass did, and one more for the chat: needs-Zane, dumpling results,
-     outside-contributor drafts, teammate comment drafts, and chat (follow-ups to file, hung runs).
+     outside-contributor drafts, teammate comment drafts, and chat (follow-ups to file, hung runs, disk to prune).
   5. Wakes the chat ($ONIGIRI_WAKE, else hosts/vm/wake.py: `done`; `failed` for a pass that died or hit deadline_s) when the outbox holds
      results or a list item is not in the last delivered wake. Nothing new: no wake. Only a delivered wake empties the
      outbox and records the items as seen; an item that goes away is dropped, so its return wakes again.
@@ -323,8 +323,8 @@ def report(hosts, waits, lines, errors):
             continue
         if not f.get("at_main"):
             needs.append([f"host:{name}:{f.get('sha')}", f"host {name} not at main: {'; '.join(f.get('parity', []))}"])
-        if f.get("free_gb", 0) < hourly.FLOOR_GB:
-            needs.append([f"disk:{name}", f"host {name}: {f.get('free_gb')}G free, under {hourly.FLOOR_GB}G"])
+        if f.get("free_gb", 0) < hourly.FLOOR_GB:   # the chat prunes without asking (playbooks/hourly.md, Decide or ask)
+            chat.append([f"disk:{name}", f"host {name}: {f.get('free_gb')}G free, under {hourly.FLOOR_GB}G: prune it"])
         for sid, r in f.get("runs", {}).items():
             if r.get("idle_min", 0) >= hourly.HUNG_MIN:
                 chat.append([f"hung:{name}:{sid}", f"{sid} on {name}: running, no log or session write for {r['idle_min']}m"])
