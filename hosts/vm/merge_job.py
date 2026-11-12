@@ -5,7 +5,8 @@ hosts/vm/cron-wrap.sh (see docs/HOST.md). It replaced the onigiri tick's merge s
 A bare run first moves the package checkout to origin/main (bin/ensure-package-main) and restarts on it, then runs
 hosts/check-parity: a host whose package, hook or agents differ from main raises an urgent parity wake.
 
-For every open PR by ME it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
+For every open PR by ME, and every open PR by another author that has a preapprove row (Zane's call, pinned to its
+head), it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
 tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
 of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
@@ -250,7 +251,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
 CHECKS = ("... on CheckRun { name status conclusion startedAt detailsUrl checkSuite { workflowRun { workflow { name } } } } "
           "... on StatusContext { context state createdAt }")
 PAGE = "totalCount pageInfo { hasNextPage endCursor }"
-PR_FIELDS = ("number headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
+PR_FIELDS = ("number state headRefOid isDraft title body mergeable labels(first: 100) { totalCount nodes { name } } "
              f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
              f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
@@ -501,6 +502,16 @@ class Job:
             if not page["pageInfo"]["hasNextPage"]:
                 break
             after = page["pageInfo"]["endCursor"]
+        mine = {x["number"] for x in nodes}
+        for n in sorted(set((holds or {}).get("preapproved", {})) - mine):   # outside PRs Zane preapproved at a head
+            try:
+                node = gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"]
+            except Exception as e:   # one unreadable row must not skip the rest
+                self.errors += 1
+                self.event("error", f"{SHORT}#{n}", f"preapproved PR: {type(e).__name__}: {str(e)[:150]}")
+                continue
+            if node and node.get("state") == "OPEN":
+                nodes.append(node)
         for node in nodes:
             ident = f"{SHORT}#{node['number']}"
             try:
