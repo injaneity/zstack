@@ -166,6 +166,21 @@ class Hourly(unittest.TestCase):
         self.hourly("done", "--linear", "CUA-1,CUA-2")
         self.assertIn("skip:", self.hourly("--linear", "CUA-1,CUA-2"))
 
+    def test_an_unreachable_host_leaves_no_auto_slot_known_free(self):
+        # model/Hourly.tla CapsHold: the peer's auto runs are unknown, so counting them as none could pass the auto cap
+        down = self.t / "down"
+        down.write_text("#!/bin/bash\necho 'ssh: connect to host vm: timed out' >&2; exit 255\n")
+        down.chmod(0o755)
+        out = self.hourly("--linear", "CUA-1", ONIGIRI_PEERS=f"vm={down}")
+        self.assertIn("host vm: unreachable: ssh: connect to host vm: timed out", out)
+        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 0", out)
+        rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual(rows[-1], ["local", "pass", "-", "candidates 1 todo, auto free 0"])
+        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 5", self.hourly("--linear", "CUA-1"))
+        # the queue's last line is what step 5 goes by: no auto slot while the peer's runs are unknown
+        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 0", self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
+        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 5", self.hourly("queue"))
+
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
         peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' "
