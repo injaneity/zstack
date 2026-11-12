@@ -69,6 +69,8 @@ class Policy(unittest.TestCase):
             ('repo = "trycua/cua"', 'repo = "trycua"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
             ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
+            ('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard", "de.p", "deep", "human"]',
+             "merge.tiers must be a non-empty list of distinct lowercase words"),
             ('preapprove_tiers = ["deep", "human"]', 'preapprove_tiers = ["deep", "hman"]', "merge.preapprove_tiers names hman"),
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
         ]

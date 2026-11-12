@@ -12,6 +12,7 @@ hold-prs.txt (docs/HOST.md, Holds file). Needs python3 3.11 or newer (tomllib).
 """
 import json
 import os
+import re
 import sys
 import tomllib
 
@@ -36,6 +37,11 @@ def names(v):
     return isinstance(v, list) and all(isinstance(x, str) and x.strip() for x in v) and len(set(v)) == len(v)
 
 
+def words(v):
+    """Distinct lowercase words: the merge job builds its risk regex from them, so nothing else may appear."""
+    return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
+
+
 def repo(v):
     return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
 
@@ -58,8 +64,8 @@ SCHEMA = {
         "repo": (repo, "owner/name"),
         "gate_check": (lambda v: isinstance(v, str) and v.strip() != "", "a check name"),
         "never_rerun": (names, "a list of distinct check names"),
-        "tiers": (lambda v: names(v) and bool(v), "a non-empty list of distinct tier words"),
-        "preapprove_tiers": (names, "a list of distinct tier words"),
+        "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
+        "preapprove_tiers": (words, "a list of distinct lowercase words"),
     },
 }
 
