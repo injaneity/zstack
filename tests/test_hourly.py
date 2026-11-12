@@ -22,6 +22,11 @@ FAKE_GH = "#!/bin/bash\ncase \"$*\" in *--author*) cat \"$T/ours.json\";; *) cat
 TASK = "Fix the thing in trycua/cua.\n"
 
 
+def decisions(log):
+    """pickup.log's header, then its rows without the per-pass `pass` rows every `bin/hourly` pass writes."""
+    return [x for x in log.read_text().splitlines() if x.split("\t")[2:3] != ["pass"]]
+
+
 def wait_for_state(d, state, secs=10):
     end = time.time() + secs
     while time.time() < end:
@@ -105,7 +110,7 @@ class Hourly(unittest.TestCase):
             time.sleep(0.05)
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args[args.index("--name") + 1], "role:research")
-        row = (self.t / "root" / "pickup.log").read_text().splitlines()
+        row = decisions(self.t / "root" / "pickup.log")
         self.assertEqual(row[:2], ["# onigiri hourly pickup decisions, append-only. one line per decision, tab-separated:",
                                    "# ts_sgt\thost\taction\titem\treason\tfree_gb"])
         self.assertEqual(row[2].split("\t")[1:5], ["local", "launch", "q1", "research; chat queue"])
@@ -134,6 +139,31 @@ class Hourly(unittest.TestCase):
         self.assertIn("skip:", self.hourly())
         self.assertEqual(self.sh("hourly", "processed", "old").returncode, 2)
         self.assertNotIn("legacy", json.loads(self.hourly("facts")))
+
+    def test_a_pass_that_could_pick_a_todo_never_skips_and_every_pass_logs_its_candidates(self):
+        self.hourly("log", "local", "preapprove-batch", "-", "none")   # a due batch alone never skips: take it out
+        self.hourly("done", "--linear", "CUA-1,CUA-2")
+        out = self.hourly("--linear", "CUA-1,CUA-2")   # unchanged since done, but 5 auto slots are free and 2 Todos wait
+        self.assertNotIn("skip:", out)
+        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 5", out)
+        self.assertIn("linear todo 2: CUA-1,CUA-2", out)
+        self.hourly("done")
+        self.assertIn("skip:", self.hourly())   # no Todo: nothing to pick, so an unchanged pass may skip
+        self.assertIn("skip:", self.hourly("--linear", ""))   # an empty list from Linear is no Todo too
+        self.hourly("done", "--linear", "CUA-1")
+        self.assertIn("linear todo 0: none passed", self.hourly("--linear", ""))   # the Todo went: a report, with no candidates
+        rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        passes = [x for x in rows if x[1] == "pass"]
+        self.assertEqual(passes[0], ["local", "pass", "-", "candidates 2 todo, auto free 5"])
+        self.assertEqual(passes[-2], ["local", "pass", "-", "candidates 0 todo, auto free 5, skip: nothing changed"])
+        (self.t / "hang").touch()
+        for sid in ("p1", "p2", "p3", "p4", "p5"):   # every auto slot held: an unchanged pass with Todos may skip again
+            self.queued(self.t / "root", sid, 100, "auto")
+            self.assertEqual(self.sh("pi-run", sid, "coding", str(self.review(sid) / "brief.md")).returncode, 0)
+        for sid in ("p1", "p2", "p3", "p4", "p5"):
+            self.assertTrue(wait_for_state(self.review(sid), "running"), sid)
+        self.hourly("done", "--linear", "CUA-1,CUA-2")
+        self.assertIn("skip:", self.hourly("--linear", "CUA-1,CUA-2"))
 
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
@@ -386,7 +416,7 @@ class Hourly(unittest.TestCase):
         r = self.sh("hourly", "queue", **env)   # the same red head on the next pass: the thread already had it
         self.assertIn(f"red cua#7338 {sha[:9]}: salvage-7255: already reopened for cua#7338 at {sha}", r.stdout)
         self.assertEqual(json.loads((d / "run.json").read_text())["state"], "collected")
-        rows = [x.split("\t")[1:4] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        rows = [x.split("\t")[1:4] for x in decisions(self.t / "root" / "pickup.log")[2:]]
         self.assertEqual(rows[:2], [["local", "ci-reopen", "salvage-7255"], ["local", "resume", "salvage-7255"]])
 
     def test_a_429d_run_frees_its_slot_and_a_peer_under_the_floor_launches_nothing(self):
@@ -422,7 +452,7 @@ class Hourly(unittest.TestCase):
         self.assertIn("pi-run: resumed back attempt 1", r.stdout)
         self.assertIn("started fresh attempt 1", r.stdout)
         self.assertIn("wait local later: after a 429, not before resume_at", r.stdout)
-        rows = [x.split("\t")[2:4] for x in (local / "pickup.log").read_text().splitlines()[2:]]
+        rows = [x.split("\t")[2:4] for x in decisions(local / "pickup.log")[2:]]
         self.assertEqual(rows, [["wait", "later"], ["resume", "back"], ["launch", "fresh"]])
         run = json.loads((local / "review" / "back" / "run.json").read_text())
         self.assertEqual((run["state"], run["attempt"], run["resumes"]), ("running", 1, 1))
