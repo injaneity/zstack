@@ -84,7 +84,7 @@ class Step(unittest.TestCase):
 
     def test_a_429_goes_back_to_the_queue_and_only_the_drain_resumes_it_after_resume_at(self):
         run = self.R("running", wake_finish=True, since="2026-11-10T01:00:00Z")
-        back = pr.step(run, "exit", pid=10, rc=1, resume_at="2026-11-10T05:00:00Z")
+        back = pr.step(run, "exit", pid=10, rc=1, resume_at="2026-11-10T05:00:00Z", cap=3)
         self.assertEqual({k: back[k] for k in ("state", "attempt", "wake", "wake_finish", "resume_at", "since")},
                          {"state": "queued", "attempt": 1, "wake": None, "wake_finish": True, "resume_at": "2026-11-10T05:00:00Z",
                           "since": "2026-11-10T01:00:00Z"})   # no wake, the same attempt, and its first queue place
@@ -99,8 +99,19 @@ class Step(unittest.TestCase):
         self.assertEqual({k: again[k] for k in ("state", "attempt", "pid", "rc", "resume_at", "wake_finish", "since", "resumes")},
                          {"state": "running", "attempt": 1, "pid": 8, "rc": None, "resume_at": None, "wake_finish": True,
                           "since": "2026-11-10T01:00:00Z", "resumes": 1})
+        self.assertEqual(back["limit_resumes"], 1)
         # rc 0 is never a pause, whatever the log said
         self.assertEqual(pr.step(self.R("running"), "exit", pid=10, rc=0, resume_at="x")["state"], "exited")
+
+    def test_an_upstream_limit_resumes_a_run_cap_times_and_the_next_one_fails_it(self):
+        run = self.R("running", wake_finish=True)
+        for n in (1, 2, 3):
+            run = pr.step(run, "exit", pid=10, rc=1, resume_at="t", cap=3)
+            self.assertEqual((run["state"], run["limit_resumes"], run["wake"]), ("queued", n, None))
+            run = pr.step(run, "start", pid=10, start="s", wake_finish=False, now="t", drain=True)
+        out = pr.step(run, "exit", pid=10, rc=1, resume_at="t", cap=3)
+        self.assertEqual((out["state"], out["rc"], out["wake"], out["limit_resumes"]), ("exited", 1, "failed", 3))
+        self.assertEqual(pr.step(out, "collect")["wake"], "failed")
 
     def test_collect_takes_an_exited_or_lost_run_once_and_a_lost_one_wakes(self):
         self.assertEqual(pr.step(self.R("exited", rc=0, wake="done"), "collect"), self.R("collected", rc=0, wake="done"))
@@ -176,7 +187,7 @@ class Model(unittest.TestCase):
         edges, seen, todo = {("[*]", name(None, False), "")}, set(), [(None, False)]
         while todo:
             run, alive = todo.pop()
-            key = (name(run, alive), bool(run and run["wake_finish"]))
+            key = (name(run, alive), bool(run and run["wake_finish"]), (run or {}).get("limit_resumes", 0))
             if key in seen:
                 continue
             seen.add(key)
@@ -189,9 +200,10 @@ class Model(unittest.TestCase):
             moves += [("its PR is red after the rerun, at a head it pushed [fix attempts left]", "ci",
                        dict(pr="7", head=f"h{len(seen)}", why="ci-gate", now="1", cap=1), False)]
             if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
-                moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3), False),
-                          (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0), False),
-                          ("pi stops on an upstream 429 [frees its slot]", "exit", dict(pid=run["pid"], rc=1, resume_at="5"), False)]
+                limit = "resumes left, frees its slot" if key[2] < 1 else "resume.cap spent, sends the failed wake"
+                moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3, cap=1), False),
+                          (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0, cap=1), False),
+                          (f"pi stops on an upstream 429 [{limit}]", "exit", dict(pid=run["pid"], rc=1, resume_at="5", cap=1), False)]
                 edges.add((key[0], "lost", "KILL or OOM"))
                 todo.append((run, False))
             for lbl, event, fields, alive_after in moves:
@@ -202,7 +214,10 @@ class Model(unittest.TestCase):
                 if after != run:   # a second queue is no step
                     edges.add((key[0], name(after, alive_after), lbl))
                 todo.append((after, alive_after))
-        self.assertEqual(edges, chart())
+        joined = {}   # the chart draws one edge per (from, to), its labels sorted and joined with " or "
+        for a, b, lbl in edges:
+            joined.setdefault((a, b), set()).add(lbl)
+        self.assertEqual({(a, b, " or ".join(sorted(ls))) for (a, b), ls in joined.items()}, chart())
 
 
 class Launcher(unittest.TestCase):
@@ -480,6 +495,33 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.finished("i1")["attempt"], 1)
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
+
+    def test_an_upstream_that_always_fails_stops_after_three_resumes_and_sends_the_failed_wake(self):
+        """config/policy.toml resume.cap is 3: three resumes in the same session, then the fourth incomplete response ends
+        the run failed, and its one wake names the cap, pi's last line and the log."""
+        say = "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"
+        (self.t / "say").write_text(say + "\n")
+        self.start("af", rc=1)
+        for n in (1, 2, 3):
+            self.assertTrue(wait_for(lambda: (self.run_json("af") or {}).get("state") == "queued"), self.run_json("af"))
+            self.assertEqual((self.run_json("af")["limit_resumes"], self.run_json("af")["wake"]), (n, None))
+            self.assertIn(f"back in the queue after an upstream limit ({n} of 3 resumes)", self.log("af"))
+            self.assertNotIn('"kind"', self.log("af"))
+            r = self.pi_run("af", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("resumed af attempt 1", r.stdout)
+        run = self.finished("af")
+        self.assertEqual((run["attempt"], run["rc"], run["wake"], run["resumes"], run["limit_resumes"]), (1, 1, "failed", 3, 3))
+        wakes = [json.loads(x) for x in self.log("af").splitlines() if x.startswith("{")]
+        self.assertEqual([(w["kind"], w["id"], w["rc"]) for w in wakes], [("failed", "af", 1)])
+        self.assertIn("after 3 resumes, the resume.cap in config/policy.toml", wakes[0]["reason"])
+        self.assertIn(say, wakes[0]["reason"])
+        self.assertEqual(wakes[0]["report"], str(self.t / "root/review/af/run.log"))
+        r = self.pi_run("af", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 3)   # nothing resumes it again: the pickup collects it
+        self.assertIn("not collected", r.stderr)
+        self.assertEqual(self.pi_run("collect", "af").returncode, 0)
+        self.assertEqual(self.run_json("af")["state"], "collected")
 
     def test_a_chatgpt_limit_resumes_after_the_wait_it_names_and_not_before(self):
         (self.t / "say").write_text("You have hit your ChatGPT usage limit (pro plan). Try again in ~42 min.\n")

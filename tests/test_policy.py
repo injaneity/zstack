@@ -42,6 +42,7 @@ class Policy(unittest.TestCase):
         self.assertEqual(self.run_("get", "slots.auto").stdout, "3\n")   # Zane, 12 Nov 12:47 SGT
         self.assertEqual(self.run_("get", "slots.hand").stdout, "5\n")
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
+        self.assertEqual(self.run_("get", "resume.cap").stdout, "3\n")
         self.assertEqual(json.loads(self.run_("get", "models.verifier").stdout), {"provider": "openai-codex", "model": "gpt-6.1-terra"})
         self.assertEqual(len(json.loads(self.run_("get", "models.designer").stdout)), 2)
         self.assertEqual(json.loads(self.run_("dump").stdout), tomllib.loads(SHIPPED))
