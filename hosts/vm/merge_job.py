@@ -9,7 +9,8 @@ For every open PR by ME, and every open PR by another author that has a preappro
 head), it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no hold row, and a risk
 tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
-of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE). A
+of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE), and
+one that read more checks than its count (a check added while paging) is read again once (read_pr). A
 mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
 next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
 must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
@@ -305,6 +306,17 @@ def read_rest(node):
     return node
 
 
+def read_pr(node):
+    """from_graphql() over the PR with every page read. A check added while the job paged shows up as more checks read than
+    the first page's totalCount (cua#3897, #7338, #7345 on 11 Nov): the PR is read again once (ONE_PR), and that read must
+    match its own count. Fewer checks than the count is never re-read: from_graphql() raises on it."""
+    node = read_rest(node)
+    contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
+    if len(contexts["nodes"]) > contexts["totalCount"]:
+        node = read_rest(gh_json(["api", "graphql", "-F", f"n={node['number']}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])
+    return from_graphql(node)
+
+
 def from_graphql(node):
     """One PullRequest node (with read_rest() done) as the fields gate(), blockers() and next_action() read, in
     `gh pr view --json` shape. A count that does not match what was read raises, so the job never decides on a partial list
@@ -542,7 +554,7 @@ class Job:
             ident = f"{SHORT}#{node['number']}"
             try:
                 try:
-                    p = from_graphql(read_rest(node))
+                    p = read_pr(node)
                 except Exception as e:   # the gate cannot be read, so the job's own queue entry for this head comes out
                     if ident in self.s["queued"]:
                         self.dequeue(ident, node["number"], node["headRefOid"], [Reason("unreadable", str(e)[:150])], str(e)[:150])
@@ -695,7 +707,7 @@ class Job:
     def explain(self, n):
         """--explain N: every reason for one PR and the action a run would take. Records nothing."""
         p = gh_json(["pr", "view", str(n), "-R", REPO, "--json", "state,author"])
-        p.update(from_graphql(read_rest(gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])))
+        p.update(read_pr(gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"]))
         try:
             holds = parse_holds(read(HOLDS_FILE))
         except Exception as e:

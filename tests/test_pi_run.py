@@ -455,6 +455,32 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)   # the first brief, kept
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
 
+    def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
+        """The five 11 Nov failures (half-bounce-spaces, statechart-fixes, driver-macos-fixes, ci-fail-owner, ci-fail-owner-2)
+        each passed when run again under a fresh id; these are their last lines, verbatim."""
+        for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
+                         ("i2", "Incomplete Claude Code upstream response (status 200, capture incomplete, relay failure Error, "
+                                "native retries denied 1)"),
+                         ("i3", "Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure Error)"),
+                         ("i4", "Error: Incomplete Claude Code upstream response (status 529, capture incomplete)")):
+            (self.t / "say").write_text(say + "\n")
+            before = time.time()
+            self.start(sid, rc=1)
+            self.assertTrue(wait_for(lambda sid=sid: (self.run_json(sid) or {}).get("state") == "queued"), (sid, self.run_json(sid)))
+            run = self.run_json(sid)
+            self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None), sid)
+            self.assertNotIn("wake:", self.log(sid), sid)
+            at = time.mktime(time.strptime(run["resume_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+            self.assertLess(abs(at - before), 30, sid)   # resume at once: nothing names a wait
+        (self.t / "say").unlink()
+        (self.t / "args").unlink()
+        r = self.pi_run("i1", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("resumed i1 attempt 1", r.stdout)
+        self.assertEqual(self.finished("i1")["attempt"], 1)
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
+
     def test_a_chatgpt_limit_resumes_after_the_wait_it_names_and_not_before(self):
         (self.t / "say").write_text("You have hit your ChatGPT usage limit (pro plan). Try again in ~42 min.\n")
         before = time.time()
@@ -465,6 +491,91 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("cx", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 3)
         self.assertIn("once that has passed", r.stderr)
+
+    def cargo_target(self, sid, rel, mb=2):
+        t = self.t / "root" / "review" / sid / rel
+        (t / "debug").mkdir(parents=True)
+        (t / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        (t / "debug" / "blob").write_bytes(os.urandom(mb * 1_000_000))
+        return t
+
+    def test_collect_deletes_the_runs_idle_cargo_targets_keeps_held_ones_and_logs_the_gb(self):
+        self.start("pr1")
+        self.finished("pr1")
+        d = self.t / "root" / "review" / "pr1"
+        idle = self.cargo_target("pr1", "wt/libs/x/target", mb=3)
+        idle2 = self.cargo_target("pr1", "wt2/target")
+        held = self.cargo_target("pr1", "wt3/target")
+        src = d / "wt" / "libs" / "x" / "src.rs"
+        src.write_text("fn main() {}\n")
+        notcargo = d / "wt" / "web" / "target"   # a dir named target that cargo did not make
+        notcargo.mkdir(parents=True)
+        outside = self.cargo_target("pr1", "scratch/target")   # not under a wt* worktree
+        other = self.cargo_target("other", "wt/target")         # another run's
+        (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")   # a link out is never followed
+        (d / "wt3" / "src").mkdir()
+        holder = subprocess.Popen(["/bin/sh", "-c", "exec sleep 30"], cwd=d / "wt3" / "src")   # a live shell in that worktree
+        self.addCleanup(holder.kill)
+        r = self.pi_run("collect", "pr1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "pr1 attempt=1 rc=0\n")
+        self.assertFalse(idle.exists() or idle2.exists())
+        for kept in (held, src, notcargo, outside, other):
+            self.assertTrue(kept.exists(), kept)
+        line = next(x for x in r.stderr.splitlines() if x.startswith("pi-run: pr1: "))
+        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted wt/libs/x/target wt2/target; kept wt3/target ")
+        self.assertIn("pi-run collect: freed ", self.log("pr1"))
+
+    def test_collect_deletes_nothing_when_lsof_gives_no_answer_or_the_run_is_live(self):
+        self.start("pr2", hang=True)
+        t = self.cargo_target("pr2", "wt/target")
+        self.assertEqual(self.pi_run("collect", "pr2").returncode, 3)   # running: refused, nothing touched
+        self.assertTrue(t.exists())
+        (self.t / "hang").unlink()
+        self.finished("pr2")
+        (self.t / "bin" / "lsof").write_text("#!/bin/sh\nexit 1\n")
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr2", PATH=f"{self.t}/bin:/usr/bin:/bin")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(t.exists())
+        self.assertIn("kept 1 target/ dir(s): lsof gave no answer", r.stderr)
+
+    def test_a_worktree_entered_after_the_first_lsof_keeps_its_target(self):
+        """The second lsof, after the target is renamed aside, sees a process that entered the worktree since the first."""
+        self.start("pr3")
+        self.finished("pr3")
+        t = self.cargo_target("pr3", "wt/target")
+        wt = os.path.realpath(t.parent)
+        (self.t / "bin" / "lsof").write_text(f'#!/bin/sh\nn=$(cat "$T/lsof-n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/lsof-n"\n'
+                                             f'echo p1; [ "$n" -ge 1 ] && echo "n{wt}/src"; echo n/\n')
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((t / "CACHEDIR.TAG").exists())   # renamed back
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
+
+    def test_a_build_started_after_the_second_lsof_gets_a_fresh_target_that_prune_never_deletes(self):
+        """Once renamed aside, the old build is reachable only by its aside name: cargo started later makes a new target/."""
+        self.start("pr5")
+        self.finished("pr5")
+        t = self.cargo_target("pr5", "wt/target")
+        (self.t / "bin" / "lsof").write_text(   # the second snapshot is clean, then a build starts in the worktree
+            '#!/bin/sh\nn=$(cat "$T/lsof-n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/lsof-n"\n'
+            f'[ "$n" -ge 1 ] && mkdir -p "{t}/debug" && echo new > "{t}/debug/fresh"\necho p1; echo n/\n')
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")   # the later build's target/ is untouched
+        self.assertFalse((t / "debug" / "blob").exists())                 # the old build went
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+
+    def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
+        self.start("pr4")
+        self.finished("pr4")
+        left = self.cargo_target("pr4", "wt/.target.pruning-123")
+        self.pi_run("collect", "pr4")
+        self.assertFalse(left.exists())
 
     def test_a_lost_runs_collect_sends_one_failed_wake(self):
         self.start("gone", hang=True)
@@ -482,7 +593,8 @@ class Launcher(unittest.TestCase):
     def test_a_run_that_only_quotes_a_429_is_a_plain_failure(self):
         for sid, say in (("q1", "Incomplete Claude Code upstream response (status 429, x)\nreport done\n"),
                          ("q2", "Task failed; quoted: Incomplete Claude Code upstream response (status 429, example)\n"),
-                         ("q3", "Incomplete Claude Code upstream response (status 200, capture incomplete)\n")):
+                         ("q3", "Incomplete Claude Code upstream response (status 400, upstream said: You're out of extra usage.)\n"),
+                         ("q4", "Incomplete Claude Code response: assistant, message_stop and one result required\n")):
             (self.t / "say").write_text(say)
             self.start(sid, rc=1)
             self.assertEqual(self.finished(sid)["wake"], "failed", sid)

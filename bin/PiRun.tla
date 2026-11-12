@@ -55,7 +55,8 @@ Resume ==
   /\ state' = "running" /\ live' = TRUE /\ cont' = FALSE /\ reopened' = TRUE /\ by' = "drain"
   /\ UNCHANGED <<ended, killed, collects, finish, wake, why, fixes>>
 
-\* pi stops on an upstream 429 (Claude Code or ChatGPT): back to the queue with resume_at. No wake, the slot is freed,
+\* pi stops on an upstream 429 (Claude Code or ChatGPT) or an incomplete Claude Code upstream response (bin/pi-run
+\* LIMIT): back to the queue with resume_at. No wake, the slot is freed,
 \* and there is no result yet.
 Limit ==
   /\ state = "running" /\ live

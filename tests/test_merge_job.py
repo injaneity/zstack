@@ -587,6 +587,51 @@ class Stage(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "read 1 of 2 files"):
             mj.from_graphql(n)
 
+    def test_a_check_added_while_paging_reads_the_pr_again_once_and_merges(self):
+        """cua#7345 on 11 Nov: `read 103 of 100 checks` cost it a tick. GitHub added checks between the first page and MORE."""
+        self.add(6363, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
+        real, grown = self.gh, []
+
+        def gh(args):
+            if "@include" in args[-1] and not grown:   # the first MORE page: three checks land first
+                grown.append(1)
+                self.prs[6363]["statusCheckRollup"][:0] = [cr(f"late {i}") for i in range(3)]
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6363"])
+        self.assertEqual(self.reads.count(6363), 4)   # search, MORE, the one re-read, its MORE
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+
+    def test_a_check_count_still_off_after_the_one_reread_is_an_error_never_a_merge(self):
+        self.add(6364, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
+        real = self.gh
+
+        def gh(args):   # every MORE page finds three more checks
+            if "@include" in args[-1]:
+                self.prs[6364]["statusCheckRollup"][:0] = [cr(f"late {len(self.reads)} {i}") for i in range(3)]
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertEqual(self.reads.count(6364), 4)   # read again once, not in a loop
+        self.assertIn("error cua#6364 merge: RuntimeError: cua#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
+
+    def test_fewer_checks_than_the_count_is_never_read_again(self):
+        self.add(6365)
+        real = self.gh
+
+        def gh(args):
+            out = real(args)
+            if "search(" in args[-1]:
+                for n in out["data"]["search"]["nodes"]:
+                    n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = 3
+            return out
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.reads.count(6365), 1)
+        self.assertIn("error cua#6365 merge: RuntimeError: cua#6365: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+
     def test_a_queued_pr_whose_gate_cannot_be_read_in_full_leaves_the_queue(self):
         self.queue = True
         self.add(6362)
