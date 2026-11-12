@@ -1012,7 +1012,7 @@ class Cli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "h").write_text(HOLDS)
             p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "injaneity"}, title="t")
-            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable")},
+            node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable", "author")},
                     "labels": {"totalCount": 0, "nodes": []},
                     "files": {"totalCount": 1, "nodes": [{"path": "README.md"}], "pageInfo": {"hasNextPage": False}},
                     "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"totalCount": 0, "nodes": [],
@@ -1025,6 +1025,8 @@ class Cli(unittest.TestCase):
                 self.assertFalse(mj.Job(dry=True).explain(6400))
             self.assertEqual(sorted(os.listdir(d)), ["h"])
         text = out.getvalue()
+        self.assertIn("cua#6400 OPEN by injaneity at", text)
+        self.assertNotIn("PR by", text)
         self.assertIn("gate: fail", text)
         self.assertIn("gate [risk] declared deep", text)
         self.assertIn("blocker [conflict] merge conflict", text)

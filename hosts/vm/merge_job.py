@@ -691,7 +691,7 @@ class Job:
         reasons, notes = self.evaluate(p, holds)
         act, who, why = next_action(reasons, notes, p, self.s["rerun"].get(f"{SHORT}#{n}"))
         gate_codes = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk"}
-        lines = [f"{SHORT}#{n} {p.get('state', '')} by {(p.get('author') or {}).get('login', '?')} at {p['headRefOid']}: "
+        lines = [f"{SHORT}#{n} {p.get('state', '')} by {p.get('author') or '?'} at {p['headRefOid']}: "
                  f"{(p.get('title') or '')[:90]}", f"gate: {'pass' if not gate_codes & {r.code for r in reasons} else 'fail'}"]
         lines += [f"  {'gate' if r.code in gate_codes else 'blocker'} [{r.code}] {r.text}" for r in reasons]
         lines += [f"  note {x}" for x in notes]
