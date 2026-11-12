@@ -1,16 +1,17 @@
 #!/bin/bash
 # new-brief <id> <role> [<source>]: write $ONIGIRI_ROOT/review/<id>/brief.md from the one brief template, with the task
-# text from stdin, and print its path. <source> is `auto` for an hourly auto-pick (it counts toward the auto slots,
-# config/policy.toml [slots]) and `chat` otherwise. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
+# text from stdin, and print its path. <source> is the slot pool its run counts in (config/policy.toml [slots]): `auto` for an
+# hourly auto-pick, `quick` for the quick-check lane (in no pool; role research is quick too), and `chat` otherwise,
+# which is the hand pool. Every brief carries the Hard rules pointer, `wake: finish`, the verified-comment rule,
 # follow-ups:/questions: and the no-invented-limits line, so a launch never depends on who wrote it. Refuses to
 # overwrite a brief that exists. Then `bin/queue <id>` (or `bin/hourly launch`) starts it.
 set -eu
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
 echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
-[ $# -ge 2 ] || { echo "usage: new-brief <id> <role> [auto|chat] < task.md" >&2; exit 2; }
+[ $# -ge 2 ] || { echo "usage: new-brief <id> <role> [auto|chat|quick] < task.md" >&2; exit 2; }
 id=$1 role=$2 source=${3:-chat}
 case "$id" in [A-Za-z0-9]*) ;; *) echo "new-brief: bad id $id" >&2; exit 2;; esac
-case "$source" in auto|chat) ;; *) echo "new-brief: source is auto or chat, not $source" >&2; exit 2;; esac
+case "$source" in auto|chat|quick) ;; *) echo "new-brief: source is auto, chat or quick, not $source" >&2; exit 2;; esac
 "$pkg/bin/model-for" "$role" >/dev/null
 root=$(python3 -I -c 'import importlib.machinery as m, importlib.util as u, sys
 l = m.SourceFileLoader("p", sys.argv[1]); p = u.module_from_spec(u.spec_from_loader("p", l)); l.exec_module(p)

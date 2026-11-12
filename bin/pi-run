@@ -7,11 +7,19 @@
   pi-run ci <id> <pr> <head> <why...>             reopen a collected run for its trycua/cua PR that is red at <head>
   pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc> [since= resume_at=]
 
-A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, and once its
-PR's CI reopened it: ci {pr: [heads]}, ci_now}. step() is the whole lifecycle:
+A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, and once
+its PR's CI reopened it: ci {pr: [heads]}, ci_now}. pool is the slot pool it counts in (config/policy.toml [slots]), tagged at
+queue and start from the brief: `source: auto` is auto, `source: quick` or role research is quick (the quick-check
+lane, in no pool), anything else is hand. A running run with no pool tag (started before the pools) counts as hand.
+A fresh start of an auto or hand run that bin/hourly has not counted (the drain and `bin/hourly launch` count first)
+takes this root's slots.lock and counts its pool across every host with `bin/hourly pools`. When the pool is full, or a
+host's runs are unknown (an unreachable peer, or one in $ONIGIRI_UNSEEN), it is queued instead, says so, and exits 0;
+the hourly drain starts it once its pool has room. A running run is never stopped to make room.
+step() is the whole lifecycle:
 
-  (no file)   --queue-->   queued     since = now, role from the brief's `role:` line; a second queue changes nothing
-  (no file) or queued --start--> running   attempt + 1, a fresh pi session; since is kept (now when never queued)
+  (no file)   --queue-->   queued     since = now, role from the brief's `role:` line, pool; a second queue changes nothing
+  (no file) or queued --start--> running   attempt + 1, a fresh pi session, pool from the brief; since is kept (now
+                                           when never queued)
   queued with resume_at --start--> running  only from the hourly drain (PI_RUN_DRAIN=1, set by `bin/hourly recv
                                            --drain`) once resume_at has passed: same attempt, same pi session, RESUME
   running     --exit--->   exited     records pi's rc and the wake it sends: failed when rc != 0, done when rc is 0
@@ -80,6 +88,37 @@ def policy():
     return _POLICY[0]
 
 
+POOLS = ("auto", "hand", "quick")
+
+
+def caps():
+    """{"auto": n, "hand": n}: config/policy.toml [slots], the one copy of the pool caps. A bad policy stops the launch."""
+    pol = policy()
+    try:
+        return pol.load()["slots"]
+    except pol.PolicyError as e:
+        die(2, str(e))
+
+
+def pool_of(brief, role):
+    """The slot pool a brief's run counts in: its `source:` line, else quick for role research, else hand."""
+    src = next((x.split(":", 1)[1].strip() for x in brief.splitlines() if x.startswith("source:")), "")
+    return src if src in ("auto", "quick") else "quick" if role == "research" else "hand"
+
+
+def pool_wait(pool, counts, unknown):
+    """Why a run of `pool` cannot start now, given every host's running counts per pool, or "" when it can. The quick lane
+    never waits and holds no slot."""
+    if pool == "quick":
+        return ""
+    if unknown:
+        return f"{', '.join(unknown)} runs unknown, so the {pool} pool count is unknown"
+    cap = caps()[pool]
+    if counts[pool] >= cap:
+        return f"{pool} pool full: {counts[pool]}/{cap} running"
+    return ""
+
+
 class Refused(Exception):
     pass
 
@@ -96,14 +135,14 @@ def step(run, event, alive=False, **f):
     cont = s == "queued" and bool(run.get("resume_at"))   # a 429's continuation, waiting in the queue
     if event == "queue" and s in ("absent", "queued"):
         return run or {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
-                       "resume_at": None, "since": f["since"], "role": f["role"]}
+                       "resume_at": None, "since": f["since"], "role": f["role"], "pool": f.get("pool", "hand")}
     if event == "start" and (s == "absent" or s == "queued" and not cont):
         return {**(run or {}), "state": "running", "attempt": (run or {}).get("attempt", 0) + 1, "pid": f["pid"], "start": f["start"],
                 "rc": None, "wake_finish": f["wake_finish"], "wake": None, "resume_at": None,
-                "since": (run or {}).get("since") or f["now"]}
+                "since": (run or {}).get("since") or f["now"], "pool": f.get("pool", "hand")}
     if event == "start" and cont and f.get("drain") and f["now"] >= run["resume_at"]:
         return {**run, "state": "running", "pid": f["pid"], "start": f["start"], "rc": None, "resume_at": None,
-                "resumes": run.get("resumes", 0) + 1, "ci_now": None}
+                "resumes": run.get("resumes", 0) + 1, "ci_now": None, "pool": run.get("pool") or f.get("pool", "hand")}
     if event == "ci" and s == "collected":
         heads = (run.get("ci") or {}).get(f["pr"], [])
         if f["head"] in heads:
@@ -324,6 +363,8 @@ def launch(sid, role, brief, extra):
     migrate(root)
     run = read_json(os.path.join(d, "run.json"))
     cont = continuation(run)
+    # the pool its run.json was tagged with when queued, which the drain counted; untagged, a continuation is hand
+    pool = (run or {}).get("pool") or ("hand" if cont else pool_of(open(brief).read(), role))
     if cont:   # the same session goes on: its role, pi args and brief are the ones it started with
         role, extra = run.get("role") or role, run.get("extra") or []
         text = CI_RESUME.format(**run["ci_now"]) if run.get("ci_now") else RESUME
@@ -345,12 +386,14 @@ def launch(sid, role, brief, extra):
         die(4, f"{sid}: no {provider} credential in the launch env: `pi --list-models` lists no {provider} model "
                f"(host file: {env.get('ONIGIRI_HOST') or 'none'}). Log in, or name the host file that loads it with ONIGIRI_HOST "
                "or ~/.config/onigiri/host; bin/check-host lists what this host lacks. Nothing started.")
+    gate = None if cont or f["drain"] or os.environ.get("PI_RUN_COUNTED") == "1" else slots_gate(root, d, sid, role, pool, brief)
     if os.environ.get("PI_RUN_DRY"):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
     if not os.path.isfile(RULES) or not open(RULES).read().strip():
         die(2, f"no Hard rules in {RULES}")
     env.pop("PI_RUN_DRAIN", None)
+    env.pop("PI_RUN_COUNTED", None)
     env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0")
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
            "--append-system-prompt", RULES, *extra, "-p", "--", text]
@@ -367,14 +410,60 @@ def launch(sid, role, brief, extra):
         pid = os.fork()
         if pid == 0:
             os.close(r.fd)   # the lock stays the launcher's until run.json names this child
+            gate is None or os.close(gate)   # and slots.lock until run.json counts this run
             try:
                 supervise(d, sid, cmd, env)
             finally:
                 os._exit(1)
-        new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(), **f)
+        new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
+                   pool=pool, **f)
         r.write(new if cont else {**new, "role": role, "extra": extra})
+    gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0
+
+
+def slots_gate(root, d, sid, role, pool, brief):
+    """A fresh start that no hourly count covers: hold slots.lock (the drain holds it for its pass, `bin/hourly launch` while
+    it counts) and count every host's runs with `bin/hourly pools`. Returns the lock's fd, held until run.json says
+    running. When the pool is full or a count is unknown, the run is queued instead for the drain, and pi-run says so
+    and exits 0. A quick run is in no pool and starts now."""
+    if pool == "quick":
+        return None
+    dry = bool(os.environ.get("PI_RUN_DRY"))   # a dry run counts and changes nothing, so it takes no lock
+    dry or os.makedirs(os.path.dirname(root), exist_ok=True)
+    fd = None if dry else os.open(os.path.join(os.path.dirname(root), "slots.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+    dry or fcntl.flock(fd, fcntl.LOCK_EX)   # a drain holds it for its pass: wait, then count what it left
+    try:
+        p = subprocess.run([os.path.join(PKG, "bin", "hourly"), "pools"], capture_output=True, text=True)
+    except OSError as e:
+        p = subprocess.CompletedProcess([], 127, "", str(e))
+    try:
+        got = json.loads(p.stdout)
+        why = pool_wait(pool, got["running"], got["unknown"])
+    except (ValueError, KeyError, TypeError):
+        why = "the pool count failed: " + ((p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1])[:200]
+    if not why:
+        return fd
+    dry or os.close(fd)
+    if dry:
+        print(f"pi-run: dry run, would queue {sid} ({pool} pool), not start it: {why}")
+        sys.exit(0)
+    os.makedirs(d, exist_ok=True)
+    here = os.path.join(d, "brief.md")   # the drain starts review/<id>/brief.md
+    if not os.path.exists(here):
+        with open(here, "w") as fh:
+            fh.write(open(brief).read())
+    elif os.path.realpath(here) != os.path.realpath(brief) and open(here).read() != open(brief).read():
+        die(3, f"{sid}: {why}, and review/{sid}/brief.md differs from {brief}, so it cannot be queued; nothing started")
+    with Run(d) as r:
+        try:
+            r.write(step(r.run, "queue", alive(r.run), since=utc(), role=role, pool=pool))
+        except Refused as e:
+            die(3, f"{sid}: {e}")
+    print(f"pi-run: {sid} queued, not started: {why}. The hourly drain starts it once the {pool} pool has room "
+          f"(config/policy.toml [slots]; `bin/hourly queue` on the hourly host drains now); no running session is stopped for it.")
+    sys.exit(0)
 
 
 def collect(sid):
@@ -424,7 +513,9 @@ def migrate(root):
             role = open(mark).read().strip()
             if role in ("", "next") and os.path.isfile(os.path.join(d, "brief.md")):
                 role = next((x.split(":", 1)[1].strip() for x in open(os.path.join(d, "brief.md")) if x.startswith("role:")), "")
-            r.write(step(None, "queue", since=utc(os.stat(mark).st_mtime), role=role or "coding"))
+            brief = os.path.join(d, "brief.md")
+            text = open(brief, errors="replace").read() if os.path.isfile(brief) else ""
+            r.write(step(None, "queue", since=utc(os.stat(mark).st_mtime), role=role or "coding", pool=pool_of(text, role or "coding")))
             os.unlink(mark)
 
 
@@ -473,10 +564,10 @@ def queue(sid):
     role = next((x.split(":", 1)[1].strip() for x in open(brief) if x.startswith("role:")), "coding")
     with Run(d) as r:
         try:
-            r.write(step(r.run, "queue", alive(r.run), since=utc(), role=role))
+            r.write(step(r.run, "queue", alive(r.run), since=utc(), role=role, pool=pool_of(open(brief).read(), role)))
         except Refused as e:
             die(3, f"{sid}: {e}")
-    print(f"{sid} queued role={r.run['role']} since={r.run['since']}")
+    print(f"{sid} queued role={r.run['role']} pool={r.run.get('pool') or 'hand'} since={r.run['since']}")
     return 0
 
 

@@ -33,7 +33,7 @@ VARIABLES
   cont,      \* the queued run is a 429's continuation: run.json queued with resume_at, same attempt and session
   due,       \* the continuation's resume_at has passed
   limited,   \* this attempt stopped on a 429 (a fresh id clears it)
-  slot,      \* the run holds one of the shared slots (bin/hourly slots())
+  slot,      \* the run holds a slot in its pool (bin/hourly slots())
   drained,   \* the run was started by the hourly queue drain, not by a direct `pi-run <id>`
   ci,        \* ci-gate at the head: "pending" "green" "red"
   reran,     \* the job reran this head's failed runs

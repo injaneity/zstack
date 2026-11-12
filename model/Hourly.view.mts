@@ -1,10 +1,10 @@
 // The reader's words for Hourly.tla: one hourly pickup pass after another.
 export const title = "zstack hourly pickup: a pass that could pick never ends silently";
-const TOTAL = 7, AUTO = 5;   // config/policy.toml [slots], as Hourly.cfg sets them
+const AUTO = 3;   // config/policy.toml [slots] auto, as HourlyChart.cfg sets it
 // Hourly.tla's CouldPick: an auto slot known free (none while the peer is unreachable) and a Todo no rule blocks.
 const could = (v: any) => {
   const seenAuto = v.auto + (v.blind ? 0 : v.peer);
-  const free = v.blind ? 0 : Math.max(0, Math.min(TOTAL - (seenAuto + v.chat + v.quick), AUTO - seenAuto));
+  const free = v.blind ? 0 : Math.max(0, AUTO - seenAuto);
   return free > 0 && (v.todo as string[]).some((i) => v.blocker[i] === "none");
 };
 export const state = (v: any) => {
@@ -24,7 +24,7 @@ const steps: Record<string, string | null> = {
   PassStarts: "the hourly pass starts",
   Collects: "it collects ended runs",
   Drains: "it launches a queued run",
-  DrainDone: "the queue is drained or the total is full",
+  DrainDone: "the queue is drained, or its pools are full",
   Picks: "it launches a Todo",
   Skips: "it skips a Todo with one of the five rules",
   Declines: "the chat declines the whole list in one row",   // the main-4e08648 mutants only
@@ -36,7 +36,8 @@ const steps: Record<string, string | null> = {
   Moves: "a Todo leaves Todo",
   RunEnds: "a run exits",
   ChatQueues: "the chat queues a run",
-  ChatStartsNow: "the chat starts a run itself (outside the cap)",
+  HandStarts: "the chat starts a hand run, or queues it when the hand pool is full",
+  ChatStartsNow: "the chat starts a quick-check run (in no pool)",
   PeerFlips: "the peer stops or starts answering",
 };
 export const step = (action: string) => (action in steps ? steps[action] : action);

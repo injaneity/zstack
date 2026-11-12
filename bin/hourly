@@ -5,15 +5,19 @@
                                   Prints one `skip:` line and nothing else when nothing changed since `hourly done`.
   hourly done [--linear ...]      after the pass: store the fingerprint and the snapshot status answers come from
   hourly log <host> <action> <item> <reason...>   append one pickup.log row (ts_sgt host action item reason free_gb)
-  hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host>, then log the launch
+  hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host> while its pool has room (counted
+                                                  under slots.lock), then log the launch; else log a wait and exit 3
+  hourly brief <id>               this host's review/<id>/brief.md, for a launch from a peer
+  hourly pools                    every host's running runs per pool as JSON, and the hosts whose runs are unknown
   hourly queue                    first reopen the thread that pushed each of our PRs red after the merge job's rerun
                                   (bin/pi-run ci on its host), then start every host's queued runs on that host,
-                                  oldest since= first, while slots are free: fresh ones, and continuations (a 429's,
+                                  oldest since= first, while its pool has room: fresh ones, and continuations (a 429's,
                                   a red PR's) in their own session once resume_at has passed (PI_RUN_DRY=1: plan only)
   hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
   hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
-  hourly facts | recv <id> [--drain]  what a peer is asked for over `on`: this host's facts as JSON; a brief on stdin
-                                  (--drain: the queue drain's start, the only one that may resume a 429'd run)
+  hourly facts [--runs] | recv <id> [--drain]  what a peer is asked for over `on`: this host's facts as JSON; a brief on
+                                  stdin (--drain: the queue drain's start, the only one that may resume a 429'd run;
+                                  PI_RUN_COUNTED=1: `hourly launch` counted its pool already)
 
 The host running it is $ONIGIRI_HOST, else ~/.config/onigiri/host (hosts/<name>/host.sh, as bin/pi-run); its peers are
 $ONIGIRI_PEERS, `name=<command>` words where <command> runs one shell line on the peer (the mini's is the VM's ssh
@@ -45,10 +49,9 @@ SGT = ZoneInfo("Asia/Singapore")
 FLOOR_GB, HUNG_MIN = 20, 180   # the VM floor and the hung mark: the routine's rules (playbooks/hourly.md)
 _pol = pr.policy()
 try:
-    _policy = _pol.load()
+    _policy = _pol.load()   # a policy bin/policy rejects stops every command with its reason
 except _pol.PolicyError as e:
     pr.die(2, f"hourly: {e}")
-TOTAL, AUTO = _policy["slots"]["total"], _policy["slots"]["auto"]   # the one copy of the shared caps, config/policy.toml [slots]
 REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]   # the repo the merge job owns, and whose PRs are ours
 MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 # merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
@@ -88,13 +91,15 @@ def run(cmd, **kw):
         return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: not found on PATH (set it in the host file)\n")
 
 
-def on(host, args, stdin=None):
-    """Run a package file on `host`: here when it is this host, else through the peer's command."""
+def on(host, args, stdin=None, env=None):
+    """Run a package file on `host`: here when it is this host, else through the peer's command. `env` adds variables."""
+    env = env or {}
     if host == SELF:
-        return run([os.path.join(PKG, args[0]), *args[1:]], input=stdin)
+        return run([os.path.join(PKG, args[0]), *args[1:]], input=stdin, env={**os.environ, **env})
     if host not in peers():
         pr.die(2, f"no host {host}: this is {SELF}, peers {' '.join(peers()) or 'none'}")
-    line = f"ONIGIRI_HOST={shlex.quote(host)} ~/{PEER_PKG}/{shlex.quote(args[0])} " + " ".join(map(shlex.quote, args[1:]))
+    line = " ".join(f"{k}={shlex.quote(v)}" for k, v in {"ONIGIRI_HOST": host, **env}.items()) + \
+        f" ~/{PEER_PKG}/{shlex.quote(args[0])} " + " ".join(map(shlex.quote, args[1:]))
     return run([*shlex.split(peers()[host]), line], input=stdin)
 
 
@@ -106,13 +111,12 @@ def activity_min(d):
     return int((time.time() - max([os.path.getmtime(p) for p in paths if os.path.exists(p)] or [0])) // 60)
 
 
-def facts():
-    """This host: zstack sha and parity, free disk, and every run not collected."""
+def facts(full=True):
+    """This host: zstack sha and parity, free disk, and every run not collected; not full: only the runs."""
     r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
     if ls.returncode:   # runs unknown: report the host as an error, which every pass and the queue treat as unknown slots
         return {"error": "pi-run list: " + (ls.stderr.strip().splitlines() or [f"exit {ls.returncode}"])[-1][:200]}
     out = ls.stdout
-    parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     runs = {}
     for line in out.splitlines():
         sid, state, *kv = line.split()
@@ -120,17 +124,31 @@ def facts():
             continue
         d, f = os.path.join(r, "review", sid), dict(x.split("=", 1) for x in kv)
         brief = open(os.path.join(d, "brief.md"), errors="replace").read() if os.path.exists(os.path.join(d, "brief.md")) else ""
-        f.update(state=state, auto="source: auto" in brief.splitlines() or "uto-picked" in brief)
-        if state == "running":
+        f.update(state=state, pool=pool(state, pr.read_json(os.path.join(d, "run.json")) or {}, brief))
+        if state == "running" and full:
             f["idle_min"] = activity_min(d)
         runs[sid] = f
+    if not full:
+        return {"runs": runs, "pools": 1}
+    parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     last = os.path.join(r, "tick", "last-run")   # the merge job's host only: its last finished run
     try:
         merge = {"merge_last": open(last, errors="replace").read().strip()} if os.path.exists(last) else {}
     except OSError as e:
         merge = {"merge_last": f"unreadable: {e}"}
     return {"sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": free_gb(r), "runs": runs, "pushed": pushed(os.path.join(r, "review")), **merge}
+            "free_gb": free_gb(r), "runs": runs, "pools": 1, "pushed": pushed(os.path.join(r, "review")), **merge}
+
+
+def pool(state, run, brief):
+    """The pool a run counts in: its run.json tag. A running run with no tag started before the pools and counts as hand
+    (Zane's slot split, 12 Nov), and so does its queued continuation; a fresh queued one without a tag gets its pool from
+    its brief, as its start will."""
+    if run.get("pool") in pr.POOLS:
+        return run["pool"]
+    if state == "running" or pr.continuation(run):   # the same attempt goes on, and bin/pi-run resumes it as hand
+        return "hand"
+    return pr.pool_of(brief, run.get("role") or "coding")
 
 
 def pushed(review):
@@ -214,10 +232,10 @@ def batch_due(r):
     return t.hour >= 8 and not done
 
 
-def all_facts():
-    hosts = {SELF: facts()}
+def all_facts(full=True):
+    hosts = {SELF: facts(full)}
     for h in peers():
-        p = on(h, ["bin/hourly", "facts"])
+        p = on(h, ["bin/hourly", "facts", *([] if full else ["--runs"])])
         try:
             hosts[h] = json.loads(p.stdout)
         except ValueError:
@@ -226,19 +244,52 @@ def all_facts():
 
 
 def slots(hosts):
-    """(running, auto running) across every host: the total and auto slots (config/policy.toml [slots]) are shared. Only a running
-    run holds one: a run that hit a 429 is queued again and gave its slot back."""
+    """{pool: running runs} across every host. The pools (config/policy.toml [slots]) are counted apart, and quick is in none.
+    Only a running run holds a slot: a run that hit a 429 is queued again and gave its slot back."""
     rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] == "running"]
-    return len(rs), sum(r["auto"] for r in rs)
+    return {p: sum(of(r) == p for r in rs) for p in pr.POOLS}
+
+
+def of(r):
+    """A run's pool in `facts`. A peer whose package predates the pools (its facts have no `pools`) tags nothing, so each
+    of its runs runs untagged and counts as hand."""
+    return r.get("pool") or "hand"
+
+
+def pool_at(hosts, host, sid, brief):
+    """The pool the run will start in on `host`: its run.json tag as `facts` reports it, else what that host's pi-run will
+    tag it with: hand on a peer before the pools, else the brief's pool."""
+    f = hosts.get(host, {})
+    if sid in f.get("runs", {}):
+        return of(f["runs"][sid])
+    if not f.get("pools"):
+        return "hand"
+    return pr.pool_of(brief, next((x.split(":", 1)[1].strip() for x in brief.splitlines() if x.startswith("role:")), "coding"))
+
+
+def unknown(hosts):
+    """Hosts whose runs this one cannot count: an unreachable peer, or one $ONIGIRI_UNSEEN names (the VM cannot reach the
+    mini). While any is unknown no slot is known free (model/Slots.tla)."""
+    root()
+    return [h for h, f in hosts.items() if "error" in f] + HOST[0].get("ONIGIRI_UNSEEN", "").split()
 
 
 def auto_free(hosts):
-    """Auto slots an hourly pick may take now: the auto cap less auto runs, never past the total's free slots. None while
-    a host is unreachable: its runs are unknown, so no slot is known free (the drain's rule). model/Hourly.tla CapsHold."""
-    if any("error" in f for f in hosts.values()):
-        return 0
-    running, auto = slots(hosts)
-    return max(0, min(TOTAL - running, AUTO - auto))
+    """Auto slots an hourly pick may take now: the auto cap less running auto runs. None while a host is unknown: its
+    runs are unknown, so no slot is known free (the drain's rule). model/Hourly.tla AutoCap."""
+    return 0 if unknown(hosts) else max(0, pr.caps()["auto"] - slots(hosts)["auto"])
+
+
+def slots_line(n):
+    return f"auto {n['auto']}/{pr.caps()['auto']}, hand {n['hand']}/{pr.caps()['hand']}, quick {n['quick']} (no cap)"
+
+
+def slots_lock():
+    """slots.lock in this host's root, held while a launch counts the pools and starts its run (bin/pi-run takes it too)."""
+    os.makedirs(root(), exist_ok=True)
+    fd = os.open(os.path.join(root(), "slots.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
 
 
 def snapshot(linear):
@@ -297,7 +348,6 @@ def fingerprint(s):
 
 def report(s, fp, last):
     print(f"hourly {now()} fingerprint {fp} (last {last.get('fp', 'none')} at {last.get('ts', 'never')})")
-    running, auto = slots(s["hosts"])
     for h, f in s["hosts"].items():
         if "error" in f:
             print(f"host {h}: unreachable: {f['error']}")
@@ -305,9 +355,9 @@ def report(s, fp, last):
         print(f"host {h}: zstack {f['sha'][:9]} {'at main' if f['at_main'] else 'NOT at main: ' + '; '.join(f['parity'])}, free {f['free_gb']}G")
         for sid, r in sorted(f["runs"].items(), key=lambda x: (x[1]["state"], x[1].get("since", ""))):
             extra = " ".join(f"{k}={r[k]}" for k in ("rc", "since", "resume_at", "idle_min") if k in r and r[k] != "None")
-            print(f"  {r['state']:<8} {sid} {'auto ' if r['auto'] else ''}{extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}")
+            print(f"  {r['state']:<8} {sid} {of(r)} {extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}")
     vm = [h for h, f in s["hosts"].items() if h != SELF and f.get("at_main") and f.get("free_gb", 0) >= FLOOR_GB]
-    print(f"slots: running {running}/{TOTAL}, auto {auto}/{AUTO}: free {max(0, TOTAL - running)}, auto {auto_free(s['hosts'])}")
+    print(f"slots: {slots_line(slots(s['hosts']))}: auto free {auto_free(s['hosts'])}")
     print(f"launch host: {vm[0] if vm else SELF} (a peer only at main with {FLOOR_GB}G free)")
     for e in s["errors"]:
         print(f"error: {e}: the PR lists are unknown this pass")
@@ -352,10 +402,24 @@ def log(host, action, item, reason):
 
 def launch(sid, host, reason, send=True, drain=False):
     """Start review/<id>/brief.md on `host` and log it. With `send`, a brief here goes to a peer host; else the host's own is
-    read. Only the queue drain (`drain`) may resume a 429'd run."""
+    read. Only the queue drain (`drain`) may resume a 429'd run. The drain counts the pools itself; any other launch counts
+    its brief's pool under slots.lock and logs a wait instead (exit 3) while that pool is full or a host is unknown."""
     here = os.path.join(root(), "review", sid, "brief.md")
     send = send and host != SELF and os.path.exists(here)
-    p = on(host, ["bin/hourly", "recv", sid, *(["--drain"] if drain else [])], stdin=open(here).read() if send else "")
+    lock = None
+    if not drain:
+        lock = slots_lock()
+        text = open(here).read() if os.path.exists(here) else on(host, ["bin/hourly", "brief", sid]).stdout
+        hosts = all_facts(full=False)
+        why = pr.pool_wait(pool_at(hosts, host, sid, text), slots(hosts), unknown(hosts))
+        if why:
+            print(f"wait {host} {sid}: {why}")
+            log(host, "wait", sid, f"{why}; {reason}")
+            return 3
+    # PI_RUN_COUNTED, not a flag: a peer whose package predates the pools takes the same recv line and ignores it
+    p = on(host, ["bin/hourly", "recv", sid, *(["--drain"] if drain else [])], stdin=open(here).read() if send else "",
+           env={} if drain else {"PI_RUN_COUNTED": "1"})
+    lock is None or os.close(lock)
     sys.stdout.write(p.stdout)
     sys.stderr.write(p.stderr)
     if p.returncode == 0:
@@ -370,46 +434,45 @@ def drain():
     A run back from a 429 keeps its first since= and waits for its resume_at, then resumes in its own session. One that
     cannot start yet gets a `wait` row. PI_RUN_DRY=1 prints the plan and launches and logs nothing."""
     dry = bool(os.environ.get("PI_RUN_DRY"))
-    if not dry:   # two passes counting the same free slot would both fill it; the lock is held until exit
+    if not dry:   # two passes counting the same free slot would both fill it; the locks are held until exit
         os.makedirs(root(), exist_ok=True)
         lock = os.open(os.path.join(root(), "hourly-queue.lock"), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             pr.die(3, "queue: another hourly queue pass is running; nothing launched")
+        slots_lock()   # and no `pi-run <id>` or `hourly launch` counts the pools while the drain fills them
     hosts = all_facts()
     errors = []
     reopen(hosts, merge_waits(errors), dry)
     for e in errors:
         print(f"error: {e}: no red PR was reopened this pass")
     hosts = all_facts() if not dry else hosts
-    running, auto = slots(hosts)
-    blind = [h for h, f in hosts.items() if "error" in f]   # its running runs are unknown, so no slot is known free
+    n = slots(hosts)
+    blind = unknown(hosts)   # their running runs are unknown, so no slot is known free
     for h in blind:
-        print(f"host {h}: runs unknown, so every queue waits: {hosts[h]['error']}")
-    queued = sorted((r.get("since", ""), h, sid, r["auto"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
+        print(f"host {h}: runs unknown, so every queue waits: {hosts[h]['error'] if h in hosts else 'this host cannot read it'}")
+    queued = sorted((r.get("since", ""), h, sid, of(r)) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
                     if r["state"] == "queued")
     rc = 0
-    for since, h, sid, is_auto in queued:
+    for since, h, sid, p in queued:
         f = hosts[h]
         r = f["runs"][sid]
-        why = f"after a 429, not before resume_at {r['resume_at']}" if waiting(r) else \
-            f"{', '.join(blind)} runs unknown" if blind else \
-            f"slots full: running {running}/{TOTAL}, auto {auto}/{AUTO}" if running >= TOTAL or (is_auto and auto >= AUTO) else \
-            "not at main" if h != SELF and not f["at_main"] else f"{f['free_gb']}G free, under {FLOOR_GB}G" if h != SELF and \
-            f["free_gb"] < FLOOR_GB else ""
+        why = f"after a 429, not before resume_at {r['resume_at']}" if waiting(r) else pr.pool_wait(p, n, blind) or \
+            ("not at main" if h != SELF and not f["at_main"] else f"{f['free_gb']}G free, under {FLOOR_GB}G" if h != SELF and
+             f["free_gb"] < FLOOR_GB else "")
         if why:
             print(f"wait {h} {sid}: {why}; queued since {since}")
             dry or log(h, "wait", sid, f"{why}; queued since {since}")
         elif dry:
-            print(f"would launch {h} {sid}: queued since {since}")
-            running, auto = running + 1, auto + is_auto
+            print(f"would launch {h} {sid}: {p} pool, queued since {since}")
+            n[p] += 1
         elif launch(sid, h, "chat queue", send=False, drain=True) == 0:
-            running, auto = running + 1, auto + is_auto
+            n[p] += 1
         else:
             rc = 1
-    free = 0 if blind else max(0, min(TOTAL - running, AUTO - auto))   # step 5 goes by this, as by auto_free()
-    print(f"queue: {len(queued)} queued, slots now running {running}/{TOTAL}, auto {auto}/{AUTO}: auto free {free}")
+    free = 0 if blind else max(0, pr.caps()["auto"] - n["auto"])   # step 5 goes by this, as by auto_free()
+    print(f"queue: {len(queued)} queued, slots now {slots_line(n)}: auto free {free}")
     return rc
 
 
@@ -442,8 +505,14 @@ def main(argv):
         if skip:
             return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
         return report(s, fp, last) or 0
-    if cmd == "facts":
-        return print(json.dumps(facts())) or 0
+    if cmd == "facts" and rest in ([], ["--runs"]):
+        return print(json.dumps(facts(not rest))) or 0
+    if cmd == "brief" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):   # what `launch` reads of a brief on a peer
+        p = os.path.join(root(), "review", rest[0], "brief.md")
+        return print(open(p).read() if os.path.exists(p) else "", end="") or 0
+    if cmd == "pools" and not rest:
+        hosts = all_facts(full=False)
+        return print(json.dumps({"running": slots(hosts), "unknown": unknown(hosts)})) or 0
     if cmd == "log" and len(rest) >= 4:
         return log(rest[0], rest[1], rest[2], " ".join(rest[3:])) or 0
     if cmd == "on" and len(rest) >= 2:

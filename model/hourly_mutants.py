@@ -1,6 +1,7 @@
 """Mutation check for model/Hourly.tla: each mutant puts back one way the hourly pickup went wrong, and must make TLC fail
 on HourlySmall.cfg (Hourly.cfg's rules at smaller caps) with the rule it names. The first three are zstack main
-4e08648, before the pickup fix (#68). A mutant that still passes, or fails on another rule, means the model cannot see that bug.
+4e08648, before the pickup fix (#68); shared-total and auto-cap-5 are the caps before the slot split. A mutant that
+still passes, or fails on another rule, means the model cannot see that bug.
 usage: python3 -I model/hourly_mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
@@ -13,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DECLINES = ("PickDone ==", "Declines == pc = \"pick\" /\\ free > 0 /\\ todo # {} /\\ pc' = \"end\" /\\ rows' = rows \\cup {<<\"todo\", \"filed\">>}\n"
             "  /\\ UNCHANGED <<World, dirty, free>>\nPickDone ==")
 DECLINES_NEXT = ("PassSteps == PassStarts", "PassSteps == Declines \\/ PassStarts")
-NO_FREE_IN_ACTS = ("Acts == ended \\/ qchat + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ qchat + qauto > 0 \\/ blind")
+NO_FREE_IN_ACTS = ("Acts == ended \\/ qhand + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ qhand + qauto > 0 \\/ blind")
 M = [
     # name, the bug, [(old, new)], the rule that must catch it
     ("main-4e08648-silent-skip", "acts had no free auto slot, so an unchanged pass skipped with Todos to pick (before #68)",
@@ -24,7 +25,7 @@ M = [
      [("/\\ rows' = {<<\"pass\", \"candidates\">>}", "/\\ rows' = (IF ~dirty /\\ ~Acts THEN {} ELSE {<<\"pass\", \"candidates\">>})")],
      "EveryPassLogs"),
     ("blind-peer-counts-as-idle", "auto_free() counted an unreachable host's runs as none (before this model)",
-     [("Free == KnownFree", "Free == CodeFree")], "CapsHold"),
+     [("Free == KnownFree", "Free == CodeFree")], "AutoCap"),
     ("held-picked", "a pick that ignores a hold row",
      [("Picks(i, there) == pc = \"pick\" /\\ Eligible(i)", "Picks(i, there) == pc = \"pick\" /\\ i \\in todo /\\ blocker[i] # \"overlap\"")],
      "HeldOrZaneNeverPicked"),
@@ -37,20 +38,31 @@ M = [
     ("pick-past-auto-cap", "step 5 goes by its first slots: line and does not count its own picks",
      [("/\\ todo' = todo \\ {i} /\\ rows' = rows \\cup {<<i, \"launch\">>} /\\ free' = free - 1",
        "/\\ todo' = todo \\ {i} /\\ rows' = rows \\cup {<<i, \"launch\">>} /\\ free' = free")],
-     "CapsHold"),
-    ("drain-past-total", "the drain starts a queued run with the total full",
-     [("CanDrainChat == qchat > 0 /\\ ~blind /\\ SeenRunning < Total", "CanDrainChat == qchat > 0 /\\ ~blind")],
-     "CapsHold"),
-    ("drain-ignores-auto-cap", "the drain starts a queued auto brief with the auto cap full",
-     [("CanDrainAuto == qauto > 0 /\\ ~blind /\\ SeenRunning < Total /\\ SeenAuto < Auto",
-       "CanDrainAuto == qauto > 0 /\\ ~blind /\\ SeenRunning < Total")], "CapsHold"),
+     "AutoCap"),
+    ("drain-past-hand-pool", "the drain starts a queued hand run with the hand pool full",
+     [("CanDrainHand == qhand > 0 /\\ ~HandWaits(blind)", "CanDrainHand == qhand > 0 /\\ ~blind")], "HandCap"),
+    ("drain-ignores-auto-cap", "the drain starts a queued auto brief with the auto pool full",
+     [("CanDrainAuto == qauto > 0 /\\ ~AutoWaits(blind)", "CanDrainAuto == qauto > 0 /\\ ~blind")], "AutoCap"),
     ("pick-on-step-0-count", "step 5 goes by step 0's slots: line, before the drain filled slots",
      [("/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = free")],
-     "CapsHold"),
+     "AutoCap"),
     ("queue-line-ignores-blind-peer", "the queue's auto free line counts a peer that dropped after step 0 as idle",
-     [("DrainDone == pc = \"drain\" /\\ ~CanDrainChat /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free",
-       "DrainDone == pc = \"drain\" /\\ ~CanDrainChat /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = CodeFree")],
-     "CapsHold"),
+     [("DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free",
+       "DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = CodeFree")],
+     "AutoCap"),
+    ("shared-total", "the 7-total cap before the slot split: a hand launch waits while auto and quick runs fill a total",
+     [("HandWaits(unknown) == unknown \\/ HandN >= Hand",
+       "HandWaits(unknown) == unknown \\/ HandN >= Hand \\/ HandN + auto + peer + quick >= Hand + 1")],
+     "QuickNotCounted"),
+    ("auto-cap-5", "the 5-auto cap before the slot split",
+     [("CodeFree == Sub(Auto, SeenAuto)", "CodeFree == Sub(Auto + 1, SeenAuto)"),
+      ("todo \\subseteq Issues /\\ free \\in 0..Auto", "todo \\subseteq Issues /\\ free \\in 0..Auto + 1")], "AutoCap"),
+    ("untagged-not-counted", "a running run with no pool tag counted in no pool",
+     [("HandN == hand + legacy", "HandN == hand")], "HandCap"),
+    ("vm-counts-itself", "a hand launch on the VM counts only what it can see",
+     [("HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~HandWaits(onVm \\/ blind)",
+       "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ HandN >= Hand))")],
+     "HandCap"),
 ]
 
 
@@ -71,7 +83,7 @@ def main(jar, java, scratch):
             os.makedirs(d, exist_ok=True)
             open(os.path.join(d, "Hourly.tla"), "w").write(s)
             open(os.path.join(d, "Hourly.cfg"), "w").write(cfg)
-            out = subprocess.run([java, "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, "meta"),
+            out = subprocess.run([java, "-XX:+UseParallelGC", "-jar", jar, "-workers", "2", "-metadir", os.path.join(d, "meta"),
                                   "-config", "Hourly.cfg", "Hourly.tla"], cwd=d, capture_output=True, text=True, timeout=600).stdout
             m = re.search(r"Invariant (\w+) is violated|(not completely specified|Deadlock|Error: (?!Invariant).*)", out)
             got = m and m.group(1)

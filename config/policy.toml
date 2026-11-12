@@ -17,11 +17,13 @@ designer = [
 verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }
 research = { provider = "claude-code", model = "claude-opus-5-5" }
 
-# The shared pi slots across both hosts (Zane, 11 Nov: "increase the number of slots to 7, auto pickup to 5"). bin/hourly
-# reads them: `total` runs at once, `auto` of them hourly auto-launches (playbooks/hourly.md step 2).
+# Two slot pools across both hosts, counted apart (Zane, 12 Nov 12:47 SGT: "we should have 3 slots for autopickup and up
+# to 5 hand started work"). `auto` runs are hourly picks (`source: auto`), `hand` runs are the rest; a running run with
+# no pool tag counts as hand. The quick-check lane (`source: quick`, role research) is in neither. bin/pi-run and
+# bin/hourly read them (playbooks/hourly.md step 2).
 [slots]
-total = 7
-auto = 5
+auto = 3
+hand = 5
 
 # How many red heads per PR reopen the thread that pushed them (bin/pi-run ci, bin/hourly queue). Past that the PR is Zane's.
 [ci]
