@@ -53,7 +53,7 @@ VARIABLES
 vars == <<phase, draft, lost, collected, woke, reopened, cont, due, limited, slot, drained, ci, reran, tier, pre, held, conflict, byJob, by,
           alerted, logged, atQueue, atMerge, fixing, fixes>>
 RunVars == <<lost, collected, woke, reopened, cont, due, limited, slot, drained, fixing, fixes>>
-FixAttempts == 2   \* config/ci.json fix_attempts; 2 keeps TLC small
+FixAttempts == 2   \* config/policy.toml ci.fix_attempts; 2 keeps TLC small
 PRVars == <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
 Tiers == {"light", "deep"}   \* TIERS in merge_job.py; "none" stands for a PR that declares none of them
 NoFacts == [green |-> FALSE, held |-> FALSE, preOk |-> FALSE, tier |-> "none", draft |-> FALSE]
@@ -234,7 +234,7 @@ EveryFailureWakes == [](phase = "failed" => <>(woke \/ phase # "failed"))
 \* own thread while it has fix attempts left, rather than waiting on Zane or a fresh run.
 RedPrGoesBackToItsThread == [](phase = "open" /\ ci = "red" /\ reran /\ ~held /\ ~draft /\ fixes < FixAttempts
                                => <>(fixing \/ ci # "red" \/ phase # "open" \/ held \/ draft))
-\* config/ci.json fix_attempts bounds it; past that the PR is Zane's.
+\* config/policy.toml ci.fix_attempts bounds it; past that the PR is Zane's.
 FixesCapped == fixes <= FixAttempts
 \* A reopened thread ends: it never holds its slot for ever.
 ReopenedThreadEnds == [](fixing => <>~fixing)
