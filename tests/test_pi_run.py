@@ -539,6 +539,28 @@ class Launcher(unittest.TestCase):
         self.assertTrue(t.exists())
         self.assertIn("kept 1 target/ dir(s): lsof gave no answer", r.stderr)
 
+    def test_a_worktree_entered_after_the_first_lsof_keeps_its_target(self):
+        """The second lsof, after the target is renamed aside, sees a process that entered the worktree since the first."""
+        self.start("pr3")
+        self.finished("pr3")
+        t = self.cargo_target("pr3", "wt/target")
+        wt = os.path.realpath(t.parent)
+        (self.t / "bin" / "lsof").write_text(f'#!/bin/sh\nn=$(cat "$T/lsof-n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/lsof-n"\n'
+                                             f'echo p1; [ "$n" -ge 1 ] && echo "n{wt}/src"; echo n/\n')
+        (self.t / "bin" / "lsof").chmod(0o755)
+        r = self.pi_run("collect", "pr3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((t / "CACHEDIR.TAG").exists())   # renamed back
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
+
+    def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
+        self.start("pr4")
+        self.finished("pr4")
+        left = self.cargo_target("pr4", "wt/.target.pruning-123")
+        self.pi_run("collect", "pr4")
+        self.assertFalse(left.exists())
+
     def test_a_lost_runs_collect_sends_one_failed_wake(self):
         self.start("gone", hang=True)
         wait_for(lambda: (self.t / "pi-pid").exists())
