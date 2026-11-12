@@ -159,17 +159,18 @@ class Policy(unittest.TestCase):
         self.assertIn("patent hold: config/policy.toml is unreadable (patent.held_words must be", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
-    def test_a_push_under_a_python_without_tomllib_is_refused_with_why(self):
+    def test_a_push_under_a_python_without_tomllib_still_reads_the_patent_policy(self):
+        """bin/policy falls back to vendor/tomli, so the hook still holds a pairing push on the mini's /usr/bin/python3."""
         (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
         for f in ("patent_push.py", "wake.py"):
             shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
         (self.pkg / "notoml").mkdir()
         (self.pkg / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
-        r = subprocess.run([sys.executable, str(self.pkg / "hosts/vm/patent_push.py"), "origin", "https://github.com/trycua/cua"],
-                           input="", capture_output=True, text=True, env={**self.env, "PYTHONPATH": str(self.pkg / "notoml")}, timeout=60)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("cannot read config/policy.toml (No module named 'tomllib'), so nothing is pushed", r.stderr)
-        self.assertNotIn("Traceback", r.stderr)
+        code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('pp', sys.argv[1]); "
+                "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp); print(pp.held_hits(['src/pairing.rs'], ''))")
+        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "hosts/vm/patent_push.py")], capture_output=True, text=True,
+                           env={**self.env, "PYTHONPATH": str(self.pkg / "notoml")}, timeout=60)
+        self.assertEqual((r.returncode, r.stdout), (0, "['src/pairing.rs']\n"), r.stderr)
 
     def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
         self.write(SHIPPED.replace("schema = 1", "schema = true"))

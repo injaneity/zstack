@@ -43,11 +43,7 @@ PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 _pol = os.path.join(PKG, "bin", "policy")
 _spec = importlib.util.spec_from_file_location("policy", _pol, loader=importlib.machinery.SourceFileLoader("policy", _pol))
 policy = importlib.util.module_from_spec(_spec)
-try:
-    _spec.loader.exec_module(policy)
-except ImportError as e:   # tomllib is 3.11 or newer (bin/check-host); the mini's /usr/bin/python3 is 3.9
-    sys.exit(f"patent hold: {sys.executable} cannot read config/policy.toml ({e}), so nothing is pushed. Put python3 3.11 or "
-             "newer first on PATH (bin/check-host). Do not retry the push, push elsewhere or skip the hook.")
+_spec.loader.exec_module(policy)
 try:
     POLICY = policy.load()
     PATENT, ME = POLICY["patent"], POLICY["people"]["me"]
