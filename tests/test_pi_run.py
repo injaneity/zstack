@@ -455,6 +455,31 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)   # the first brief, kept
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
 
+    def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
+        """The five 11 Nov failures (half-bounce-spaces, statechart-fixes, driver-macos-fixes, ci-fail-owner, ci-fail-owner-2)
+        each passed when run again under a fresh id; these are their last lines, verbatim."""
+        for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
+                         ("i2", "Incomplete Claude Code upstream response (status 200, capture incomplete, relay failure Error, "
+                                "native retries denied 1)"),
+                         ("i3", "Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure Error)"),
+                         ("i4", "Error: Incomplete Claude Code upstream response (status 529, capture incomplete)")):
+            (self.t / "say").write_text(say + "\n")
+            before = time.time()
+            self.start(sid, rc=1)
+            self.assertTrue(wait_for(lambda sid=sid: (self.run_json(sid) or {}).get("state") == "queued"), (sid, self.run_json(sid)))
+            run = self.run_json(sid)
+            self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None), sid)
+            self.assertNotIn("wake:", self.log(sid), sid)
+            at = time.mktime(time.strptime(run["resume_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+            self.assertLess(abs(at - before), 30, sid)   # resume at once: nothing names a wait
+        (self.t / "say").unlink()
+        r = self.pi_run("i1", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("resumed i1 attempt 1", r.stdout)
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
+        self.assertEqual(self.finished("i1")["attempt"], 1)
+
     def test_a_chatgpt_limit_resumes_after_the_wait_it_names_and_not_before(self):
         (self.t / "say").write_text("You have hit your ChatGPT usage limit (pro plan). Try again in ~42 min.\n")
         before = time.time()
@@ -482,7 +507,8 @@ class Launcher(unittest.TestCase):
     def test_a_run_that_only_quotes_a_429_is_a_plain_failure(self):
         for sid, say in (("q1", "Incomplete Claude Code upstream response (status 429, x)\nreport done\n"),
                          ("q2", "Task failed; quoted: Incomplete Claude Code upstream response (status 429, example)\n"),
-                         ("q3", "Incomplete Claude Code upstream response (status 200, capture incomplete)\n")):
+                         ("q3", "Incomplete Claude Code upstream response (status 400, upstream said: You're out of extra usage.)\n"),
+                         ("q4", "Incomplete Claude Code response: assistant, message_stop and one result required\n")):
             (self.t / "say").write_text(say)
             self.start(sid, rc=1)
             self.assertEqual(self.finished(sid)["wake"], "failed", sid)

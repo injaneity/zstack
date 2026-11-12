@@ -24,8 +24,9 @@ step() is the whole lifecycle:
                                            --drain`) once resume_at has passed: same attempt, same pi session, RESUME
   running     --exit--->   exited     records pi's rc and the wake it sends: failed when rc != 0, done when rc is 0
                                       and the brief has a `wake: finish` line, else none
-  running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT): no wake, the slot is
-                                      freed, resume_at is the reset time pi names (else now), since is kept
+  running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT) or an incomplete Claude
+                                      Code upstream response (LIMIT): no wake, the slot is freed, resume_at is the reset
+                                      time pi names (else now), since is kept
   exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first
   collected   --ci------>  queued     its PR's ci-gate is red after the merge job's rerun, at a head this run pushed
                                       (review/<id>/pushed, written by cua's pre-push hook): resume_at = now and ci_now
@@ -63,9 +64,12 @@ RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
          "| pi-run list [<state>...]")
-# pi's whole last line when the upstream refused on a usage limit: Claude Code's 429, or ChatGPT's (which names the wait)
-LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status 429, .*\)|You have hit your ChatGPT usage limit.*)")
-RESUME = "Your run stopped on an upstream rate limit and is resumed in the same session. Carry on with the task from where you stopped."
+# pi's whole last line when the upstream refused on a usage limit or cut a response short: Claude Code's 429, its
+# incomplete response with status 200, unknown or 5xx (the relay lost it; five runs on 11 Nov passed when run again), or
+# ChatGPT's limit (which names the wait). Another 4xx is the request itself, so it would fail again: that stays a failure.
+LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
+                   r"|You have hit your ChatGPT usage limit.*)")
+RESUME = "Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. Carry on with the task from where you stopped."
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
              "so this session is reopened to resolve it (fix {n} of {cap}, ci.fix_attempts in config/policy.toml). Read the failing logs, "
              "fix the cause (update from main when it is not in your diff), push, have the verifier check the new head, and post the verified "
