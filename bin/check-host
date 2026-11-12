@@ -6,7 +6,7 @@
 
 It reads the env bin/pi-run launches with ($ONIGIRI_HOST or ~/.config/onigiri/host names hosts/<name>/host.sh), so
 what it passes is what a launch sees. README's install section lists the dependencies it checks:
-  tools     pi, node, git, gh and python3 3.9 or newer on PATH
+  tools     pi, node, git, gh and python3 3.11 or newer on PATH (tomllib)
   packages  pi lists npm:@ff-labs/pi-fff (the agents' search tools), and pi-claude-code at README's pinned commit when a
             role uses claude-code
   provider  `pi --list-models` lists a model of every provider a role uses, and the `claude` CLI is on PATH for claude-code
@@ -77,9 +77,9 @@ def main(argv):
     for tool in ("pi", "node", "git", "gh", "python3"):
         where = shutil.which(tool, path=path)
         say("ok" if where else "FAIL", f"tool {tool}: {where or 'not on PATH; install it, or put it on PATH in the host file'}")
-    py = run(["python3", "-c", "import sys, zoneinfo; print('%d.%d' % sys.version_info[:2])"], env)
+    py = run(["python3", "-c", "import sys, tomllib, zoneinfo; print('%d.%d' % sys.version_info[:2])"], env)
     say("ok" if not py.returncode else "FAIL",
-        "python3 version: " + (py.stdout.strip() if not py.returncode else "needs 3.9 or newer (zoneinfo): " + last(py)))
+        "python3 version: " + (py.stdout.strip() if not py.returncode else "needs 3.11 or newer (tomllib): " + last(py)))
 
     providers = seats()
     listed = run(["pi", "list"], env).stdout

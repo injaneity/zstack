@@ -42,7 +42,7 @@ The hourly, the launches, the merge job and collect read only these files outsid
 - The mini: the VM's ssh key `~/.ssh/onigiri_vm_ed25519` and `~/onigiri-vm/known_hosts`.
 - The VM: the merge job's crontab line (in The merge job below).
 
-Tools come from each host's install (`pi`, `gh`, `git`, `python3`, cargo's `~/.cargo/env`, the mini's micromamba bash). Data lives in `<root>`: `review/`, `pickup.log`, `events.log`, `tick/` and the cua clone.
+Tools come from each host's install (`pi`, `gh`, `git`, `python3` 3.11 or newer, cargo's `~/.cargo/env`, the mini's micromamba bash). The mini's `/usr/bin/python3` is 3.9, so its `python3` is the micromamba env `py` (`micromamba create -n py -c conda-forge python=3.13` under `~/onigiri/mamba`): `hosts/mini/host.sh` puts it first on `PATH`, and `~/.local/bin/python3` links to it for shells that only load `~/onigiri/env.sh`. Data lives in `<root>`: `review/`, `pickup.log`, `events.log`, `tick/` and the cua clone.
 
 ## Disk
 
