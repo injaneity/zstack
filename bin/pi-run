@@ -65,14 +65,19 @@ CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, aft
              "yourself. If only Zane can decide it, say why under questions: and stop.")
 
 
+_POLICY = []
+
+
 def policy():
-    """bin/policy, the one reader of config/policy.toml, as a module."""
-    import importlib.machinery
-    import importlib.util
-    loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(mod)
-    return mod
+    """bin/policy, the one reader of config/policy.toml, as a module, loaded once so its PolicyError is one class."""
+    if not _POLICY:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(mod)
+        _POLICY.append(mod)
+    return _POLICY[0]
 
 
 class Refused(Exception):

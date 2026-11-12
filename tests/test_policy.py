@@ -20,7 +20,7 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "config/policy.toml"):
+        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
         self.env = {**os.environ, "ONIGIRI_HOST": "", "ONIGIRI_ROOT": str(Path(td.name) / "root"),
@@ -96,6 +96,13 @@ class Policy(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("ci.fix_attempts must be a positive integer, not -1", r.stderr)
         self.assertEqual(json.loads((run / "run.json").read_text())["state"], "collected")
+
+    def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
+        self.write(SHIPPED.replace("schema = 1", "schema = true"))
+        r = self.run_("--offline", prog="bin/check-host")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("FAIL  policy: schema must be 1, not True", r.stdout)
+        self.assertIn("gh: ", r.stdout)   # the checks after it still ran
 
     def test_the_old_json_configs_are_gone(self):
         """One source of truth: the three JSON files the policy replaced are not shipped next to it."""
