@@ -473,12 +473,13 @@ class Launcher(unittest.TestCase):
             at = time.mktime(time.strptime(run["resume_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
             self.assertLess(abs(at - before), 30, sid)   # resume at once: nothing names a wait
         (self.t / "say").unlink()
+        (self.t / "args").unlink()
         r = self.pi_run("i1", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed i1 attempt 1", r.stdout)
+        self.assertEqual(self.finished("i1")["attempt"], 1)
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
-        self.assertEqual(self.finished("i1")["attempt"], 1)
 
     def test_a_chatgpt_limit_resumes_after_the_wait_it_names_and_not_before(self):
         (self.t / "say").write_text("You have hit your ChatGPT usage limit (pro plan). Try again in ~42 min.\n")
