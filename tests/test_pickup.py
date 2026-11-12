@@ -128,26 +128,27 @@ class Pickup(unittest.TestCase):
         self.assertFalse((self.root / "review" / "cua-10").exists())
         self.assertEqual(self.wakes(), [])
 
-    def test_picks_oldest_first_urgent_ahead_up_to_the_auto_cap_and_never_twice(self):
+    def test_picks_oldest_first_urgent_ahead_up_to_the_auto_pool_and_never_twice(self):
         (self.t / "hang").touch()
-        self.github(issues=[issue(n, f"2026-10-{n:02d}T00:00:00Z", labels=["urgent"] if n == 9 else []) for n in range(1, 10)])
+        self.github(issues=[issue(n, f"2026-10-{n:02d}T00:00:00Z", labels=["urgent"] if n == 9 else []) for n in range(1, 7)]
+                    + [issue(9, "2026-10-09T00:00:00Z", labels=["urgent"])])
         out = self.pickup()
         launched = [r[1] for r in self.rows("launch")]
-        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2", "cua-3", "cua-4"])   # auto 5 (config/policy.toml [slots])
-        self.assertIn("9 candidates (0 taken before), auto free 5", out)
+        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2"])   # the auto pool is 3 (config/policy.toml [slots])
+        self.assertIn("7 candidates (0 taken before), auto free 3", out)
         brief = (self.root / "review" / "cua-9" / "brief.md").read_text()
         for line in ("source: auto", "https://github.com/trycua/cua/issues/9", "wake: finish"):
             self.assertIn(line, brief)
         self.assertTrue(all(self.state(s) == "running" for s in launched))
         self.assertEqual(self.wakes(), [])   # launches alone are not output for the chat
-        out = self.pickup()   # all five still run: no slot, and no candidate launched again
-        self.assertIn("4 candidates (5 taken before), auto free 0", out)
-        self.assertEqual(len(self.rows("launch")), 5)
+        out = self.pickup()   # all three still run: no slot, and no candidate launched again
+        self.assertIn("4 candidates (3 taken before), auto free 0", out)
+        self.assertEqual(len(self.rows("launch")), 3)
         (self.t / "hang").unlink()
         for s in launched:
             self.assertTrue(self.wait(s, "exited"), s)
-        self.pickup()   # collects the five, then takes the next four
-        self.assertEqual([r[1] for r in self.rows("launch")][5:], ["cua-5", "cua-6", "cua-7", "cua-8"])
+        self.pickup()   # collects the three, then takes the next three
+        self.assertEqual([r[1] for r in self.rows("launch")][3:], ["cua-3", "cua-4", "cua-5"])
 
     def wait(self, sid, state, secs=10):
         end = time.time() + secs

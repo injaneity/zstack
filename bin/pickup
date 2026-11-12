@@ -13,7 +13,7 @@ hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/po
   2. Drains every host's queue (bin/hourly queue): red PRs back to their threads, then queued runs, under the caps.
   3. Picks from GitHub (trycua/cua, the host's gh login), oldest first with `urgent` ahead: issues assigned to injaneity,
      open PRs requesting injaneity's review (a first review per head), and our PRs the merge job leaves to a session that
-     no thread took back (an unstick per head). While an auto slot is free (config/policy.toml [slots]), each candidate not taken
+     no thread took back (an unstick per head). While the auto pool has room (config/policy.toml [slots] auto), each candidate not taken
      before (a review id on a host, or a launch row) is launched on the launch host, or skipped with one pickup.log row
      naming the one rule that holds: held, pr, overlap, zane, host (playbooks/hourly.md step 5).
   4. Reports four lists, as the chat's pass did, and one more for the chat: needs-Zane, dumpling results,
@@ -31,7 +31,6 @@ from __future__ import annotations
 import fcntl
 import importlib.machinery
 import importlib.util
-import io
 import json
 import os
 import re
@@ -39,7 +38,6 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import redirect_stdout
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
@@ -231,21 +229,13 @@ def collect(hosts, dry, state, errors):
 
 
 def drain(dry):
-    """Step 2: bin/hourly queue in this process, its lines kept for the needs-Zane list."""
-    buf = io.StringIO()
-    old = os.environ.get("PI_RUN_DRY")
-    if dry:
-        os.environ["PI_RUN_DRY"] = "1"
-    try:
-        with redirect_stdout(buf):
-            hourly.drain()
-    except SystemExit as e:   # pr.die: the queue's own lock is held by a chat's pass
-        buf.write(f"queue: not drained (exit {e.code})\n")
-    finally:
-        if dry and old is None:
-            os.environ.pop("PI_RUN_DRY", None)
-    print(buf.getvalue(), end="")
-    return buf.getvalue().splitlines()
+    """Step 2: `bin/hourly queue` as its own process, its lines kept for the needs-Zane list. Not in this process: the
+    drain holds slots.lock until it exits, and this pass's launches take that lock after it."""
+    p = hourly.run([os.path.join(PKG, "bin", "hourly"), "queue"], env={**os.environ, **({"PI_RUN_DRY": "1"} if dry else {})})
+    out = p.stdout + (f"queue: not drained (exit {p.returncode}): {p.stderr.strip().splitlines()[-1] if p.stderr.strip() else ''}\n"
+                      if p.returncode else "")
+    print(out, end="")
+    return out.splitlines()
 
 
 def taken_ids(hosts):
@@ -267,7 +257,7 @@ def run_pass(dry):
     hosts = hourly.all_facts() if not dry else hosts
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
     waits = hourly.merge_waits(errors)
-    blind = [h for h, f in hosts.items() if "error" in f]
+    blind = hourly.unknown(hosts)
     h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds("")
     if mh and "holds" not in hosts.get(mh, {}):
         errors.append(f"no holds file read on the merge host {mh}: nothing is picked this pass")
@@ -282,7 +272,7 @@ def run_pass(dry):
     live = {n for f in hosts.values() for r in f.get("runs", {}).values() for n in r.get("nums", [])}
     zane = {int(w.split()[0][4:]) for w in waits if " wait who=zane: " in w}
     taken = taken_ids(hosts)
-    free = 0 if blind or errors else hourly.auto_free(hosts)
+    free = 0 if errors else hourly.auto_free(hosts)   # none while a host is unknown
     todo = [c for c in cands if c["id"] not in taken]
     print(f"pickup {hourly.now()}: {len(todo)} candidates ({len(cands) - len(todo)} taken before), auto free {free}"
           + (f"; no picks: {'; '.join(blind + errors)}" if blind or errors else ""))
@@ -307,7 +297,10 @@ def run_pass(dry):
             if nb.returncode:
                 errors.append(f"new-brief {c['id']}: {nb.stderr.strip()[-150:]}")
                 break
-        if hourly.launch(c["id"], there, f"auto, {c['kind']} {c['url']}") == 0:
+        rc = hourly.launch(c["id"], there, f"auto, {c['kind']} {c['url']}")
+        if rc == 3:   # the auto pool filled since the count (a chat launch): bin/hourly logged the wait, the next pass picks
+            break
+        if rc == 0:
             free -= 1
             if c["kind"] == "review":   # its drafts go to the list for the author's kind when it is collected
                 state["authors"][c["id"]] = "teammate" if c["author"]["login"] in h["review_only"] else "outside"

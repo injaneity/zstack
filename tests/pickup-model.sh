@@ -1,6 +1,6 @@
 #!/bin/bash
 # Model-checks model/Pickup.tla, the scheduled pickup pass (bin/pickup): TLC passes every rule in model/Small.cfg (the
-# safety rules; PICKUP_FULL=1 adds model/Pickup.cfg, the same at config/policy.toml's caps, ~7 min) and model/Liveness.cfg
+# safety rules; PICKUP_FULL=1 adds model/Pickup.cfg, the same at config/policy.toml's pools, ~2 min) and model/Liveness.cfg
 # (the temporal rules, on a smaller world), model/Pickup.mmd
 # is the chart model/PickupChart.cfg draws, and every mutant in model/pickup_mutants.py fails on the rule it names.
 # usage: tests/pickup-model.sh   (TLA2TOOLS=<tla2tools.jar> and JAVA=<java> skip the mise lookup)

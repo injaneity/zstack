@@ -97,9 +97,9 @@ class Hourly(unittest.TestCase):
         self.sh("new-brief", "q1", "research", stdin=TASK)
         r = self.sh("queue", "q1")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertRegex(r.stdout, r"^q1 queued role=research since=\S+Z\n$")
+        self.assertRegex(r.stdout, r"^q1 queued role=research pool=quick since=\S+Z\n$")
         out = self.hourly()
-        self.assertRegex(out, r"\n  queued   q1 \S*since=")
+        self.assertRegex(out, r"\n  queued   q1 quick since=")
         (self.t / "hang").touch()
         r = self.sh("hourly", "launch", "q1", "local", "chat", "queue")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -144,9 +144,9 @@ class Hourly(unittest.TestCase):
     def test_a_pass_that_could_pick_a_todo_never_skips_and_every_pass_logs_its_candidates(self):
         self.hourly("log", "local", "preapprove-batch", "-", "none")   # a due batch alone never skips: take it out
         self.hourly("done", "--linear", "CUA-1,CUA-2")
-        out = self.hourly("--linear", "CUA-1,CUA-2")   # unchanged since done, but 5 auto slots are free and 2 Todos wait
+        out = self.hourly("--linear", "CUA-1,CUA-2")   # unchanged since done, but 3 auto slots are free and 2 Todos wait
         self.assertNotIn("skip:", out)
-        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 5", out)
+        self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", out)
         self.assertIn("linear todo 2: CUA-1,CUA-2", out)
         self.hourly("done")
         self.assertIn("skip:", self.hourly())   # no Todo: nothing to pick, so an unchanged pass may skip
@@ -155,31 +155,32 @@ class Hourly(unittest.TestCase):
         self.assertIn("linear todo 0: none passed", self.hourly("--linear", ""))   # the Todo went: a report, with no candidates
         rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
         passes = [x for x in rows if x[1] == "pass"]
-        self.assertEqual(passes[0], ["local", "pass", "-", "candidates 2 todo, auto free 5"])
-        self.assertEqual(passes[-2], ["local", "pass", "-", "candidates 0 todo, auto free 5, skip: nothing changed"])
+        self.assertEqual(passes[0], ["local", "pass", "-", "candidates 2 todo, auto free 3"])
+        self.assertEqual(passes[-2], ["local", "pass", "-", "candidates 0 todo, auto free 3, skip: nothing changed"])
         (self.t / "hang").touch()
-        for sid in ("p1", "p2", "p3", "p4", "p5"):   # every auto slot held: an unchanged pass with Todos may skip again
+        for sid in ("p1", "p2", "p3"):   # every auto slot held: an unchanged pass with Todos may skip again
             self.queued(self.t / "root", sid, 100, "auto")
             self.assertEqual(self.sh("pi-run", sid, "coding", str(self.review(sid) / "brief.md")).returncode, 0)
-        for sid in ("p1", "p2", "p3", "p4", "p5"):
+        for sid in ("p1", "p2", "p3"):
             self.assertTrue(wait_for_state(self.review(sid), "running"), sid)
         self.hourly("done", "--linear", "CUA-1,CUA-2")
         self.assertIn("skip:", self.hourly("--linear", "CUA-1,CUA-2"))
 
     def test_an_unreachable_host_leaves_no_auto_slot_known_free(self):
-        # model/Hourly.tla CapsHold: the peer's auto runs are unknown, so counting them as none could pass the auto cap
+        # model/Hourly.tla AutoCap: the peer's auto runs are unknown, so counting them as none could pass the auto cap
         down = self.t / "down"
         down.write_text("#!/bin/bash\necho 'ssh: connect to host vm: timed out' >&2; exit 255\n")
         down.chmod(0o755)
         out = self.hourly("--linear", "CUA-1", ONIGIRI_PEERS=f"vm={down}")
         self.assertIn("host vm: unreachable: ssh: connect to host vm: timed out", out)
-        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 0", out)
+        self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 0", out)
         rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
         self.assertEqual(rows[-1], ["local", "pass", "-", "candidates 1 todo, auto free 0"])
-        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 5", self.hourly("--linear", "CUA-1"))
+        self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("--linear", "CUA-1"))
         # the queue's last line is what step 5 goes by: no auto slot while the peer's runs are unknown
-        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 0", self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
-        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 5", self.hourly("queue"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 0",
+                      self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("queue"))
 
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
@@ -274,7 +275,7 @@ class Hourly(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.hourly("done")
-        self.assertIn("exited   e1 rc=0", self.hourly())
+        self.assertIn("exited   e1 hand rc=0", self.hourly())
         (self.review("e1") / "report.md").write_text("did it\nGH_TOKEN=x\nfollow-ups: none\n")
         self.assertEqual(self.hourly("report", "e1"), "did it\nfollow-ups: none\n")
         self.assertEqual(self.sh("pi-run", "collect", "e1").returncode, 0)
@@ -284,12 +285,12 @@ class Hourly(unittest.TestCase):
     def test_slots_and_launch_host_follow_the_peer(self):
         peer = self.t / "peer"
         peer.write_text("#!/bin/bash\n" + 'echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": '
-                        '{"v1": {"state": "running", "auto": true, "idle_min": 200}}}\'\n')
+                        '{"v1": {"state": "running", "auto": true, "idle_min": 200}}}\'\n')   # a peer before the pools
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: zstack s at main, free 25G", out)
-        self.assertIn("running  v1 auto idle_min=200  HUNG?", out)
-        self.assertIn("slots: running 1/7, auto 1/5: free 6, auto 4", out)
+        self.assertIn("running  v1 hand idle_min=200  HUNG?", out)   # untagged and running: hand, whatever its brief says
+        self.assertIn("slots: auto 0/3, hand 1/5, quick 0 (no cap): auto free 3", out)
         self.assertIn("launch host: vm", out)
         peer.write_text(peer.read_text().replace('"free_gb": 25', '"free_gb": 19'))
         self.assertIn("launch host: local", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))
@@ -352,21 +353,22 @@ class Hourly(unittest.TestCase):
             run.update(attempt=1, rc=1, resume_at=utc(time.time() + resume_in), extra=[])
         (d / "run.json").write_text(json.dumps(run))
 
-    def test_queue_launches_every_hosts_queue_on_that_host_oldest_first_under_the_shared_slots(self):
+    def test_queue_launches_every_hosts_queue_on_that_host_oldest_first_each_pool_under_its_own_cap(self):
         local, vm = self.t / "root", self.t / "vm-root"
         peers = self.peer_pkg("test-vm", vm)
         (self.t / "hang").touch()
-        for sid in ("p1", "p2", "p3", "p4"):   # four auto runs already hold slots: 4/7 running, 4/5 auto
-            self.queued(local, sid, 1000, "auto")
-            self.assertEqual(self.sh("pi-run", sid, "coding", str(local / "review" / sid / "brief.md")).returncode, 0)
-        self.queued(local, "a", 500)
-        self.queued(vm, "b", 400, "auto")   # takes the last auto slot
-        self.queued(local, "c", 300, "auto")   # auto slots full: waits
-        self.queued(vm, "d", 200)   # the seventh slot
-        self.queued(local, "e", 100)   # every slot full: waits
+        for sid, source in (("p1", "auto"), ("p2", "auto"), ("h1", "chat"), ("h2", "chat"), ("h3", "chat"), ("h4", "chat")):
+            self.queued(local, sid, 1000, source)   # two auto and four hand runs already hold slots
+            r = self.sh("pi-run", sid, "coding", str(local / "review" / sid / "brief.md"), ONIGIRI_PEERS=peers)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.queued(local, "a", 500)   # the fifth hand slot
+        self.queued(vm, "b", 400, "auto")   # the third auto slot
+        self.queued(local, "c", 300, "auto")   # the auto pool is full: waits
+        self.queued(vm, "d", 200)   # the hand pool is full: waits, though auto never starved it
+        self.queued(local, "q", 150, "quick")   # the quick-check lane is in no pool: starts
         dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
         self.assertEqual([x.split(":")[0] for x in dry.splitlines()],
-                         ["would launch local a", "would launch test-vm b", "wait local c", "would launch test-vm d", "wait local e",
+                         ["would launch local a", "would launch test-vm b", "wait local c", "wait test-vm d", "would launch local q",
                           "queue"])
         self.assertFalse((local / "pickup.log").exists())   # a dry pass logs, locks and starts nothing
         self.assertFalse((local / "hourly-queue.lock").exists())
@@ -375,16 +377,107 @@ class Hourly(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         rows = [x.split("\t")[1:5] for x in (local / "pickup.log").read_text().splitlines()[2:]]
         self.assertEqual([x[:3] for x in rows], [["local", "launch", "a"], ["test-vm", "launch", "b"], ["local", "wait", "c"],
-                                                 ["test-vm", "launch", "d"], ["local", "wait", "e"]])
-        self.assertIn("slots full: running 6/7, auto 5/5", rows[2][3])
-        self.assertIn("slots full: running 7/7, auto 5/5", rows[4][3])
-        state = lambda r, sid: json.loads((r / "review" / sid / "run.json").read_text())["state"]   # noqa: E731
-        for root_, sid in ((local, "a"), (vm, "b"), (vm, "d")):   # each started on the host whose queue held it
-            self.assertEqual(state(root_, sid), "running", sid)
+                                                 ["test-vm", "wait", "d"], ["local", "launch", "q"]])
+        self.assertIn("auto pool full: 3/3 running", rows[2][3])
+        self.assertIn("hand pool full: 5/5 running", rows[3][3])
+        run = lambda r, sid: json.loads((r / "review" / sid / "run.json").read_text())   # noqa: E731
+        for root_, sid, pool in ((local, "a", "hand"), (vm, "b", "auto"), (local, "q", "quick")):   # each on the host whose queue held it
+            self.assertEqual((run(root_, sid)["state"], run(root_, sid)["pool"]), ("running", pool), sid)
         self.assertFalse((local / "review" / "b").exists())
-        for sid in ("c", "e"):
-            self.assertEqual(state(local, sid), "queued", sid)
-        self.assertIn("queue: 5 queued, slots now running 7/7, auto 5/5", r.stdout)
+        for root_, sid in ((local, "c"), (vm, "d")):
+            self.assertEqual(run(root_, sid)["state"], "queued", sid)
+        self.assertIn("queue: 5 queued, slots now auto 3/3, hand 5/5, quick 1 (no cap): auto free 0", r.stdout)
+
+    def test_a_hand_start_past_the_hand_pool_is_queued_and_says_so_and_untagged_runs_count_as_hand(self):
+        local = self.t / "root"
+        (self.t / "hang").touch()
+        for i in range(6):   # six hand runs in flight from before the pools: run.json has no pool tag
+            self.queued(local, f"old{i}", 2000)
+            r = self.sh("pi-run", f"old{i}", "coding", str(self.review(f"old{i}") / "brief.md"), PI_RUN_COUNTED="1")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            j = self.review(f"old{i}") / "run.json"
+            j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
+        self.assertIn("slots: auto 0/3, hand 6/5, quick 0 (no cap): auto free 3", self.hourly())
+        brief = self.t / "new.md"
+        brief.write_text("task new\nrole: coding\nsource: chat\n")
+        r = self.sh("pi-run", "new", "coding", str(brief))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("pi-run: new queued, not started: hand pool full: 6/5 running.", r.stdout)
+        self.assertIn("no running session is stopped for it", r.stdout)
+        run = json.loads((self.review("new") / "run.json").read_text())
+        self.assertEqual((run["state"], run["pool"]), ("queued", "hand"))
+        self.assertEqual((self.review("new") / "brief.md").read_text(), brief.read_text())   # the drain starts this copy
+        for i in range(6):   # every old run is still running: nothing was stopped
+            self.assertEqual(json.loads((self.review(f"old{i}") / "run.json").read_text())["state"], "running")
+        quick = self.t / "quick.md"
+        quick.write_text("task quick\nrole: research\n")   # the quick-check lane starts beside a full hand pool
+        self.assertIn("started quick attempt 1", self.sh("pi-run", "quick", "research", str(quick)).stdout)
+        self.assertEqual(json.loads((self.review("quick") / "run.json").read_text())["pool"], "quick")
+        auto = self.t / "auto.md"
+        auto.write_text("task auto\nrole: coding\nsource: auto\n")   # and so does an auto run: hand never starves it
+        self.assertIn("started auto attempt 1", self.sh("pi-run", "auto", "coding", str(auto)).stdout)
+        self.assertIn("wait local new: hand pool full: 6/5 running", self.hourly("queue"))
+        for i in range(2):   # two old runs end: 4/5 hand, so the queued hand run starts at the next drain
+            pid = json.loads((self.review(f"old{i}") / "run.json").read_text())["pid"]
+            os.killpg(pid, 9)
+            self.assertEqual(self.sh("pi-run", "collect", f"old{i}").returncode, 0)
+        self.assertIn("started new attempt 1", self.hourly("queue"))
+        self.assertIn("hand 5/5", self.hourly())
+
+    def test_an_untagged_continuation_counts_as_hand_as_its_resume_will(self):
+        self.queued(self.t / "root", "old-auto", 900, "auto", resume_in=-60)   # a 429'd auto run from before the pools
+        j = self.review("old-auto") / "run.json"
+        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
+        self.queued(self.t / "root", "new-auto", 100, "auto")   # a fresh untagged queued run takes its brief's pool
+        j = self.review("new-auto") / "run.json"
+        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
+        runs = json.loads(self.hourly("facts"))["runs"]
+        self.assertEqual((runs["old-auto"]["pool"], runs["new-auto"]["pool"]), ("hand", "auto"))
+        (self.review("new-auto") / "brief.md").write_text("task\nrole: coding\nsource: chat\n")   # tagged at queue: the tag wins
+        self.queued(self.t / "root", "tagged", 100, "auto")
+        j = self.review("tagged") / "run.json"   # tagged auto when queued, as `pi-run queue` writes it
+        j.write_text(json.dumps({**json.loads(j.read_text()), "pool": "auto"}))
+        (self.review("tagged") / "brief.md").write_text("task tagged\nrole: coding\nsource: chat\n")
+        (self.t / "hang").touch()
+        self.assertIn("started tagged", self.hourly("queue"))
+        self.assertEqual(json.loads((self.review("tagged") / "run.json").read_text())["pool"], "auto")
+
+    def test_hourly_launch_waits_while_its_pool_is_full_or_a_host_is_unknown(self):
+        (self.t / "hang").touch()
+        for i in range(3):
+            self.queued(self.t / "root", f"a{i}", 100, "auto")
+            self.assertEqual(self.sh("hourly", "launch", f"a{i}", "local", "auto", "pick").returncode, 0)
+        self.queued(self.t / "root", "a3", 100, "auto")
+        r = self.sh("hourly", "launch", "a3", "local", "auto", "pick")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("wait local a3: auto pool full: 3/3 running", r.stdout)
+        self.assertEqual(decisions(self.t / "root" / "pickup.log")[-1].split("\t")[2:4], ["wait", "a3"])
+        self.assertEqual(json.loads((self.review("a3") / "run.json").read_text())["state"], "queued")
+        self.queued(self.t / "root", "h0", 100)   # the hand pool is its own
+        self.assertEqual(self.sh("hourly", "launch", "h0", "local", "chat").returncode, 0)
+        self.queued(self.t / "root", "h1", 100)
+        r = self.sh("hourly", "launch", "h1", "local", "chat", ONIGIRI_UNSEEN="mini")   # the VM cannot read the mini
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("mini runs unknown, so the hand pool count is unknown", r.stdout)
+        self.assertIn("auto free 0", self.hourly(ONIGIRI_UNSEEN="mini"))
+        j = self.review("a3") / "run.json"   # queued as hand, though its brief now says auto: it is counted, and starts, as hand
+        j.write_text(json.dumps({**json.loads(j.read_text()), "pool": "hand"}))
+        r = self.sh("hourly", "launch", "a3", "local", "auto", "pick")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(j.read_text())["pool"], "hand")
+
+    def test_a_peer_before_the_pools_has_every_run_counted_as_hand(self):
+        old = {"sha": "s", "at_main": True, "parity": [], "free_gb": 25,
+               "runs": {"q": {"state": "queued", "auto": True, "since": "2026-11-10T00:00:00Z"}}}
+        peer = self.t / "old"
+        peer.write_text("#!/bin/bash\necho '" + json.dumps(old) + "'\n")
+        peer.chmod(0o755)
+        (self.t / "hang").touch()
+        for i in range(5):
+            self.queued(self.t / "root", f"h{i}", 100)
+            self.assertEqual(self.sh("hourly", "launch", f"h{i}", "local", "chat").returncode, 0)
+        out = self.hourly("queue", ONIGIRI_PEERS=f"vm={peer}", PI_RUN_DRY="1")   # it would start untagged, so as hand
+        self.assertIn("wait vm q: hand pool full: 5/5 running", out)
 
     def test_a_pr_red_after_its_rerun_reopens_the_thread_that_pushed_its_head_once_per_head(self):
         sha, other = "a5d26a5a" + "1" * 32, "b" * 40
@@ -442,15 +535,15 @@ class Hourly(unittest.TestCase):
             f.chmod(0o755)
             return f"vm={f}"
         q = {"state": "queued", "auto": False, "since": "2026-11-10T00:00:00Z"}
-        held = {f"r{i}": {"state": "running", "auto": False} for i in range(6)}
+        held = {f"r{i}": {"state": "running", "pool": "hand"} for i in range(4)}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(19, {"v": q, **held}))
         self.assertIn("wait vm v: 19G free, under 20G", out)
-        self.assertIn("slots: running 6/7", self.hourly(ONIGIRI_PEERS=peer(25, held)))
+        self.assertIn("slots: auto 0/3, hand 4/5", self.hourly(ONIGIRI_PEERS=peer(25, held)))
         back = {"state": "queued", "auto": False, "since": "2026-11-09T00:00:00Z", "resume_at": "2099-01-01T00:00:00Z"}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": back, **held}), PI_RUN_DRY="1")
         self.assertIn("wait vm p: after a 429, not before resume_at 2099-01-01T00:00:00Z", out)   # older, but not yet
         self.assertIn("would launch vm v", out)   # the 429'd run's slot went to the next queued run
-        self.assertIn("slots: running 6/7", self.hourly(ONIGIRI_PEERS=peer(25, {"p": back, **held})))
+        self.assertIn("slots: auto 0/3, hand 4/5", self.hourly(ONIGIRI_PEERS=peer(25, {"p": back, **held})))
 
     def test_a_429d_run_resumes_from_the_drain_in_its_own_session_at_its_first_queue_place(self):
         local = self.t / "root"
@@ -485,12 +578,12 @@ class Hourly(unittest.TestCase):
 
     def test_a_queue_pass_on_a_fresh_host_with_no_root_launches_nothing(self):
         shutil.rmtree(self.t / "root")
-        self.assertIn("queue: 0 queued, slots now running 0/7", self.hourly("queue", PI_RUN_DRY="1"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5", self.hourly("queue", PI_RUN_DRY="1"))
         self.assertFalse((self.t / "root").exists())   # a dry pass makes nothing
         r = subprocess.run([str(BIN / "hourly"), "queue"], cwd=self.t, capture_output=True, text=True, timeout=60,
                            env={**self.env, "ONIGIRI_ROOT": "rel/root", "PI_RUN_DRY": "1"})   # a relative root not made yet
         self.assertIn("queue: 0 queued", r.stdout, r.stderr)
-        self.assertIn("queue: 0 queued, slots now running 0/7", self.hourly("queue"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5", self.hourly("queue"))
 
     def test_a_second_queue_pass_launches_nothing_while_one_runs(self):
         self.queued(self.t / "root", "solo", 10)

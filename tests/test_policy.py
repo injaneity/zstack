@@ -39,8 +39,8 @@ class Policy(unittest.TestCase):
 
     def test_the_shipped_file_is_valid_and_get_reads_it(self):
         self.assertEqual(self.run_("check").returncode, 0)
-        self.assertEqual(self.run_("get", "slots.total").stdout, "7\n")
-        self.assertEqual(self.run_("get", "slots.auto").stdout, "5\n")
+        self.assertEqual(self.run_("get", "slots.auto").stdout, "3\n")   # Zane, 12 Nov 12:47 SGT
+        self.assertEqual(self.run_("get", "slots.hand").stdout, "5\n")
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
         self.assertEqual(json.loads(self.run_("get", "models.verifier").stdout), {"provider": "openai-codex", "model": "gpt-6.1-terra"})
         self.assertEqual(len(json.loads(self.run_("get", "models.designer").stdout)), 2)
@@ -53,10 +53,11 @@ class Policy(unittest.TestCase):
     def test_every_bad_edit_is_refused_with_its_reason(self):
         """One edit each: what it breaks, and the reason bin/policy must give. None is ever read as a default."""
         cases = [
-            ("total = 7", "total = 0", "slots.total must be a positive integer, not 0"),
-            ("total = 7", 'total = "7"', "slots.total must be a positive integer, not '7'"),
-            ("total = 7", "total = true", "slots.total must be a positive integer, not True"),
-            ("total = 7\n", "", "missing slots.total"),
+            ("hand = 5", "hand = 0", "slots.hand must be a positive integer, not 0"),
+            ("hand = 5", 'hand = "5"', "slots.hand must be a positive integer, not '5'"),
+            ("hand = 5", "hand = true", "slots.hand must be a positive integer, not True"),
+            ("hand = 5\n", "", "missing slots.hand"),
+            ("hand = 5", "hand = 5\ntotal = 7", "unknown key slots.total"),
             ("fix_attempts = 3", "fix_attempts = 3\nfix_attemps = 4", "unknown key ci.fix_attemps"),
             ("schema = 1", "schema = 2", "schema must be 1, not 2"),
             ("schema = 1", "schema = true", "schema must be 1, not True"),

@@ -2,7 +2,7 @@
 """policy: the one reader of config/policy.toml, zstack's standing rules, gates and model config.
 
   policy check          parse and validate the file: one line, exit 1 when it is not valid
-  policy get <key>      one value by dotted key (`slots.total`, `models.designer`): a string or number as is, else JSON
+  policy get <key>      one value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON
   policy dump           the whole file as JSON, for readers that are not Python (the subagent extension)
 
 Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
@@ -62,7 +62,7 @@ def seats(v):
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
-    "slots": {"total": (pos_int, "a positive integer"), "auto": (pos_int, "a positive integer")},
+    "slots": {"auto": (pos_int, "a positive integer"), "hand": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),

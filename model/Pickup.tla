@@ -9,8 +9,8 @@
 \*  - No overlapping passes: one pass at a time holds the lock; a pass that finds it held exits and does nothing.
 \*  - No silent pass when it could pick: a pass that ends with an auto slot free has launched or skipped (one row each,
 \*    naming one of the five rules) every candidate.
-\*  - The caps are never exceeded: the pass's launches stay within auto 5, and with the runs it drained within total 7
-\*    (config/policy.toml [slots]). Runs the chat starts itself with `pi-run <id>` are outside the cap but count as running.
+\*  - The pools are never exceeded (config/policy.toml [slots], Zane 12 Nov): the pass's launches stay within the auto pool,
+\*    and the runs it drains from the queue within the hand pool. Quick runs the chat starts itself are in no pool.
 \*  - A held or Zane-waiting item is never picked.
 \*  - A pass wakes the chat exactly when it has output (a collected run's result, a needs-Zane item not woken before, a
 \*    result an earlier wake failed to deliver) or it failed (its deadline killed it). A silent pass never wakes.
@@ -22,7 +22,7 @@
 \* host, disk, the merge job, 429s, red-PR reopens (bin/hourly queue's, modelled in bin/PiRun.tla). Runs are counts.
 EXTENDS Naturals, TLC
 
-CONSTANTS Items, Passes, NoPass, Total, Auto, MaxChat, Rules
+CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules
 \* Rules: playbook step 5's reasons a candidate is skipped, and no others ("held", "pr", "overlap", "zane", "host").
 \* A config may check a subset that keeps "held" and "zane": the others act alike.
 Active == {"collect", "drain", "pick", "report", "wake"}   \* a pass past the lock
@@ -32,9 +32,9 @@ Sub(a, b) == IF a > b THEN a - b ELSE 0
 VARIABLES
   blocker,   \* per item: "none", or the one rule that holds for it now
   taken,     \* items a run was launched for (a review dir or a launch row on a host): no longer candidates
-  auto,      \* running auto-launches, on either host
-  drained,   \* running chat-queued runs the pass's drain started
-  chat,      \* running runs the chat started itself (outside the cap)
+  auto,      \* running auto-pool runs, on either host
+  drained,   \* running hand-pool runs (chat-queued ones the drain started, or the chat's own)
+  chat,      \* running quick runs the chat started itself (in no pool)
   queued,    \* a chat-queued run waits for the drain
   blind,     \* a host is unreachable: its runs are unknown
   ended,     \* a run ended and is not collected
@@ -54,17 +54,15 @@ vars == <<blocker, taken, auto, drained, chat, queued, blind, ended, standing, s
           failed, woke, rows>>
 PassVars == <<lock, pc, free, had, failed, woke, rows>>
 
-Running == auto + drained + chat
-\* bin/hourly auto_free(): free auto slots by the runs the pass can read, and none while a host's runs are unknown.
-Free == IF blind THEN 0 ELSE Min(Sub(Total, Running), Sub(Auto, auto))
+\* bin/hourly auto_free(): the auto pool's room by the runs the pass can read, and none while a host's runs are unknown.
+Free == IF blind THEN 0 ELSE Sub(Auto, auto)
 Eligible(i) == i \notin taken /\ blocker[i] = "none"
 Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 News == unsent \/ (standing /\ ~seen)
 
-\* Runs from earlier passes are running at the start, one auto slot and two total slots short of the caps, so the
-\* drain and the picks meet both caps' edges.
+\* Runs from earlier passes are running at the start, one short of each pool, so the drain and the picks meet both edges.
 Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = {}
-  /\ auto = Sub(Auto, 1) /\ drained = Sub(Total, Auto + 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
+  /\ auto = Sub(Auto, 1) /\ drained = Sub(Hand, 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
   /\ standing = FALSE /\ seen = FALSE /\ unsent = FALSE /\ pending = FALSE
   /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ rows = {}
 
@@ -109,8 +107,8 @@ Collect(p) == pc[p] = "collect" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "drain"]
   /\ ended' = FALSE /\ unsent' = (unsent \/ ended) /\ pending' = (pending \/ ended)
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
   /\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>
-\* Step 4, `bin/hourly queue`: a queued run starts while the total allows and every host's runs are known.
-CanDrain == queued /\ ~blind /\ Running < Total
+\* Step 4, `bin/hourly queue`: a queued hand run starts while the hand pool has room and every host's runs are known.
+CanDrain == queued /\ ~blind /\ drained < Hand
 Drain(p) == pc[p] = "drain" /\ lock = p /\ CanDrain /\ queued' = FALSE /\ drained' = drained + 1
   /\ rows' = rows \cup {<<"run", "launch">>}
   /\ UNCHANGED <<blocker, taken, auto, chat, blind, ended, standing, seen, unsent, pending, lock, pc, free, had, failed, woke>>
@@ -175,8 +173,8 @@ NoOverlap == \A p, q \in Passes : pc[p] \in Active /\ pc[q] \in Active => p = q
 \* each skip its own row naming the rule that holds for it.
 NoSilentPassWhenCouldPick == \A p \in Passes : pc[p] = "report" /\ free > 0 =>
   \A i \in Items \ taken : <<i, blocker[i]>> \in rows /\ blocker[i] \in Rules
-\* "Caps never exceeded": the pass's own launches within auto, and with the runs it drained within total.
-CapsHold == auto <= Auto /\ auto + drained <= Total
+\* "Caps never exceeded": each pool within its cap.
+CapsHold == auto <= Auto /\ drained <= Hand
 \* "Held issues never picked" (and none waiting on Zane). The blockers do not move while a pass holds the lock.
 HeldNeverPicked == \A i \in Items : <<i, "launch">> \in rows => blocker[i] \notin {"held", "zane"}
 \* The output a pass reports is what the chat has not had: results no wake delivered, or a needs-Zane item no delivered

@@ -26,7 +26,7 @@ jobs:
             case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
           done
       - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
-        run: bin/policy check && bin/policy get slots.total && bin/policy dump > /dev/null
+        run: bin/policy check && bin/policy get slots.hand && bin/policy dump > /dev/null
       - name: bin/hourly starts under 3.9 (the queue pass dry, and the facts a peer is asked for)
         env:
           ZSTACK_ENSURED: "1"
@@ -90,7 +90,7 @@ jobs:
           TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
       - name: TLC passes model/Zstack.tla, every mutant fails on its rule, and the Race.cfg probe still breaks
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/zstack-model.sh
-      - name: TLC passes model/Hourly.tla (the hourly pickup), model/Hourly.mmd is its chart, every mutant fails on its rule, and the QuickLane.cfg probe still breaks
+      - name: TLC passes model/Hourly.tla (the hourly pickup), model/Hourly.mmd is its chart, and every mutant fails on its rule
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/hourly-model.sh
       - name: TLC passes model/Pickup.tla (the scheduled pickup pass), model/Pickup.mmd is its chart, and every mutant fails on its rule
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pickup-model.sh

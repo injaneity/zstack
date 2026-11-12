@@ -10,5 +10,8 @@ if command -v sccache >/dev/null 2>&1; then
   export RUSTC_WRAPPER=sccache SCCACHE_DIR="$HOME/.cache/sccache" SCCACHE_CACHE_SIZE=3G CARGO_INCREMENTAL=0
 fi
 export ONIGIRI_MERGE_HOST="${ONIGIRI_MERGE_HOST-vm}"   # hosts/vm/merge_job.py runs on the VM (docs/HOST.md)
+# The VM cannot reach the mini, so it cannot count the slot pools: a pool run started here waits in its queue for the
+# mini's drain, and `bin/hourly launch <id> vm` on the mini starts one now (docs/HOST.md, Launching).
+export ONIGIRI_UNSEEN="${ONIGIRI_UNSEEN-mini}"
 # A launch on a host that is not merged main and nothing else starts nothing: a failing check fails this file.
 case "$1" in start|dry) "${BASH_SOURCE[0]%/*}/../check-parity";; esac
