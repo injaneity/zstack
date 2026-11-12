@@ -53,6 +53,8 @@ jobs:
           TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
       - name: TLC passes model/Zstack.tla, every mutant fails on its rule, and the Race.cfg probe still breaks
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/zstack-model.sh
+      - name: TLC passes model/Hourly.tla (the hourly pickup), model/Hourly.mmd is its chart, every mutant fails on its rule, and the QuickLane.cfg probe still breaks
+        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/hourly-model.sh
       - name: the merge gate is three checks, and verification is not one of them
         run: |
           # Zane, 10 Nov: a verified comment is posted, but merging needs only ci-gate green, no hold row, and a preapproval for deep/human
