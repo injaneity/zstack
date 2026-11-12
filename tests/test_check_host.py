@@ -108,17 +108,28 @@ class CheckHost(unittest.TestCase):
         self.assertTrue(any(x.startswith("FAIL  live claude-code claude-opus-5-5") and "refused" in x for x in lines), lines)
         self.assertTrue(any(x.startswith("ok    live openai-codex") for x in lines), lines)
 
-    def test_a_python3_without_tomllib_fails(self):
-        """The mini's /usr/bin/python3 is 3.9: it has zoneinfo but no tomllib, which config/policy.toml's reader needs. The
-        fake is the real interpreter with only tomllib shadowed, so a check that stops importing tomllib passes it."""
-        self.ready()
-        (self.t / "notoml").mkdir()
-        (self.t / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
+    def shadowed_python3(self, module):
+        """The real interpreter with only `module` shadowed, as PATH's python3."""
+        (self.t / "shadow").mkdir()
+        (self.t / "shadow" / f"{module}.py").write_text(f"raise ModuleNotFoundError(\"No module named '{module}'\")\n")
         (self.t / "bin" / "python3").unlink()
-        (self.t / "bin" / "python3").write_text(f'#!/bin/sh\nPYTHONPATH="{self.t}/notoml" exec "{sys.executable}" "$@"\n')
+        (self.t / "bin" / "python3").write_text(f'#!/bin/sh\nPYTHONPATH="{self.t}/shadow" exec "{sys.executable}" "$@"\n')
         (self.t / "bin" / "python3").chmod(0o755)
+
+    def test_a_python3_without_tomllib_still_runs_the_policy_reader(self):
+        """The mini's /usr/bin/python3 is 3.9: zoneinfo but no tomllib. The 14:36 SGT 12 Nov hourly pickup died there on
+        `import tomllib`; bin/policy now falls back to vendor/tomli, and check-host runs it under PATH's python3."""
+        self.ready()
+        self.shadowed_python3("tomllib")
         _, lines = self.check("--offline")
-        self.assertIn("FAIL  python3 version: needs 3.11 or newer (tomllib): ModuleNotFoundError: No module named 'tomllib'", lines)
+        self.assertEqual(self.fails(lines), [], lines)
+        self.assertTrue(any(x.startswith("ok    python3 runs bin/policy: policy: ") and x.endswith("is valid") for x in lines), lines)
+
+    def test_a_python3_without_zoneinfo_fails(self):
+        self.ready()
+        self.shadowed_python3("zoneinfo")
+        _, lines = self.check("--offline")
+        self.assertIn("FAIL  python3 version: needs 3.9 or newer (zoneinfo): ModuleNotFoundError: No module named 'zoneinfo'", lines)
 
     def test_claude_code_needs_the_claude_cli_on_path(self):
         self.ready()

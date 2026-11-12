@@ -1,16 +1,16 @@
 #!/bin/bash
-# Checks bin/model-for against [models] in config/policy.toml, read here with tomllib directly.
+# Checks bin/model-for against [models] in config/policy.toml, read here with bin/policy get, so it runs under any python3 bin/policy does.
 # usage: tests/models.sh (exit 0 when every check passes)
 set -u
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: got '$2', want '$3'"; fail=1; fi; }
-cfg_of() { python3 -I -c 'import tomllib,sys; r=tomllib.load(open(sys.argv[1], "rb"))["models"][sys.argv[2]]; print(r["provider"], r["model"])' "$pkg/config/policy.toml" "$1"; }
+cfg_of() { echo "$("$pkg/bin/policy" get "models.$1.provider") $("$pkg/bin/policy" get "models.$1.model")"; }
 
 for role in coding research explorer verifier; do
   check "model-for $role matches the config" "$("$pkg/bin/model-for" "$role")" "$(cfg_of "$role")"
 done
-check "designer seats match the config" "$("$pkg/bin/model-for" designer:1)|$("$pkg/bin/model-for" designer:2)" "$(python3 -I -c 'import tomllib,sys; print("|".join("%s %s" % (s["provider"], s["model"]) for s in tomllib.load(open(sys.argv[1], "rb"))["models"]["designer"]))' "$pkg/config/policy.toml")"
+check "designer seats match the config" "$("$pkg/bin/model-for" designer:1)|$("$pkg/bin/model-for" designer:2)" "$("$pkg/bin/policy" get models.designer | python3 -I -c 'import json,sys; print("|".join("%s %s" % (s["provider"], s["model"]) for s in json.load(sys.stdin)))')"
 err=$("$pkg/bin/model-for" designer 2>&1 >/dev/null); check "a role with several seats needs a seat number" "$?" 1
 check "model-for prints its zstack sha on stderr" "$(echo "$err" | head -1)" "zstack $(git -C "$pkg" rev-parse HEAD)"
 err=$(echo "$err" | tail -n +2)

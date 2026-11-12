@@ -12,7 +12,7 @@ pi install git:github.com/injaneity/zstack
 
 That installs the skills, extensions and agents. A fresh host needs these too (a fresh-HOME install on 11 Nov 2026 failed without each one):
 
-- **Tools** on `PATH`: `pi`, `node`, `git`, `gh`, and `python3` 3.11 or newer.
+- **Tools** on `PATH`: `pi`, `node`, `git`, `gh`, and `python3` 3.9 or newer (`bin/policy` uses `tomllib`, else the vendored `vendor/tomli`).
 - **The claude-code provider** for the `coding`, `research` and `designer:1` roles: the Claude Code CLI (`npm install -g @anthropic-ai/claude-code`, then `claude auth login`, or `CLAUDE_CODE_OAUTH_TOKEN` exported by the host file) and the pi package, pinned:
   `pi install git:github.com/earendil-works/pi-claude-code@70abb65186592ca788b29b3db22c3160d629c41f`.
   Later commits (from d070212, which sets `CLAUDE_CODE_ENTRYPOINT=pi-agent`) get every request refused as third-party usage on a Claude plan, while pi still lists the models.

@@ -17,7 +17,7 @@ git init -q --bare -b main "$tmp/origin.git"
 git clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
 mkdir -p "$tmp/seed/bin" "$tmp/seed/config"
 cp "$src/bin/ensure-package-main" "$src/bin/model-for" "$src/bin/pi-run" "$src/bin/policy" "$tmp/seed/bin/"
-cp "$src/config/policy.toml" "$tmp/seed/config/"
+cp "$src/config/policy.toml" "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"   # bin/policy before python3 3.11
 echo 1 > "$tmp/seed/f"
 git -C "$tmp/seed" add -A; git -C "$tmp/seed" commit -qm one; git -C "$tmp/seed" push -q origin main
 git clone -q "$tmp/origin.git" "$tmp/pkg"

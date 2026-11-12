@@ -8,14 +8,19 @@
 Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
 Every key is declared in SCHEMA: an unknown key, a missing one or a wrong type is an error, never a default, so a typo
 cannot drop a rule without a word. The per-PR hold and preapprove rows are not here: they are the merge host's ledger,
-hold-prs.txt (docs/HOST.md, Holds file). Needs python3 3.11 or newer (tomllib).
+hold-prs.txt (docs/HOST.md, Holds file). Runs on python3 3.9 or newer: 3.11 has tomllib, and older ones get vendor/tomli,
+the pinned upstream tomllib was copied from, because the mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it.
 """
 import json
 import os
 import sys
-import tomllib
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.join(PKG, "vendor"))
+    import tomli as tomllib
 PATH = os.path.join(PKG, "config", "policy.toml")
 
 

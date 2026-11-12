@@ -9,6 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  oldest-python:
+    # The mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it: the 12 Nov 14:36 SGT hourly pickup died there on
+    # `import tomllib`. Every python script and the suite run under that interpreter, so a 3.11-only import fails here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: python3 is 3.9
+        run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
+      - name: scripts parse under 3.9
+        run: |
+          for f in bin/* hosts/*/*; do
+            case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
+          done
+      - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
+        run: bin/policy check && bin/policy get slots.total && bin/policy dump > /dev/null
+      - name: bin/hourly starts under 3.9 (the queue pass dry, and the facts a peer is asked for)
+        env:
+          ZSTACK_ENSURED: "1"
+          ONIGIRI_HOST: ""
+          ONIGIRI_ROOT: ${{ runner.temp }}/root
+        run: PI_RUN_DRY=1 bin/hourly queue && bin/hourly facts
+      - name: the suite passes under 3.9
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: model config resolves under 3.9
+        run: tests/models.sh
+
   test:
     runs-on: ubuntu-latest
     steps:
