@@ -444,6 +444,24 @@ class Hourly(unittest.TestCase):
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
         self.assertIn("mini runs unknown, so the hand pool count is unknown", r.stdout)
         self.assertIn("auto free 0", self.hourly(ONIGIRI_UNSEEN="mini"))
+        j = self.review("a3") / "run.json"   # queued as hand, though its brief now says auto: it is counted, and starts, as hand
+        j.write_text(json.dumps({**json.loads(j.read_text()), "pool": "hand"}))
+        r = self.sh("hourly", "launch", "a3", "local", "auto", "pick")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(j.read_text())["pool"], "hand")
+
+    def test_a_peer_before_the_pools_has_every_run_counted_as_hand(self):
+        old = {"sha": "s", "at_main": True, "parity": [], "free_gb": 25,
+               "runs": {"q": {"state": "queued", "auto": True, "since": "2026-11-10T00:00:00Z"}}}
+        peer = self.t / "old"
+        peer.write_text("#!/bin/bash\necho '" + json.dumps(old) + "'\n")
+        peer.chmod(0o755)
+        (self.t / "hang").touch()
+        for i in range(5):
+            self.queued(self.t / "root", f"h{i}", 100)
+            self.assertEqual(self.sh("hourly", "launch", f"h{i}", "local", "chat").returncode, 0)
+        out = self.hourly("queue", ONIGIRI_PEERS=f"vm={peer}", PI_RUN_DRY="1")   # it would start untagged, so as hand
+        self.assertIn("wait vm q: hand pool full: 5/5 running", out)
 
     def test_a_pr_red_after_its_rerun_reopens_the_thread_that_pushed_its_head_once_per_head(self):
         sha, other = "a5d26a5a" + "1" * 32, "b" * 40
