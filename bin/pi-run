@@ -509,11 +509,12 @@ def build_dirs(d):
             continue
         for root, dirs, _ in os.walk(top):
             dirs[:] = [x for x in dirs if x not in (".git", "node_modules") and not os.path.islink(os.path.join(root, x))]
-            if "target" in dirs and os.path.isfile(os.path.join(root, "target", "CACHEDIR.TAG")):
-                dirs.remove("target")
-                t = os.path.realpath(os.path.join(root, "target"))
-                if t.startswith(real + os.sep):
-                    found.append((t, os.path.realpath(top)))
+            for name in [x for x in dirs if x == "target" or x.startswith(".target.pruning-")]:   # or one a died prune left
+                if os.path.isfile(os.path.join(root, name, "CACHEDIR.TAG")):
+                    dirs.remove(name)
+                    t = os.path.realpath(os.path.join(root, name))
+                    if t.startswith(real + os.sep):
+                        found.append((t, os.path.realpath(top)))
     return found
 
 
@@ -539,10 +540,16 @@ def disk_bytes(path):
     return total
 
 
+def held_in(paths, held):
+    return any(x == p or x.startswith(p + os.sep) for p in paths for x in held)
+
+
 def prune(d):
-    """At collect: delete the cargo target/ dirs under the run's wt* worktrees when no process holds anything in that
-    worktree open (lsof), and say how much that freed. A held one, and every one when lsof cannot answer, is kept. Never raises: a prune that fails
-    must not cost the collect."""
+    """At collect: delete the cargo target/ dirs under the run's wt* worktrees that nothing holds, and say how much that
+    freed. A target is first renamed aside, so no process can open it by its path from then on; then a fresh lsof must show
+    nothing open in its worktree or in the renamed dir (an open file or cwd follows the rename) before it is deleted.
+    Anything held is renamed back and kept, and every target is kept when lsof cannot answer. Never raises: a prune that
+    fails must not cost the collect."""
     try:
         targets = build_dirs(d)
         if not targets:
@@ -552,16 +559,23 @@ def prune(d):
             return f"kept {len(targets)} target/ dir(s): lsof gave no answer"
         freed, gone, kept = 0, [], []
         for t, wt in targets:   # anything open in the worktree (a shell's cwd, an editor, cargo) may be a live session's
-            if any(x == wt or x.startswith(wt + os.sep) for x in held):
+            if held_in([wt], held):
                 kept.append(t)
                 continue
-            size = disk_bytes(t)
-            shutil.rmtree(t, ignore_errors=True)
-            if not os.path.exists(t):
+            aside = os.path.join(os.path.dirname(t), f".target.pruning-{os.getpid()}")
+            os.rename(t, aside)
+            now = open_paths()
+            if now is None or held_in([wt, aside], now):
+                os.path.exists(t) or os.rename(aside, t)
+                kept.append(t)
+                continue
+            size = disk_bytes(aside)
+            shutil.rmtree(aside, ignore_errors=True)
+            if os.path.exists(aside):   # not removable: kept under the aside name, which a later collect of this id (after a CI reopen) retries
+                kept.append(aside)
+            else:
                 freed += size
                 gone.append(t)
-            else:
-                kept.append(t)
         rel = lambda xs: " ".join(os.path.relpath(x, os.path.realpath(d)) for x in xs)   # noqa: E731
         return (f"freed {freed / 1e9:.1f} GB: deleted {rel(gone) or 'no target/ dir'}"
                 + (f"; kept {rel(kept)} (held open or not removable)" if kept else ""))
