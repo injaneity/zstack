@@ -49,7 +49,7 @@ Otherwise make a still. When you do animate:
 
 - The first frame is the finished chart, every bar and label in place. Feeds and link previews show the first frame, and a viewer who never presses play still gets the point. The animation starts after it.
 - Keep it short and end on the finished chart too. Most of Adam's published animations run 14 to 30 seconds.
-- Export H.264 MP4 at 30 fps (`yuv420p`, even width and height) so every player accepts it.
+- Export H.264 MP4 with `yuv420p` and an even width and height, which most players and feeds accept.
 
 ## 5. Render with code
 
