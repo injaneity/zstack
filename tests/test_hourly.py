@@ -166,6 +166,21 @@ class Hourly(unittest.TestCase):
         self.hourly("done", "--linear", "CUA-1,CUA-2")
         self.assertIn("skip:", self.hourly("--linear", "CUA-1,CUA-2"))
 
+    def test_an_unreachable_host_leaves_no_auto_slot_known_free(self):
+        # model/Hourly.tla AutoCap: the peer's auto runs are unknown, so counting them as none could pass the auto cap
+        down = self.t / "down"
+        down.write_text("#!/bin/bash\necho 'ssh: connect to host vm: timed out' >&2; exit 255\n")
+        down.chmod(0o755)
+        out = self.hourly("--linear", "CUA-1", ONIGIRI_PEERS=f"vm={down}")
+        self.assertIn("host vm: unreachable: ssh: connect to host vm: timed out", out)
+        self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 0", out)
+        rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual(rows[-1], ["local", "pass", "-", "candidates 1 todo, auto free 0"])
+        self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("--linear", "CUA-1"))
+        # the queue's last line is what step 5 goes by: no auto slot while the peer's runs are unknown
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 0", self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("queue"))
+
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
         peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' "
@@ -370,7 +385,7 @@ class Hourly(unittest.TestCase):
         self.assertFalse((local / "review" / "b").exists())
         for root_, sid in ((local, "c"), (vm, "d")):
             self.assertEqual(run(root_, sid)["state"], "queued", sid)
-        self.assertIn("queue: 5 queued, slots now auto 3/3, hand 5/5, quick 1 (no cap)", r.stdout)
+        self.assertIn("queue: 5 queued, slots now auto 3/3, hand 5/5, quick 1 (no cap): auto free 0", r.stdout)
 
     def test_a_hand_start_past_the_hand_pool_is_queued_and_says_so_and_untagged_runs_count_as_hand(self):
         local = self.t / "root"

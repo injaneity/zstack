@@ -30,9 +30,12 @@ the first pass after the pause sends it. An urgent wake (URGENT) POSTs the webho
 every pass until it is sent (a host with no webhook key counts as sent). A wait goes
 nowhere but events.log and --dry-run's `who=` lines, which bin/hourly prints under needs-Zane and unstick. Outputs:
 $ROOT/events.log (one line per decision, only when it changes), $ROOT/tick/state.json and $ROOT/tick/last-run. ROOT is
-$ONIGIRI_ROOT, default /srv/onigiri.
+$ONIGIRI_ROOT, default /srv/onigiri. REPO, ME, GATE_CHECK, NOT_RERUN, TIERS and PREAPPROVE_TIERS come from config/policy.toml
+[merge] and [people] through bin/policy; a policy it refuses stops the job before it reads any PR.
 """
 import argparse
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -50,14 +53,24 @@ ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
 DIR = f"{ROOT}/tick"   # the data dir the hourly routine and the mini mirror read; no code lives there any more
 EVENTS, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/hold-prs.txt"
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
-REPO, SHORT, ME = "trycua/cua", "cua", "injaneity"
-GATE_CHECK = "ci-gate"   # the one check the gate reads: it owns red checks and which platform lanes a PR needs
-NOT_RERUN = {"cla"}      # not required on trycua/cua main: never rerun, never a reason to wait
+PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_spec = importlib.util.spec_from_file_location("policy", os.path.join(PKG, "bin", "policy"),
+                                               loader=importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy")))
+policy = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(policy)
+try:   # the gate's values: config/policy.toml [merge] and [people], through bin/policy, the one parser
+    POLICY = policy.load()
+except policy.PolicyError as e:   # no gate without its rules: nothing merges, and last-run goes stale for the hourly pass
+    sys.exit(f"merge_job: {e}")
+REPO, ME = POLICY["merge"]["repo"], POLICY["people"]["me"]
+OWNER, SHORT = REPO.split("/")
+GATE_CHECK = POLICY["merge"]["gate_check"]   # the one check the gate reads: it owns red checks and which platform lanes a PR needs
+NOT_RERUN = set(POLICY["merge"]["never_rerun"])   # never rerun, never a reason to wait
+TIERS = POLICY["merge"]["tiers"]   # the one risk enum, mildest first; a PR declaring none of these never merges
+PREAPPROVE_TIERS = set(POLICY["merge"]["preapprove_tiers"])   # these need a preapprove row pinned to the head
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
-TIERS = ["light", "standard", "deep", "human"]   # the one risk enum; a PR declaring none of these never merges
 MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5   # GitHub computes mergeability on the first ask, so UNKNOWN is read again
-PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SGT = ZoneInfo("Asia/Singapore")
 # cron's PATH is /usr/bin:/bin and gh lives in /usr/local/bin, so the job sets its own (the first cron run failed without it).
 # GH_CONFIG_DIR from the caller wins (the host file's or cron's), as in patent_push.py; ~/.config/gh is only the default.
@@ -198,11 +211,11 @@ def gate(pr, holds, notes=None):
     tier, pre = declared_risk(pr.get("labels") or [], pr.get("body")), (holds or {}).get("preapproved", {}).get(n)
     if tier is None:
         R.append(Reason("no-tier", f"no risk tier ({'|'.join(TIERS)})"))
-    elif tier in ("deep", "human") and pre != head:
+    elif tier in PREAPPROVE_TIERS and pre != head:
         R.append(Reason("risk", f"declared {tier}: needs Zane"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
-        notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in ("deep", "human") else ""))
+        notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in PREAPPROVE_TIERS else ""))
     if (author := pr.get("author", ME)) != ME and pre != head:
         R.append(Reason("risk", f"PR by {author or '?'}: needs Zane"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
@@ -261,8 +274,8 @@ PR_FIELDS = ("number state author { login } headRefOid isDraft title body mergea
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
 OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE, first: 25, after: $after) { "
             f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
-ONE_PR = f"query($n: Int!) {{ repository(owner: \"trycua\", name: \"cua\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
-MORE = ("query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) { repository(owner: \"trycua\", name: \"cua\") { "
+ONE_PR = f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
+MORE = (f"query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ "
         f"pullRequest(number: $n) {{ files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
         f"commits(last: 1) @include(if: $c) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100, after: $checks) {{ {PAGE} "
         f"nodes {{ __typename {CHECKS} }} }} }} }} }} }} }} }} }}")
@@ -320,10 +333,10 @@ def from_graphql(node):
 
 DEQUEUE_CODES = {"ci", "holds-unreadable", "hold", "hands-off", "no-tier", "risk", "paused", "unreadable"}   # off the gate, PAUSED
 # or the PR's gate inputs could not be read in full
-QUEUE_ENTRY = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { id "
+QUEUE_ENTRY = (f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ id "
                "mergeQueueEntry { enqueuer { login } headCommit { oid } } } } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
-QUEUE_EVENTS = ("query($n: Int!) { repository(owner: \"trycua\", name: \"cua\") { pullRequest(number: $n) { "
+QUEUE_EVENTS = (f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ "
                 "timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT], last: 20) { nodes { "
                 "__typename ... on AddedToMergeQueueEvent { enqueuer { login } } ... on RemovedFromMergeQueueEvent { reason } } } } } }")
 
