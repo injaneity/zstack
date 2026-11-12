@@ -50,6 +50,10 @@ for s in verify-cua-driver verify-cua-spaces; do
 done
 ```
 
+## Adapted from Adam Holter
+
+`skills/charts` is new text, not a copy. Its rules come from Adam Holter's X article "How I make my AI charts and animations" (https://x.com/AdamHoltererer/status/2120174791982186506, 10 Nov 2026) and the `skills/what-works-on-x` skill in his swipe-feed repo (https://github.com/adamholter/swipe-feed, commit `500d8771d363de338a116a2d9c2579bd26bfdd5d`), with his published charts at https://adam.holter.com/animations/ as examples. Zane asked for it after asking Adam whether he uses a visualisation skill. No sentence is copied from either source. The skill credits both, and keeps the X-specific advice in its own section apart from general chart craft.
+
 ## Vendored Python
 
 `vendor/tomli` is tomli 2.2.1, the TOML parser CPython 3.11 adopted as `tomllib`. The `.py` files and `LICENSE` are copied byte for byte from the PyPI sdist `tomli-2.2.1.tar.gz` (sha256 `cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff`), and `py.typed` is left out. MIT, Taneli Hukkinen. `bin/policy` imports `tomllib` and falls back to it on python3 3.9 and 3.10, which the mini's `/usr/bin/python3` is. It is vendored, not pip-installed, so a host needs no install step and every host parses `config/policy.toml` with the same code. To update it, copy `src/tomli/*.py` and `LICENSE` from a newer sdist and change the version and sha here.
