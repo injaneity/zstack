@@ -7,11 +7,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
+try:
+    import tomllib
+except ModuleNotFoundError:   # python3 3.9 and 3.10, as bin/policy
+    sys.path.insert(0, str(PKG / "vendor"))
+    import tomli as tomllib
 SHIPPED = (PKG / "config" / "policy.toml").read_text()
 
 
@@ -23,6 +27,7 @@ class Policy(unittest.TestCase):
         for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
+        shutil.copytree(PKG / "vendor", self.pkg / "vendor")   # bin/policy's tomllib before python3 3.11
         self.env = {**os.environ, "ONIGIRI_HOST": "", "ONIGIRI_ROOT": str(Path(td.name) / "root"),
                     "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}"}
 
