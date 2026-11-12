@@ -4,7 +4,8 @@
 \* and HourlyLive.cfg (every pass ends), model/Hourly.mmd is the chart HourlyChart.cfg draws, every mutant in
 \* model/hourly_mutants.py fails on HourlySmall.cfg with the rule it names (three of them put back zstack main 4e08648,
 \* before the pickup fix), and QuickLane.cfg (a probe for an open question) still breaks.
-\* Runs start and end, and the chat queues, at any time inside a pass but the drain (see RunEnds). The pass reads its slots twice, at step 0
+\* Runs start and end, and the chat queues, at any time inside a pass but the drain (see RunEnds). The peer can drop
+\* between step 0 and the drain. The pass reads its slots twice, at step 0
 \* and after the drain, and then counts its own picks, as bin/hourly's slots: and queue lines do.
 \*
 \* What it holds the pass to (Zane 12 Nov: "is the issue pickup working?", and the statechart brief):
@@ -25,7 +26,7 @@
 \* merge job, filing and review, disk, 429s. Runs are counts per kind, not ids.
 EXTENDS Naturals
 
-CONSTANTS Issues, Total, Auto, MaxQuick
+CONSTANTS Issues, Total, Auto, MaxQuick, MaxQueued
 
 Rules == {"held", "pr", "overlap", "zane", "host"}   \* playbook step 5: the only reasons a Todo is skipped
 \* What bin/hourly's fingerprint() sees: run states, PRs, host facts. Not the holds file, not Zane's answers.
@@ -41,7 +42,8 @@ VARIABLES
   chat,     \* running chat-queued runs, started by the drain
   quick,    \* running runs the chat started itself (the quick-check lane)
   blind,    \* the peer is unreachable: its runs are unknown this pass
-  queued,   \* the queued run waiting for the drain: "none", or its brief's source "chat" or "auto"
+  qchat,    \* queued runs with a chat brief, waiting for the drain
+  qauto,    \* queued runs with an auto brief (`new-brief ... auto`)
   ended,    \* a run exited and is not yet collected
   dirty,    \* something the fingerprint sees changed since the last `bin/hourly done`
   free,     \* the auto slots the pass counts as free: step 0's slots: line, then the queue's "slots now" line,
@@ -49,8 +51,8 @@ VARIABLES
   pc,       \* "idle" between passes; "skipped"; "collect" "drain" "pick" "end" inside a pass
   rows      \* this pass's pickup.log rows: <<item, action or rule>>
 
-vars == <<todo, blocker, auto, peer, chat, quick, blind, queued, ended, dirty, free, pc, rows>>
-World == <<todo, blocker, auto, peer, chat, quick, blind, queued, ended>>
+vars == <<todo, blocker, auto, peer, chat, quick, blind, qchat, qauto, ended, dirty, free, pc, rows>>
+World == <<todo, blocker, auto, peer, chat, quick, blind, qchat, qauto, ended>>
 
 \* bin/hourly slots() and auto_free(): every run it can read counts toward the total, quick-check runs too.
 SeenAuto == auto + (IF blind THEN 0 ELSE peer)
@@ -65,7 +67,7 @@ CouldPick == Free > 0 /\ \E i \in Issues : Eligible(i)
 Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 
 Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
-  /\ auto = 0 /\ peer = 0 /\ chat = 0 /\ quick = 0 /\ blind = FALSE /\ queued = "none" /\ ended = FALSE
+  /\ auto = 0 /\ peer = 0 /\ chat = 0 /\ quick = 0 /\ blind = FALSE /\ qchat = 0 /\ qauto = 0 /\ ended = FALSE
   /\ dirty = TRUE /\ free = 0 /\ pc = "idle" /\ rows = {}
 
 \* ---------------- the world moves ----------------
@@ -74,14 +76,14 @@ Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
 \* The pass reads them once, at step 0, so a change inside a pass is the next pass's.
 Changes(i, b) == pc = "idle" /\ blocker[i] # b /\ blocker' = [blocker EXCEPT ![i] = b]
   /\ dirty' = (dirty \/ blocker[i] \in Seen \/ b \in Seen)
-  /\ UNCHANGED <<todo, auto, peer, chat, quick, blind, queued, ended, free, pc, rows>>
+  /\ UNCHANGED <<todo, auto, peer, chat, quick, blind, qchat, qauto, ended, free, pc, rows>>
 \* The chat files an issue into Todo, or one leaves Todo (Done, Canceled, moved by hand).
 Files(i) == pc = "idle" /\ i \notin todo /\ todo' = todo \cup {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, queued, ended, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, qchat, qauto, ended, free, pc, rows>>
 Moves(i) == pc = "idle" /\ i \in todo /\ todo' = todo \ {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, queued, ended, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, chat, quick, blind, qchat, qauto, ended, free, pc, rows>>
 \* bin/hourly queue reads every host's runs and the queue once, then counts its own launches. A run that starts, ends or is
-\* queued while it drains is invisible to it and to step 5, which goes by the drain's "slots now" line: the same as that
+\* queued while it drains is invisible to it and to step 5, which goes by the drain's `queue:` line: the same as that
 \* step coming right after the drain. So the world moves at any time except during the drain.
 \* A running run exits: its slot frees and it waits for a collect.
 RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
@@ -89,21 +91,25 @@ RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
      \/ peer > 0 /\ peer' = peer - 1 /\ UNCHANGED <<auto, chat, quick>>
      \/ chat > 0 /\ chat' = chat - 1 /\ UNCHANGED <<auto, peer, quick>>
      \/ quick > 0 /\ quick' = quick - 1 /\ UNCHANGED <<auto, peer, chat>>
-  /\ UNCHANGED <<todo, blocker, blind, queued, free, pc, rows>>
-\* The chat queues a run (bin/queue): a chat brief, or an auto one (`new-brief ... auto`).
-ChatQueues == pc # "drain" /\ queued = "none" /\ queued' \in {"chat", "auto"} /\ dirty' = TRUE
+  /\ UNCHANGED <<todo, blocker, blind, qchat, qauto, free, pc, rows>>
+\* The chat queues a run (bin/queue): a chat brief, or an auto one. MaxQueued bounds the queue for TLC.
+ChatQueues == pc # "drain" /\ qchat + qauto < MaxQueued
+  /\ \/ qchat' = qchat + 1 /\ qauto' = qauto
+     \/ qauto' = qauto + 1 /\ qchat' = qchat
+  /\ dirty' = TRUE
   /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, blind, ended, free, pc, rows>>
 \* The chat starts a run itself, now (the quick-check lane): no slot check.
 ChatStartsNow == pc # "drain" /\ quick < MaxQuick /\ quick' = quick + 1 /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, chat, blind, queued, ended, free, pc, rows>>
-\* The peer stops or starts answering (`bin/hourly facts` over ssh): an error in the fingerprint.
-PeerFlips == pc = "idle" /\ blind' = ~blind /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, queued, ended, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, chat, blind, qchat, qauto, ended, free, pc, rows>>
+\* The peer stops or starts answering (`bin/hourly facts` over ssh): an error in the fingerprint. Step 0 and the drain
+\* each read it, so it can also change between them.
+PeerFlips == pc \in {"idle", "collect"} /\ blind' = ~blind /\ dirty' = TRUE
+  /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, qchat, qauto, ended, free, pc, rows>>
 
 \* ---------------- the pass ----------------
 \* Step 0, `bin/hourly --linear <ids>`: the fingerprint skip. A pass never skips with an ended or queued run, an
 \* unreachable host (an error), or a free auto slot while the Todo list is not empty. Every pass writes a `pass` row.
-Acts == ended \/ queued # "none" \/ blind \/ (Free > 0 /\ todo # {})
+Acts == ended \/ qchat + qauto > 0 \/ blind \/ (Free > 0 /\ todo # {})
 PassStarts == pc = "idle"
   /\ pc' = (IF ~dirty /\ ~Acts THEN "skipped" ELSE "collect")
   /\ rows' = {<<"pass", "candidates">>} /\ free' = Free
@@ -111,24 +117,25 @@ PassStarts == pc = "idle"
 \* Step 1: collect every ended run, one `collect` row each.
 Collects == pc = "collect" /\ pc' = "drain" /\ ended' = FALSE
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
-  /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, blind, queued, dirty, free>>
-\* Step 4, `bin/hourly queue`: queued runs first, while the total allows (and the auto cap, for an auto brief) and every
-\* host's runs are known.
-CanDrain == queued # "none" /\ ~blind /\ SeenRunning < Total /\ (queued = "auto" => SeenAuto < Auto)
-Drains == pc = "drain" /\ CanDrain
-  /\ queued' = "none" /\ rows' = rows \cup {<<"run", "launch">>}
-  /\ chat' = (IF queued = "chat" THEN chat + 1 ELSE chat) /\ auto' = (IF queued = "auto" THEN auto + 1 ELSE auto)
+  /\ UNCHANGED <<todo, blocker, auto, peer, chat, quick, blind, qchat, qauto, dirty, free>>
+\* Step 4, `bin/hourly queue`: every queued run in turn, each started while the total allows (and the auto cap, for an
+\* auto brief) and every host's runs are known; one that cannot start waits, and the next is tried.
+CanDrainChat == qchat > 0 /\ ~blind /\ SeenRunning < Total
+CanDrainAuto == qauto > 0 /\ ~blind /\ SeenRunning < Total /\ SeenAuto < Auto
+Drains == pc = "drain" /\ rows' = rows \cup {<<"run", "launch">>}
+  /\ \/ CanDrainChat /\ qchat' = qchat - 1 /\ chat' = chat + 1 /\ UNCHANGED <<qauto, auto>>
+     \/ CanDrainAuto /\ qauto' = qauto - 1 /\ auto' = auto + 1 /\ UNCHANGED <<qchat, chat>>
   /\ UNCHANGED <<todo, blocker, peer, quick, blind, ended, dirty, free, pc>>
-\* The queue ends with its "slots now" line, which step 5 goes by.
-DrainDone == pc = "drain" /\ ~CanDrain /\ pc' = "pick" /\ free' = Free
-  /\ rows' = (IF queued # "none" THEN rows \cup {<<"run", "wait">>} ELSE rows)
+\* The queue ends with its `queue: ... auto free <n>` line, which step 5 goes by.
+DrainDone == pc = "drain" /\ ~CanDrainChat /\ ~CanDrainAuto /\ pc' = "pick" /\ free' = Free
+  /\ rows' = (IF qchat + qauto > 0 THEN rows \cup {<<"run", "wait">>} ELSE rows)
   /\ UNCHANGED <<World, dirty>>
 \* Step 5: while auto slots are free, take each Todo: launch it here or on the peer, or skip it with the one rule that
 \* holds for it, while the slots: line shows an auto slot free.
 Picks(i, there) == pc = "pick" /\ Eligible(i) /\ free > 0 /\ (there => ~blind)
   /\ todo' = todo \ {i} /\ rows' = rows \cup {<<i, "launch">>} /\ free' = free - 1
   /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
-  /\ UNCHANGED <<blocker, chat, quick, blind, queued, ended, dirty, pc>>
+  /\ UNCHANGED <<blocker, chat, quick, blind, qchat, qauto, ended, dirty, pc>>
 Skips(i, r) == pc = "pick" /\ i \in todo /\ ~Handled(i) /\ free > 0 /\ r \in Rules /\ blocker[i] = r
   /\ rows' = rows \cup {<<i, r>>}
   /\ UNCHANGED <<World, dirty, free, pc>>
@@ -174,12 +181,12 @@ FreeWithoutQuick == IF blind THEN 0 ELSE Min(Sub(Total, SeenAuto + chat), Sub(Au
 QuickOutsideCap == pc = "skipped" /\ quick > 0 => ~(FreeWithoutQuick > 0 /\ \E i \in Issues : Eligible(i))
 
 TypeOK == todo \subseteq Issues /\ free \in 0..Auto /\ auto \in Nat /\ peer \in Nat /\ chat \in Nat /\ quick \in 0..MaxQuick
-  /\ queued \in {"none", "chat", "auto"} /\ pc \in {"idle", "skipped", "collect", "drain", "pick", "end"}
+  /\ qchat + qauto \in 0..MaxQueued /\ pc \in {"idle", "skipped", "collect", "drain", "pick", "end"}
 
-\* Hourly.cfg's bound: two drained runs at once. With five auto-launches and two quick-check runs they still fill the
-\* total, so a full total with auto slots left is reached.
-Bound == chat <= 2
+\* Hourly.cfg's bound: two drained runs at once and one queued. With five auto-launches and two quick-check runs they still
+\* fill the total, so a full total with auto slots left is reached. HourlySmall.cfg, unbounded, drains two queued runs.
+Bound == chat <= 2 /\ qchat + qauto <= 1
 
 \* For the chart only (HourlyChart.cfg): what the reader sees of a state.
-ChartView == <<pc, CouldPick, dirty, ended \/ queued # "none" \/ blind, \E x \in rows : x[1] = "todo">>
+ChartView == <<pc, CouldPick, dirty, ended \/ qchat + qauto > 0 \/ blind, \E x \in rows : x[1] = "todo">>
 ====

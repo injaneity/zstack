@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DECLINES = ("PickDone ==", "Declines == pc = \"pick\" /\\ free > 0 /\\ todo # {} /\\ pc' = \"end\" /\\ rows' = rows \\cup {<<\"todo\", \"filed\">>}\n"
             "  /\\ UNCHANGED <<World, dirty, free>>\nPickDone ==")
 DECLINES_NEXT = ("PassSteps == PassStarts", "PassSteps == Declines \\/ PassStarts")
-NO_FREE_IN_ACTS = ("Acts == ended \\/ queued # \"none\" \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ queued # \"none\" \\/ blind")
+NO_FREE_IN_ACTS = ("Acts == ended \\/ qchat + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ qchat + qauto > 0 \\/ blind")
 M = [
     # name, the bug, [(old, new)], the rule that must catch it
     ("main-4e08648-silent-skip", "acts had no free auto slot, so an unchanged pass skipped with Todos to pick (before #68)",
@@ -39,12 +39,16 @@ M = [
        "/\\ todo' = todo \\ {i} /\\ rows' = rows \\cup {<<i, \"launch\">>} /\\ free' = free")],
      "CapsHold"),
     ("drain-past-total", "the drain starts a queued run with the total full",
-     [("CanDrain == queued # \"none\" /\\ ~blind /\\ SeenRunning < Total", "CanDrain == queued # \"none\" /\\ ~blind")],
+     [("CanDrainChat == qchat > 0 /\\ ~blind /\\ SeenRunning < Total", "CanDrainChat == qchat > 0 /\\ ~blind")],
      "CapsHold"),
     ("drain-ignores-auto-cap", "the drain starts a queued auto brief with the auto cap full",
-     [("/\\ (queued = \"auto\" => SeenAuto < Auto)", "")], "CapsHold"),
+     [("CanDrainAuto == qauto > 0 /\\ ~blind /\\ SeenRunning < Total /\\ SeenAuto < Auto", "CanDrainAuto == qauto > 0 /\\ ~blind /\\ SeenRunning < Total")], "CapsHold"),
     ("pick-on-step-0-count", "step 5 goes by step 0's slots: line, before the drain filled slots",
-     [("/\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = free")],
+     [("/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = free")],
+     "CapsHold"),
+    ("queue-line-ignores-blind-peer", "the queue's auto free line counts a peer that dropped after step 0 as idle",
+     [("DrainDone == pc = \"drain\" /\\ ~CanDrainChat /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = Free",
+       "DrainDone == pc = \"drain\" /\\ ~CanDrainChat /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = CodeFree")],
      "CapsHold"),
 ]
 

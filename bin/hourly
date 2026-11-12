@@ -403,7 +403,8 @@ def drain():
             running, auto = running + 1, auto + is_auto
         else:
             rc = 1
-    print(f"queue: {len(queued)} queued, slots now running {running}/{TOTAL}, auto {auto}/{AUTO}")
+    free = 0 if blind else max(0, min(TOTAL - running, AUTO - auto))   # step 5 goes by this, as by auto_free()
+    print(f"queue: {len(queued)} queued, slots now running {running}/{TOTAL}, auto {auto}/{AUTO}: auto free {free}")
     return rc
 
 
