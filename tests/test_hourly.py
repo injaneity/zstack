@@ -178,7 +178,8 @@ class Hourly(unittest.TestCase):
         self.assertEqual(rows[-1], ["local", "pass", "-", "candidates 1 todo, auto free 0"])
         self.assertIn("slots: auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("--linear", "CUA-1"))
         # the queue's last line is what step 5 goes by: no auto slot while the peer's runs are unknown
-        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 0", self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
+        self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 0",
+                      self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
         self.assertIn("queue: 0 queued, slots now auto 0/3, hand 0/5, quick 0 (no cap): auto free 3", self.hourly("queue"))
 
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):

@@ -1,6 +1,7 @@
 """Mutation check for model/Hourly.tla: each mutant puts back one way the hourly pickup went wrong, and must make TLC fail
 on HourlySmall.cfg (Hourly.cfg's rules at smaller caps) with the rule it names. The first three are zstack main
-4e08648, before the pickup fix (#68); shared-total and auto-cap-5 are the caps before the slot split. A mutant that still passes, or fails on another rule, means the model cannot see that bug.
+4e08648, before the pickup fix (#68); shared-total and auto-cap-5 are the caps before the slot split. A mutant that
+still passes, or fails on another rule, means the model cannot see that bug.
 usage: python3 -I model/hourly_mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
@@ -50,7 +51,8 @@ M = [
        "DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto /\\ pc' = \"pick\" /\\ free' = CodeFree")],
      "AutoCap"),
     ("shared-total", "the 7-total cap before the slot split: a hand launch waits while auto and quick runs fill a total",
-     [("HandWaits(unknown) == unknown \\/ HandN >= Hand", "HandWaits(unknown) == unknown \\/ HandN >= Hand \\/ HandN + auto + peer + quick >= Hand + 1")],
+     [("HandWaits(unknown) == unknown \\/ HandN >= Hand",
+       "HandWaits(unknown) == unknown \\/ HandN >= Hand \\/ HandN + auto + peer + quick >= Hand + 1")],
      "QuickNotCounted"),
     ("auto-cap-5", "the 5-auto cap before the slot split",
      [("CodeFree == Sub(Auto, SeenAuto)", "CodeFree == Sub(Auto + 1, SeenAuto)"),
@@ -58,7 +60,8 @@ M = [
     ("untagged-not-counted", "a running run with no pool tag counted in no pool",
      [("HandN == hand + legacy", "HandN == hand")], "HandCap"),
     ("vm-counts-itself", "a hand launch on the VM counts only what it can see",
-     [("HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~HandWaits(onVm \\/ blind)", "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ HandN >= Hand))")],
+     [("HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~HandWaits(onVm \\/ blind)",
+       "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ HandN >= Hand))")],
      "HandCap"),
 ]
 
