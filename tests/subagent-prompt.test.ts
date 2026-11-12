@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { test } from "node:test";
-import { buildChildPrompt, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, VERIFIER } from "../extensions/subagent/prompt.ts";
+import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../extensions/subagent/prompt.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 // the agent body as agents.ts hands it over: everything after the closing frontmatter fence
@@ -35,3 +35,17 @@ for (const name of ["verifier", "explorer", "designer"]) {
 		assert.doesNotMatch(prompt, /^##+ (Hard rules|Merging|Patent hold|Scope)$/m);
 	});
 }
+
+test("an agent's {{rule <id>}} lines become bin/policy's rendering of those rules, and nothing else changes", () => {
+	const render = (id: string) => execFileSync("python3", ["-I", `${root}bin/policy`, "rules", id], { encoding: "utf8" });
+	for (const name of ["verifier", "designer"]) {
+		const ids = ruleIds(body(name));
+		assert.ok(ids.length > 0, `${name} quotes a rule`);
+		const out = expandRules(body(name), render);
+		assert.doesNotMatch(out, /\{\{rule /);
+		for (const id of ids) assert.ok(out.includes(render(id).trimEnd()), id);
+	}
+	assert.equal(expandRules("a\n{{rule x-y}}\nb {{rule z}}\n", () => "- X\n"), "a\n- X\nb {{rule z}}\n");
+	assert.deepEqual(ruleIds("{{rule a-b}}\n {{rule c}}\n{{rule d}}"), ["a-b", "d"]);
+	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on pairing, Teleport and Keyvault normally\.$/m);
+});

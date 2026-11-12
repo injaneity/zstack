@@ -46,14 +46,15 @@ _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
-FLOOR_GB, HUNG_MIN = 20, 180   # the VM floor and the hung mark: the routine's rules (playbooks/hourly.md)
 _pol = pr.policy()
 try:
     _policy = _pol.load()   # a policy bin/policy rejects stops every command with its reason
 except _pol.PolicyError as e:
     pr.die(2, f"hourly: {e}")
+# the peer floor, the hung mark and the batch hour: config/policy.toml [hourly] (playbooks/hourly.md steps 2, 3 and 9)
+FLOOR_GB, HUNG_MIN, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "hung_min", "batch_hour"))
+MERGE_STALE_MIN = _policy["hourly"]["merge_stale_min"]   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]   # the repo the merge job owns, and whose PRs are ours
-MERGE_STALE_MIN = 15 + 40   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 # merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
 LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
 SELF = pr.host_name() or "local"   # the name pickup.log rows and `on` use for this host
@@ -235,11 +236,11 @@ def free_gb(p):
 
 
 def batch_due(r):
-    """The daily preapprove batch: due from 08:00 SGT until a pickup.log row records today's."""
+    """The daily preapprove batch: due from [hourly] batch_hour SGT until a pickup.log row records today's."""
     t = datetime.now(SGT)
     rows = open(os.path.join(r, "pickup.log")).read().splitlines() if os.path.exists(os.path.join(r, "pickup.log")) else []
     done = any(x.startswith(t.date().isoformat()) and x.split("\t")[2:3] in (["preapprove-batch"], ["step9"]) for x in rows)
-    return t.hour >= 8 and not done
+    return t.hour >= BATCH_HOUR and not done
 
 
 def all_facts(full=True):
@@ -352,8 +353,8 @@ def snapshot(linear):
 
 
 def merge_health(line):
-    """(status, the merge job's last-run line with its age). Stale: no run finished within one 15-minute interval plus
-    its 40-minute kill (docs/HOST.md's cron line), so the job is not running."""
+    """(status, the merge job's last-run line with its age). Stale: no run finished within [hourly] merge_stale_min, one
+    cron interval plus its kill (docs/HOST.md's cron line), so the job is not running."""
     if not line:
         return "no last-run", "no tick/last-run on the merge host"
     m = LAST_RUN.fullmatch(line)

@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""policy: the one reader of config/policy.toml, zstack's standing rules, gates and model config.
+"""policy: the one reader of zstack's declarative files in config/: policy.toml (values the code reads: models, slots,
+gates, the patent hold, the pickup), rules.toml (the Hard rules every session runs under) and state.toml (the runtime
+state files on a host, each with its one writer and its readers).
 
-  policy check          parse and validate the file: one line, exit 1 when it is not valid
-  policy get <key>      one value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON
-  policy dump           the whole file as JSON, for readers that are not Python (the subagent extension)
+  policy check          parse and validate all three: one line, exit 1 when one is not valid
+  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON
+  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)
+  policy rules          the Hard rules as the markdown bin/pi-run appends to every session's system prompt
+  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)
 
-Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
-Every key is declared in SCHEMA: an unknown key, a missing one or a wrong type is an error, never a default, so a typo
-cannot drop a rule without a word. The per-PR hold and preapprove rows are not here: they are the merge host's ledger,
-hold-prs.txt (docs/HOST.md, Holds file). Runs on python3 3.9 or newer: 3.11 has tomllib, and older ones get vendor/tomli,
-the pinned upstream tomllib was copied from, because the mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it.
+Python readers load this file as a module and call load(), rules() or state(), which return the validated data or raise
+PolicyError. Every key is declared in a schema: an unknown key, a missing one or a wrong type is an error, never a
+default, so a typo cannot drop a rule without a word. The per-PR hold and preapprove rows are not config: they are the
+merge host's ledger, hold-prs.txt, a state file state.toml names (docs/HOST.md, Holds file). Runs on python3 3.9 or
+newer: 3.11 has tomllib, and older ones get vendor/tomli, the pinned upstream tomllib was copied from, because the mini's
+/usr/bin/python3 is 3.9 and cron or a bare shell runs it.
 """
 import json
 import os
@@ -23,6 +28,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.join(PKG, "vendor"))
     import tomli as tomllib
 PATH = os.path.join(PKG, "config", "policy.toml")
+RULES = os.path.join(PKG, "config", "rules.toml")
+STATE = os.path.join(PKG, "config", "state.toml")
 
 
 class PolicyError(Exception):
@@ -71,6 +78,14 @@ SCHEMA = {
         "private_repo": (repo, "owner/name"),
     },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
+    "hourly": {
+        "floor_gb": (pos_int, "a positive integer"),
+        "hung_min": (pos_int, "a positive integer"),
+        "merge_stale_min": (pos_int, "a positive integer"),
+        "batch_hour": (lambda v: type(v) is int and 0 <= v <= 23, "an hour of the day, 0 to 23"),
+        "file_cap": (pos_int, "a positive integer"),
+        "lume_prune_age_h": (pos_int, "a positive integer"),
+    },
     "pickup": {
         "interval_s": (pos_int, "a positive integer"),
         "deadline_s": (pos_int, "a positive integer"),
@@ -112,14 +127,112 @@ def validate(data):
     return data
 
 
-def load(path=PATH):
+def read(path):
     try:
         with open(path, "rb") as f:
-            return validate(tomllib.load(f))
+            return tomllib.load(f)
     except OSError as e:
         raise PolicyError(f"cannot read {path}: {e.strerror}") from None
     except tomllib.TOMLDecodeError as e:
         raise PolicyError(f"{path} is not TOML: {e}") from None
+
+
+def load(path=PATH):
+    return validate(read(path))
+
+
+def text(v):
+    return isinstance(v, str) and v.strip() != "" and v == v.strip()
+
+
+def keys(where, d, want, optional=()):
+    """d is a table with exactly the keys `want` and any of `optional`."""
+    if not isinstance(d, dict):
+        raise PolicyError(f"{where} must be a table")
+    for k in d.keys() - set(want) - set(optional):
+        raise PolicyError(f"unknown key {where}.{k}")
+    for k in want:
+        if k not in d:
+            raise PolicyError(f"missing {where}.{k}")
+
+
+def validate_rules(data, pol):
+    """rules.toml: an intro and sections of rules with distinct ids. A rule that states a value the code enforces must
+    name policy.toml's copy of it, so the text and the code cannot drift apart: the patent rules name every held word
+    and both repos, and the risk rule names every tier."""
+    keys("rules", data, ("schema", "intro", "section"))
+    if type(data["schema"]) is not int or data["schema"] != 1:
+        raise PolicyError(f"rules: schema must be 1, not {data['schema']!r}")
+    if not text(data["intro"]) or not isinstance(data["section"], list) or not data["section"]:
+        raise PolicyError("rules: intro must be text and section a non-empty list")
+    seen = {}
+    for n, sec in enumerate(data["section"], 1):
+        keys(f"section {n}", sec, ("title", "rule"), ("paragraphs",))
+        if not text(sec["title"]) or type(sec.get("paragraphs", False)) is not bool:
+            raise PolicyError(f"rules: section {n} needs a title, and paragraphs is true or false")
+        if not isinstance(sec["rule"], list) or not sec["rule"]:
+            raise PolicyError(f"rules: section {sec['title']!r} has no rule")
+        for r in sec["rule"]:
+            keys(f"{sec['title']} rule", r, ("id", "text"))
+            if not (isinstance(r["id"], str) and re.fullmatch(r"[a-z]+(-[a-z]+)*", r["id"])) or not text(r["text"]) or "\n" in r["text"]:
+                raise PolicyError(f"rules: {sec['title']} rule {r.get('id')!r} needs a kebab-case id and one line of text")
+            if r["id"] in seen:
+                raise PolicyError(f"rules: two rules have the id {r['id']}")
+            seen[r["id"]] = r["text"]
+    need = {"patent-scope": [w for w in pol["patent"]["held_words"]],
+            "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['patent']['public_repo']}`", f"`{pol['patent']['private_repo']}`"],
+            "merge-risk": ["|".join(pol["merge"]["tiers"])]}
+    for rid, words in need.items():
+        if rid not in seen:
+            raise PolicyError(f"rules: no rule {rid}, which states config/policy.toml's values")
+        if miss := [w for w in words if w.lower() not in seen[rid].lower()]:
+            raise PolicyError(f"rules: {rid} does not name {', '.join(miss)} from config/policy.toml")
+    return data
+
+
+def rules(path=RULES):
+    return validate_rules(read(path), load())
+
+
+def render(data, ids=()):
+    """The Hard rules as markdown: the whole file, or only the rules `ids` names, in the order given."""
+    if ids:
+        by = {r["id"]: r["text"] for s in data["section"] for r in s["rule"]}
+        if miss := [i for i in ids if i not in by]:
+            raise PolicyError(f"no rule {', '.join(miss)} in {RULES}")
+        return "".join(f"- {by[i]}\n" for i in ids)
+    out = ["## Hard rules", "", data["intro"]]
+    for s in data["section"]:
+        out += ["", f"### {s['title']}", ""]
+        out += ("\n\n" if s.get("paragraphs") else "\n").join(
+            r["text"] if s.get("paragraphs") else f"- {r['text']}" for r in s["rule"]).split("\n")
+    return "\n".join(out) + "\n"
+
+
+FORMATS = ("json", "toml", "rows", "lines", "tsv", "mark", "lock")
+
+
+def validate_state(data):
+    """state.toml: one [file.<name>] per runtime state file, with its path under $ONIGIRI_ROOT, its format, the one module
+    that writes it and the modules that read it (tests/test_state_files.py holds the code to this)."""
+    keys("state", data, ("schema", "file"))
+    if type(data["schema"]) is not int or data["schema"] != 1:
+        raise PolicyError(f"state: schema must be 1, not {data['schema']!r}")
+    if not isinstance(data["file"], dict) or not data["file"]:
+        raise PolicyError("state: [file] is missing or empty")
+    for name, f in data["file"].items():
+        keys(f"file.{name}", f, ("path", "host", "format", "writer", "readers", "schema"))
+        if not text(f["path"]) or f["path"].startswith("/") or ".." in f["path"].split("/"):
+            raise PolicyError(f"state: file.{name}.path must be a path under $ONIGIRI_ROOT")
+        if f["format"] not in FORMATS:
+            raise PolicyError(f"state: file.{name}.format must be one of {', '.join(FORMATS)}")
+        if not text(f["writer"]) or not names(f["readers"]) or not text(f["host"]) or not text(f["schema"]):
+            raise PolicyError(f"state: file.{name} needs a host, a writer, a list of readers and a schema line")
+    return data
+
+
+def state(path=STATE):
+    return validate_state(read(path))
 
 
 def get(data, key):
@@ -134,8 +247,10 @@ def get(data, key):
 def main(argv):
     try:
         if argv == ["check"]:
-            load()
-            return print(f"policy: {PATH} is valid") or 0
+            load(), rules(), state()
+            return print(f"policy: {os.path.dirname(PATH)}/{{policy,rules,state}}.toml are valid") or 0
+        if argv[:1] == ["rules"]:
+            return print(render(rules(), argv[1:]), end="") or 0
         if argv == ["dump"]:
             return print(json.dumps(load())) or 0
         if len(argv) == 2 and argv[0] == "get":
