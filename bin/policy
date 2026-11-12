@@ -8,15 +8,20 @@
 Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
 Every key is declared in SCHEMA: an unknown key, a missing one or a wrong type is an error, never a default, so a typo
 cannot drop a rule without a word. The per-PR hold and preapprove rows are not here: they are the merge host's ledger,
-hold-prs.txt (docs/HOST.md, Holds file). Needs python3 3.11 or newer (tomllib).
+hold-prs.txt (docs/HOST.md, Holds file). Runs on python3 3.9 or newer: 3.11 has tomllib, and older ones get vendor/tomli,
+the pinned upstream tomllib was copied from, because the mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it.
 """
 import json
 import os
 import re
 import sys
-import tomllib
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.join(PKG, "vendor"))
+    import tomli as tomllib
 PATH = os.path.join(PKG, "config", "policy.toml")
 
 
@@ -59,6 +64,12 @@ SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
     "slots": {"auto": (pos_int, "a positive integer"), "hand": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
+    "patent": {
+        "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
+        "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
+        "public_repo": (repo, "owner/name"),
+        "private_repo": (repo, "owner/name"),
+    },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
     "merge": {
         "repo": (repo, "owner/name"),
@@ -86,6 +97,8 @@ def validate(data):
                 raise PolicyError(f"missing {name}.{k}")
             if not check(sec[k]):
                 raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
+    if data["patent"]["public_repo"].lower() == data["patent"]["private_repo"].lower():   # GitHub names ignore case
+        raise PolicyError("patent.private_repo must differ from patent.public_repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
     return data

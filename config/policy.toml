@@ -29,6 +29,22 @@ hand = 5
 [ci]
 fix_attempts = 3
 
+# The patent hold at publish time (hosts/vm/patent_push.py, cua's pre-push hook; Hard rules, Patent hold; Zane 27 Oct
+# 14:12 SGT, t747s4293, corrected t748u). A change whose diff touches one of `held_words` is never pushed to
+# `public_repo`; it goes to `private_repo`. A word counts when no letter or digit comes before it, in any case, so
+# "repairing" passes and "src/pairing.rs", "ws_pairing" and "KeyVault" hit (Zane 27 Oct t753u). Generated lockfiles are
+# skipped, path and lines (a crate named teleport-e2e is not patent work). Never reword or loosen without Zane's
+# explicit ok.
+[patent]
+held_words = ["teleport", "keyvault", "pairing"]
+skip_lockfiles = [
+  "Cargo.lock", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock",
+  "pdm.lock", "Pipfile.lock", "bun.lock", "bun.lockb", "composer.lock", "Gemfile.lock", "go.sum", "flake.lock",
+  "Package.resolved", "packages.lock.json", "gradle.lockfile", "pubspec.lock", "mix.lock",
+]
+public_repo = "trycua/cua"
+private_repo = "trycua/cua-staging"
+
 # Who "we" are: the login whose PRs the merge job merges and the hourly pass counts as ours.
 [people]
 me = "injaneity"

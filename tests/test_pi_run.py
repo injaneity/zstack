@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -213,7 +214,7 @@ class Launcher(unittest.TestCase):
         (self.t / "bin" / "pi").write_text(FAKE_PI)
         (self.t / "bin" / "pi").chmod(0o755)
         (self.t / "py").mkdir()
-        (self.t / "py" / "python3").symlink_to(sys.executable)   # 3.11 or newer for bin/policy; the mini's /usr/bin one is 3.9
+        (self.t / "py" / "python3").symlink_to(sys.executable)   # the interpreter the suite runs under, so a 3.9 run tests the mini's /usr/bin one
         (self.t / "bin" / "python3").symlink_to(sys.executable)
         (self.t / "brief.md").write_text("task\n")
         self.env = {"PATH": f"{self.t}/bin:/usr/bin:/bin", "HOME": str(self.t), "T": str(self.t), "ZSTACK_ENSURED": "1",
@@ -300,6 +301,7 @@ class Launcher(unittest.TestCase):
         for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
+        shutil.copytree(PKG / "vendor", pkg / "vendor")   # bin/policy before python3 3.11
         for text in (None, "  \n"):
             if text is not None:
                 (pkg / "skills/onigiri-mode/hard-rules.md").write_text(text)

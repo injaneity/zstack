@@ -45,7 +45,7 @@ class Hourly(unittest.TestCase):
         for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH)):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
-        (t / "bin" / "python3").symlink_to(sys.executable)   # 3.11 or newer for bin/policy; the mini's /usr/bin one is 3.9
+        (t / "bin" / "python3").symlink_to(sys.executable)   # the interpreter the suite runs under, so a 3.9 run tests the mini's /usr/bin one
         (t / "ours.json").write_text(json.dumps([{"number": 1, "headRefOid": "a" * 40}]))
         (t / "others.json").write_text(json.dumps([{"number": 2, "author": {"login": "f-trycua"}},
                                                    {"number": 3, "author": {"login": "app/dependabot", "is_bot": True}}]))
@@ -330,7 +330,7 @@ class Hourly(unittest.TestCase):
         shell line there, like the VM's ssh wrapper."""
         home = self.t / f"{name}-home"
         pkg = home / ".pi/agent/git/github.com/injaneity/zstack"
-        for sub in ("bin", "hosts", "config", "skills/onigiri-mode"):
+        for sub in ("bin", "hosts", "config", "vendor", "skills/onigiri-mode"):
             shutil.copytree(PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("playbooks", "test-*"))
         (pkg / "hosts" / "check-parity").write_text("#!/bin/bash\necho ok\n")
         (pkg / "hosts" / name).mkdir()
