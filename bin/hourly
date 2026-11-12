@@ -15,9 +15,9 @@
                                   a red PR's) in their own session once resume_at has passed (PI_RUN_DRY=1: plan only)
   hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there
   hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped
-  hourly facts [--runs] | recv <id> [--drain|--counted]  what a peer is asked for over `on`: this host's facts as JSON; a brief
-                                  on stdin (--drain: the queue drain's start, the only one that may resume a 429'd run;
-                                  --counted: `hourly launch` counted its pool already)
+  hourly facts [--runs] | recv <id> [--drain]  what a peer is asked for over `on`: this host's facts as JSON; a brief on
+                                  stdin (--drain: the queue drain's start, the only one that may resume a 429'd run;
+                                  PI_RUN_COUNTED=1: `hourly launch` counted its pool already)
 
 The host running it is $ONIGIRI_HOST, else ~/.config/onigiri/host (hosts/<name>/host.sh, as bin/pi-run); its peers are
 $ONIGIRI_PEERS, `name=<command>` words where <command> runs one shell line on the peer (the mini's is the VM's ssh
@@ -86,13 +86,15 @@ def run(cmd, **kw):
         return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: not found on PATH (set it in the host file)\n")
 
 
-def on(host, args, stdin=None):
-    """Run a package file on `host`: here when it is this host, else through the peer's command."""
+def on(host, args, stdin=None, env=None):
+    """Run a package file on `host`: here when it is this host, else through the peer's command. `env` adds variables."""
+    env = env or {}
     if host == SELF:
-        return run([os.path.join(PKG, args[0]), *args[1:]], input=stdin)
+        return run([os.path.join(PKG, args[0]), *args[1:]], input=stdin, env={**os.environ, **env})
     if host not in peers():
         pr.die(2, f"no host {host}: this is {SELF}, peers {' '.join(peers()) or 'none'}")
-    line = f"ONIGIRI_HOST={shlex.quote(host)} ~/{PEER_PKG}/{shlex.quote(args[0])} " + " ".join(map(shlex.quote, args[1:]))
+    line = " ".join(f"{k}={shlex.quote(v)}" for k, v in {"ONIGIRI_HOST": host, **env}.items()) + \
+        f" ~/{PEER_PKG}/{shlex.quote(args[0])} " + " ".join(map(shlex.quote, args[1:]))
     return run([*shlex.split(peers()[host]), line], input=stdin)
 
 
@@ -135,10 +137,13 @@ def facts(full=True):
 
 def pool(state, run, brief):
     """The pool a run counts in: its run.json tag. A running run with no tag started before the pools and counts as hand
-    (Zane's slot split, 12 Nov); a queued one without a tag gets its pool from its brief, as its start will."""
+    (Zane's slot split, 12 Nov), and so does its queued continuation; a fresh queued one without a tag gets its pool from
+    its brief, as its start will."""
     if run.get("pool") in pr.POOLS:
         return run["pool"]
-    return "hand" if state == "running" else pr.pool_of(brief, run.get("role") or "coding")
+    if state == "running" or pr.continuation(run):   # the same attempt goes on, and bin/pi-run resumes it as hand
+        return "hand"
+    return pr.pool_of(brief, run.get("role") or "coding")
 
 
 def pushed(review):
@@ -394,7 +399,9 @@ def launch(sid, host, reason, send=True, drain=False):
             print(f"wait {host} {sid}: {why}")
             log(host, "wait", sid, f"{why}; {reason}")
             return 3
-    p = on(host, ["bin/hourly", "recv", sid, "--drain" if drain else "--counted"], stdin=open(here).read() if send else "")
+    # PI_RUN_COUNTED, not a flag: a peer whose package predates the pools takes the same recv line and ignores it
+    p = on(host, ["bin/hourly", "recv", sid, *(["--drain"] if drain else [])], stdin=open(here).read() if send else "",
+           env={} if drain else {"PI_RUN_COUNTED": "1"})
     lock is None or os.close(lock)
     sys.stdout.write(p.stdout)
     sys.stderr.write(p.stderr)
@@ -499,7 +506,7 @@ def main(argv):
         return launch(rest[0], rest[1], " ".join(rest[2:]))
     if cmd == "queue" and not rest:   # each launch's bin/pi-run moves its host's package to main first
         return drain()
-    if cmd == "recv" and len(rest) in (1, 2) and pr.ID.fullmatch(rest[0]) and rest[1:] in ([], ["--drain"], ["--counted"]):
+    if cmd == "recv" and len(rest) in (1, 2) and pr.ID.fullmatch(rest[0]) and rest[1:] in ([], ["--drain"]):
         d = os.path.join(root(), "review", rest[0])
         brief, text = os.path.join(d, "brief.md"), sys.stdin.read()
         if text and os.path.exists(brief) and open(brief).read() != text:
@@ -513,8 +520,7 @@ def main(argv):
         text = open(brief).read()
         queued = (pr.read_json(os.path.join(d, "run.json")) or {}).get("role")
         role = next((x.split(":", 1)[1].strip() for x in text.splitlines() if x.startswith("role:")), queued or "coding")
-        env = {k: v for k, v in os.environ.items() if k not in ("PI_RUN_DRAIN", "PI_RUN_COUNTED")}
-        env.update({"--drain": {"PI_RUN_DRAIN": "1"}, "--counted": {"PI_RUN_COUNTED": "1"}}.get((rest[1:] or [""])[0], {}))
+        env = {**os.environ, "PI_RUN_DRAIN": "1"} if rest[1:] == ["--drain"] else {k: v for k, v in os.environ.items() if k != "PI_RUN_DRAIN"}
         os.execve(os.path.join(PKG, "bin", "pi-run"), ["pi-run", rest[0], role, brief], env)
     if cmd == "report" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):
         d = os.path.join(root(), "review", rest[0])

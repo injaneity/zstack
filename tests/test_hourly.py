@@ -408,6 +408,16 @@ class Hourly(unittest.TestCase):
         self.assertIn("started new attempt 1", self.hourly("queue"))
         self.assertIn("hand 5/5", self.hourly())
 
+    def test_an_untagged_continuation_counts_as_hand_as_its_resume_will(self):
+        self.queued(self.t / "root", "old-auto", 900, "auto", resume_in=-60)   # a 429'd auto run from before the pools
+        j = self.review("old-auto") / "run.json"
+        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
+        self.queued(self.t / "root", "new-auto", 100, "auto")   # a fresh untagged queued run takes its brief's pool
+        j = self.review("new-auto") / "run.json"
+        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
+        runs = json.loads(self.hourly("facts"))["runs"]
+        self.assertEqual((runs["old-auto"]["pool"], runs["new-auto"]["pool"]), ("hand", "auto"))
+
     def test_hourly_launch_waits_while_its_pool_is_full_or_a_host_is_unknown(self):
         (self.t / "hang").touch()
         for i in range(3):
