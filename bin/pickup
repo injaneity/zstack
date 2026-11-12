@@ -117,8 +117,10 @@ def open_prs(errors):
 
 
 def launch_host(hosts, needs=None):
-    """playbooks/hourly.md step 3: a peer only at main with the floor free, else this host; with `needs`, that host or none."""
-    ok = [h for h, f in hosts.items() if "error" not in f and (h == hourly.SELF or (f.get("at_main") and f.get("free_gb", 0) >= hourly.FLOOR_GB))]
+    """playbooks/hourly.md step 3: a peer only at main with the floor free, else this host; with `needs`, that host or none.
+    A host with an auto pause (bin/hourly paused()) takes no pick: every pick is an auto run."""
+    ok = [h for h, f in hosts.items() if "error" not in f and not hourly.paused(hosts, h)
+          and (h == hourly.SELF or (f.get("at_main") and f.get("free_gb", 0) >= hourly.FLOOR_GB))]
     if needs:
         return needs if needs in ok else None
     peers = [h for h in ok if h != hourly.SELF]

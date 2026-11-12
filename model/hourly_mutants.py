@@ -63,6 +63,8 @@ M = [
      [("HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~HandWaits(onVm \\/ blind)",
        "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ HandN >= Hand))")],
      "HandCap"),
+    ("pick-ignores-pause", "a pick goes to the peer at main with the floor free though it has an auto pause",
+     [("/\\ free > 0 /\\ (there => ~blind /\\ ~pause)", "/\\ free > 0 /\\ (there => ~blind)")], "NoAutoOnPausedPeer"),
 ]
 
 

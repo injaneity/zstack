@@ -39,5 +39,6 @@ const steps: Record<string, string | null> = {
   HandStarts: "the chat starts a hand run, or queues it when the hand pool is full",
   ChatStartsNow: "the chat starts a quick-check run (in no pool)",
   PeerFlips: "the peer stops or starts answering",
+  PauseFlips: "an auto pause on the peer is set or lifts",
 };
 export const step = (action: string) => (action in steps ? steps[action] : action);
