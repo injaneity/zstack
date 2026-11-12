@@ -303,7 +303,7 @@ def report(s, fp, last):
     print(f"launch host: {vm[0] if vm else SELF} (a peer only at main with {FLOOR_GB}G free)")
     for e in s["errors"]:
         print(f"error: {e}: the PR lists are unknown this pass")
-    todo = f"{len(s['linear'])}: {','.join(s['linear'])}" if s["linear"] else "none passed"
+    todo = f"{len(s['linear'])}: {','.join(s['linear']) or 'none passed'}"
     print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {todo}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
     if s.get("merge"):
