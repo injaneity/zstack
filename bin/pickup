@@ -2,8 +2,7 @@
 """pickup: the scheduled pickup pass, on this host, with no chat in the loop. The model is model/Pickup.tla.
 
   pickup          one pass: collect, drain the queue, pick from GitHub, and wake the chat only when there is something new
-  pickup --dry    the same reads, printed as a plan: nothing collected, launched, logged or sent; no lock, and only
-                  pickup/last-dry.json is written
+  pickup --dry    the same reads, printed as a plan: nothing collected, launched, logged, written or sent, and no lock
 
 hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/policy.toml [pickup] interval_s). A pass:
 
@@ -36,9 +35,11 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import redirect_stdout
 
@@ -220,10 +221,10 @@ def collect(hosts, dry, state, errors):
                 continue
             res = {"id": sid, "host": h, "rc": r.get("rc"), "state": r["state"], "author": state["authors"].get(sid),
                    **sections(rep.stdout)}
-            if dry:
+            state["unsent"] = [x for x in state["unsent"] if (x["id"], x["host"]) != (sid, h)] + [res]   # a pass killed here redoes it
+            if dry:   # in this pass's outbox only, so the plan's wake is the real pass's
                 print(f"would collect {h} {sid}: rc={r.get('rc')}, prs {len(res['prs'])}")
                 continue
-            state["unsent"] = [x for x in state["unsent"] if (x["id"], x["host"]) != (sid, h)] + [res]   # a pass killed here redoes it
             state["authors"].pop(sid, None)
             write(state_path(), state)
             p = hourly.on(h, ["bin/pi-run", "collect", sid])
@@ -316,7 +317,7 @@ def run_pass(dry):
         else:
             errors.append(f"launch {c['id']} on {there} failed")
             break
-    return report(hosts, waits, lines, errors)
+    return {**report(hosts, waits, lines, errors), **({"unsent": state["unsent"]} if dry else {})}
 
 
 def report(hosts, waits, lines, errors):
@@ -419,7 +420,7 @@ def main(argv):
     dry = argv == ["--dry"]
     pr.on_main(argv, __file__)
     os.environ["ZSTACK_ENSURED"] = "1"   # the package is at main for this pass: the launches it starts here do not move it
-    d = os.path.join(hourly.root(), "pickup")
+    d = os.path.join(hourly.root(), "pickup") if not dry else tempfile.mkdtemp(prefix="pickup-dry-")
     os.makedirs(d, exist_ok=True)
     if not dry:
         lock = os.open(os.path.join(d, "pickup.lock"), os.O_RDWR | os.O_CREAT, 0o644)
@@ -438,7 +439,7 @@ def main(argv):
         os.setpgid(0, 0)
         try:
             out = run_pass(dry)
-            write(out_path if not dry else os.path.join(d, "last-dry.json"), out)
+            write(out_path, out)
             sys.stdout.flush()
             os._exit(0)
         except BaseException:   # noqa: BLE001  the parent reports the pass as failed with this traceback in the log
@@ -474,11 +475,15 @@ def main(argv):
     out = None
     if not failed:
         try:
-            out = json.load(open(out_path if not dry else os.path.join(d, "last-dry.json")))
+            out = json.load(open(out_path))
         except (OSError, ValueError) as e:
             failed = f"the pass left no report: {e}"
     state = read_state()
+    if dry and out:   # the dry child's outbox, with the results it would have collected
+        state["unsent"] = out.pop("unsent", state["unsent"])
     status = deliver(state, out, failed, dry, ts)
+    if dry:
+        shutil.rmtree(d, ignore_errors=True)
     if not dry:
         write(state_path(), state)
         hourly.log(hourly.SELF, "pass-end", "-", f"{'failed: ' + failed + '; ' if failed else ''}wake: {status or 'none, nothing new'}")

@@ -284,14 +284,22 @@ class Pickup(unittest.TestCase):
         self.assertEqual([r[1] for r in self.rows("launch")], ["cua-10"])
 
     def test_dry_prints_the_plan_and_changes_nothing(self):
+        d = self.root / "review" / "chat-job"   # an exited run: the plan's wake carries its result, and it stays exited
+        d.mkdir()
+        (d / "brief.md").write_text("task\nrole: coding\nsource: chat\n")
+        self.assertEqual(subprocess.run([str(self.bin / "pi-run"), "chat-job", "coding", str(d / "brief.md")], env=self.env,
+                                        capture_output=True).returncode, 0)
+        self.assertTrue(self.wait("chat-job", "exited"))
+        (d / "report.md").write_text("Opened https://github.com/trycua/cua/pull/7415.\n")
+        before = sorted(str(p) for p in self.root.rglob("*"))
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
         self.peer(waits=["cua#7374 0b660ff71 wait who=zane: declared deep: needs Zane (no preapprove row)"], at_main=True)
         out = self.pickup("--dry")
         self.assertIn("would launch vm cua-10: issue https://github.com/trycua/cua/issues/10", out)
-        self.assertIn("would send done: pickup needs-Zane 1 (1 new)", out)
-        self.assertFalse((self.root / "pickup.log").exists())
-        self.assertFalse((self.root / "review" / "cua-10").exists())
-        self.assertFalse((self.root / "pickup" / "state.json").exists())
+        self.assertIn("would collect local chat-job: rc=0, prs 1", out)
+        self.assertIn("would send done: pickup needs-Zane 1; dumpling results 1 (1 new)", out)
+        self.assertEqual(sorted(str(p) for p in self.root.rglob("*")), before)   # not one file made, removed or renamed
+        self.assertEqual(self.state("chat-job"), "exited")
         self.assertEqual(self.wakes(), [])
 
     def test_the_peer_at_main_with_disk_free_is_the_launch_host_and_a_linux_item_goes_there(self):
@@ -308,6 +316,18 @@ class Pickup(unittest.TestCase):
         self.pickup()
         self.assertEqual(sorted(r[1] for r in self.rows("launch")), ["cua-6975-unstick-f454fce", "cua-7229-unstick-4ef9df0"])
         self.assertIn("merge conflict", (self.root / "review" / "cua-6975-unstick-f454fce" / "brief.md").read_text())
+
+    def test_the_schedule_is_a_plain_launchd_timer_at_the_policy_interval(self):
+        r = subprocess.run([str(self.pkg / "hosts" / "mini" / "install-pickup.sh"), "print"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("<key>StartInterval</key><integer>5400</integer>", r.stdout)   # config/policy.toml [pickup] interval_s
+        self.assertIn(f"<string>{self.pkg}/bin/pickup</string>", r.stdout)
+        for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):   # never a supervisor or a respawn
+            self.assertNotIn(banned, r.stdout)
+        if shutil.which("plutil"):
+            (self.t / "p.plist").write_text(r.stdout)
+            self.assertEqual(subprocess.run(["plutil", "-lint", str(self.t / "p.plist")], capture_output=True).returncode, 0)
 
 
 if __name__ == "__main__":
