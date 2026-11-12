@@ -227,6 +227,12 @@ def slots(hosts):
     return len(rs), sum(r["auto"] for r in rs)
 
 
+def auto_free(hosts):
+    """Auto slots an hourly pick may take now: the auto cap less auto runs, never past the total's free slots."""
+    running, auto = slots(hosts)
+    return max(0, min(TOTAL - running, AUTO - auto))
+
+
 def snapshot(linear):
     hosts = all_facts()
     def gh(*a):
@@ -293,11 +299,11 @@ def report(s, fp, last):
             extra = " ".join(f"{k}={r[k]}" for k in ("rc", "since", "resume_at", "idle_min") if k in r and r[k] != "None")
             print(f"  {r['state']:<8} {sid} {'auto ' if r['auto'] else ''}{extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}")
     vm = [h for h, f in s["hosts"].items() if h != SELF and f.get("at_main") and f.get("free_gb", 0) >= FLOOR_GB]
-    print(f"slots: running {running}/{TOTAL}, auto {auto}/{AUTO}: free {max(0, TOTAL - running)}, auto {max(0, min(TOTAL - running, AUTO - auto))}")
+    print(f"slots: running {running}/{TOTAL}, auto {auto}/{AUTO}: free {max(0, TOTAL - running)}, auto {auto_free(s['hosts'])}")
     print(f"launch host: {vm[0] if vm else SELF} (a peer only at main with {FLOOR_GB}G free)")
     for e in s["errors"]:
         print(f"error: {e}: the PR lists are unknown this pass")
-    print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {','.join(s['linear']) or 'none passed'}")
+    print(f"prs: ours {len(s['ours'])} open, others {len(s['others'])} open; linear todo {len(s['linear'])}: {','.join(s['linear']) or 'none passed'}")
     print(f"preapprove batch: {'due' if s['batch_due'] else 'not due'}")
     if s.get("merge"):
         print(f"merge job: {s['merge'][0]}: {s['merge'][1]}")
@@ -417,9 +423,13 @@ def main(argv):
         if cmd == "done":
             write(fpath, {"ts": now(), "fp": fp})
             return print(f"hourly done: fingerprint {fp} stored") or 0
-        acts = s["batch_due"] or s["errors"] or (s["merge"] or ["ok"])[0] != "ok" or \
+        free = auto_free(s["hosts"])
+        acts = s["batch_due"] or s["errors"] or (s["merge"] or ["ok"])[0] != "ok" or (free and s["linear"]) or \
             any("error" in f or any(due(r, h) for r in f.get("runs", {}).values()) for h, f in s["hosts"].items())
-        if fp == last.get("fp") and not acts:
+        skip = fp == last.get("fp") and not acts
+        # every pass, skipped or not, leaves its candidate count, so a pass that picked nothing still shows in pickup.log
+        log(SELF, "pass", "-", f"candidates {len(s['linear'])} todo, auto free {free}{', skip: nothing changed' if skip else ''}")
+        if skip:
             return print(f"skip: nothing changed since {last['ts']} (fingerprint {fp})") or 0
         return report(s, fp, last) or 0
     if cmd == "facts":
