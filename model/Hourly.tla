@@ -18,6 +18,9 @@
 \*    A running run is never stopped to make room. The quick-check lane is in neither pool: it always starts, and a launch
 \*    waits only when its own pool, counted without quick runs, is full, or a host's runs are unknown.
 \*  - A held or Zane-waiting Todo is never picked.
+\*  - No pick starts on a peer with an auto pause (Zane 12 Nov 19:01 SGT, "yeah pause it": no new auto runs on the VM
+\*    while a bench runs there): bin/hourly paused(), from $ONIGIRI_ROOT/auto-pause. The pause is set or lifts (the run it
+\*    waits on ends) at any time; a pick then launches here instead. Hand runs never pause.
 \*  - Every pass writes a row, and every pass that starts ends.
 \*
 \* "Free" is what the pass can know: bin/hourly auto_free() over the runs it can read. A peer it cannot reach has unknown
@@ -48,6 +51,8 @@ VARIABLES
   legacy,   \* running runs with no pool tag, started before the pools: counted as hand
   quick,    \* running quick-check runs (`source: quick`, role research): in no pool
   blind,    \* the peer is unreachable: its runs are unknown this pass
+  pause,    \* the peer has an auto pause: no new auto run may start there
+  strayed,  \* ghost: an auto run started on the peer while it was paused
   qhand,    \* queued runs with a hand brief, waiting for the drain
   qauto,    \* queued runs with an auto brief (`new-brief ... auto`)
   ended,    \* a run exited and is not yet collected
@@ -58,8 +63,8 @@ VARIABLES
   pc,       \* "idle" between passes; "skipped"; "collect" "drain" "pick" "end" inside a pass
   rows      \* this pass's pickup.log rows: <<item, action or rule>>
 
-vars == <<todo, blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, dirty, fair, free, pc, rows>>
-World == <<todo, blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, fair>>
+vars == <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, dirty, fair, free, pc, rows>>
+World == <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, fair>>
 
 \* bin/hourly slots(): each pool counted apart over every run it can read; quick runs in none.
 SeenAuto == auto + (IF blind THEN 0 ELSE peer)
@@ -79,7 +84,8 @@ CouldPick == Free > 0 /\ \E i \in Issues : Eligible(i)
 Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 
 Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
-  /\ auto = 0 /\ peer = 0 /\ hand = 0 /\ legacy \in {0, Legacy} /\ quick = 0 /\ blind = FALSE /\ qhand = 0 /\ qauto = 0
+  /\ auto = 0 /\ peer = 0 /\ hand = 0 /\ legacy \in {0, Legacy} /\ quick = 0 /\ blind = FALSE /\ pause \in BOOLEAN
+  /\ strayed = FALSE /\ qhand = 0 /\ qauto = 0
   /\ ended = FALSE /\ dirty = TRUE /\ fair = TRUE /\ free = 0 /\ pc = "idle" /\ rows = {}
 
 \* ---------------- the world moves ----------------
@@ -88,12 +94,12 @@ Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
 \* The pass reads them once, at step 0, so a change inside a pass is the next pass's.
 Changes(i, b) == pc = "idle" /\ blocker[i] # b /\ blocker' = [blocker EXCEPT ![i] = b]
   /\ dirty' = (dirty \/ blocker[i] \in Seen \/ b \in Seen)
-  /\ UNCHANGED <<todo, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, fair, free, pc, rows>>
 \* The chat files an issue into Todo, or one leaves Todo (Done, Canceled, moved by hand).
 Files(i) == pc = "idle" /\ i \notin todo /\ todo' = todo \cup {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, fair, free, pc, rows>>
 Moves(i) == pc = "idle" /\ i \in todo /\ todo' = todo \ {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, fair, free, pc, rows>>
 \* bin/hourly queue reads every host's runs and the queue once, under slots.lock, then counts its own launches. No pool
 \* launch starts while it holds the lock, and a run that ends or is queued meanwhile is the next pass's, as step 5 goes
 \* by the drain's `queue:` line. So the world moves at any time except during the drain.
@@ -104,13 +110,13 @@ RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
      \/ hand > 0 /\ hand' = hand - 1 /\ UNCHANGED <<auto, peer, legacy, quick>>
      \/ legacy > 0 /\ legacy' = legacy - 1 /\ UNCHANGED <<auto, peer, hand, quick>>
      \/ quick > 0 /\ quick' = quick - 1 /\ UNCHANGED <<auto, peer, hand, legacy>>
-  /\ UNCHANGED <<todo, blocker, blind, qhand, qauto, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, blind, pause, strayed, qhand, qauto, fair, free, pc, rows>>
 \* The chat queues a run (bin/queue): a hand brief, or an auto one. MaxQueued bounds the queue for TLC.
 ChatQueues == pc # "drain" /\ qhand + qauto < MaxQueued
   /\ \/ qhand' = qhand + 1 /\ qauto' = qauto
      \/ qauto' = qauto + 1 /\ qhand' = qhand
   /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, ended, fair, free, pc, rows>>
 \* The chat's `pi-run <id> <role> <brief>` for a hand brief, on the mini (`onVm` false) or the VM. It counts the pools
 \* under slots.lock: it starts when the hand pool has room, else it is queued, and pi-run says why. The VM cannot read
 \* the mini, so a launch there always queues. Untagged runs count, so while they fill the pool every hand launch queues.
@@ -119,14 +125,21 @@ HandStarts(onVm) == pc # "drain"
      \/ HandWaits(onVm \/ blind) /\ qhand + qauto < MaxQueued /\ qhand' = qhand + 1 /\ UNCHANGED hand
         /\ WaitIsFair(onVm \/ blind, HandN >= Hand)
   /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, legacy, quick, blind, qauto, ended, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, legacy, quick, blind, pause, strayed, qauto, ended, free, pc, rows>>
 \* The chat starts a quick-check run: in no pool, so it never waits.
 ChatStartsNow == pc # "drain" /\ quick < MaxQuick /\ quick' = quick + 1 /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, blind, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, blind, pause, strayed, qhand, qauto, ended, fair, free, pc, rows>>
 \* The peer stops or starts answering (`bin/hourly facts` over ssh): an error in the fingerprint. Step 0 and the drain
 \* each read it, so it can also change between them.
 PeerFlips == pc \in {"idle", "collect"} /\ blind' = ~blind /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<pause, strayed, todo, blocker, auto, peer, hand, legacy, quick, qhand, qauto, ended, fair, free, pc, rows>>
+\* An auto pause on the peer is set ($ONIGIRI_ROOT/auto-pause gains a row) or lifts (the row goes, or the run it waits
+\* on ends). The picks and the drain read it: `bin/hourly launch` reads it again before each pick starts, and the drain
+\* before each queued run. A row written while a launch is already deciding applies from the next launch decision, so
+\* the model flips it between passes and between picks, and a drain step reads it atomically. Not in the fingerprint: a pause changes
+\* where a pick goes, not whether there is one.
+PauseFlips == pc \in {"idle", "pick"} /\ pause' = ~pause
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, strayed, qhand, qauto, ended, dirty, fair, free, pc, rows>>
 
 \* ---------------- the pass ----------------
 \* Step 0, `bin/hourly --linear <ids>`: the fingerprint skip. A pass never skips with an ended or queued run, an
@@ -139,27 +152,31 @@ PassStarts == pc = "idle"
 \* Step 1: collect every ended run, one `collect` row each.
 Collects == pc = "collect" /\ pc' = "drain" /\ ended' = FALSE
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, dirty, fair, free>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, dirty, fair, free>>
 \* Step 4, `bin/hourly queue`: every queued run in turn, each started while its own pool has room and every host's runs
-\* are known; one that cannot start waits, and the next is tried.
+\* are known; one that cannot start waits, and the next is tried. A queued auto run may be in either host's queue
+\* (`there`: the peer's), and one in a paused peer's queue waits.
 CanDrainHand == qhand > 0 /\ ~HandWaits(blind)
-CanDrainAuto == qauto > 0 /\ ~AutoWaits(blind)
+CanDrainAuto(there) == qauto > 0 /\ ~AutoWaits(blind) /\ (there => ~pause)
 Drains == pc = "drain" /\ rows' = rows \cup {<<"run", "launch">>}
-  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto>>
-     \/ CanDrainAuto /\ qauto' = qauto - 1 /\ auto' = auto + 1 /\ UNCHANGED <<qhand, hand>>
-  /\ UNCHANGED <<todo, blocker, peer, legacy, quick, blind, ended, dirty, fair, free, pc>>
+  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto, peer, strayed>>
+     \/ \E there \in BOOLEAN : CanDrainAuto(there) /\ qauto' = qauto - 1 /\ UNCHANGED <<qhand, hand>>
+        /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
+        /\ strayed' = (strayed \/ (there /\ pause))
+  /\ UNCHANGED <<todo, blocker, legacy, quick, blind, pause, ended, dirty, fair, free, pc>>
 \* The queue ends with its `queue: ... auto free <n>` line, which step 5 goes by. A run left queued waited fairly only
 \* when its pool is full or a host is unknown.
-DrainDone == pc = "drain" /\ ~CanDrainHand /\ ~CanDrainAuto /\ pc' = "pick" /\ free' = Free
+DrainDone == pc = "drain" /\ ~CanDrainHand /\ ~CanDrainAuto(FALSE) /\ pc' = "pick" /\ free' = Free
   /\ rows' = (IF qhand + qauto > 0 THEN rows \cup {<<"run", "wait">>} ELSE rows)
   /\ fair' = (fair /\ (qhand > 0 => (blind \/ HandN >= Hand)) /\ (qauto > 0 => (blind \/ auto + peer >= Auto)))
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, qhand, qauto, ended, dirty>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, legacy, quick, blind, pause, strayed, qhand, qauto, ended, dirty>>
 \* Step 5: while auto slots are free, take each Todo: `bin/hourly launch` it here or on the peer, or skip it with the
 \* one rule that holds for it, while the slots: line shows an auto slot free.
-Picks(i, there) == pc = "pick" /\ Eligible(i) /\ free > 0 /\ (there => ~blind)
+Picks(i, there) == pc = "pick" /\ Eligible(i) /\ free > 0 /\ (there => ~blind /\ ~pause)
+  /\ strayed' = (strayed \/ (there /\ pause))
   /\ todo' = todo \ {i} /\ rows' = rows \cup {<<i, "launch">>} /\ free' = free - 1
   /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
-  /\ UNCHANGED <<blocker, hand, legacy, quick, blind, qhand, qauto, ended, dirty, fair, pc>>
+  /\ UNCHANGED <<blocker, hand, legacy, quick, blind, pause, qhand, qauto, ended, dirty, fair, pc>>
 Skips(i, r) == pc = "pick" /\ i \in todo /\ ~Handled(i) /\ free > 0 /\ r \in Rules /\ blocker[i] = r
   /\ rows' = rows \cup {<<i, r>>}
   /\ UNCHANGED <<World, dirty, free, pc>>
@@ -175,7 +192,7 @@ PassSteps == PassStarts \/ Collects \/ Drains \/ DrainDone \/ PickDone \/ Done \
   \/ (\E i \in Issues : (\E there \in BOOLEAN : Picks(i, there)) \/ \E r \in Rules : Skips(i, r))
 Next == PassSteps
   \/ (\E i \in Issues, b \in Rules \cup {"none"} : Changes(i, b)) \/ (\E i \in Issues : Files(i) \/ Moves(i))
-  \/ RunEnds \/ ChatQueues \/ (\E onVm \in BOOLEAN : HandStarts(onVm)) \/ ChatStartsNow \/ PeerFlips
+  \/ RunEnds \/ ChatQueues \/ (\E onVm \in BOOLEAN : HandStarts(onVm)) \/ ChatStartsNow \/ PeerFlips \/ PauseFlips
 
 \* The hourly runs a pass, and a pass runs to its end. Nothing is fair about the world.
 Spec == Init /\ [][Next]_vars /\ WF_vars(PassSteps)
@@ -201,6 +218,8 @@ QuickNotCounted == fair
 HeldOrZaneNeverPicked == \A i \in Issues : <<i, "launch">> \in rows => blocker[i] \notin {"held", "zane"}
 \* A pass that starts ends, so the pass-end rules above are reached: no pass hangs between its steps.
 EveryPassEnds == [](pc \notin {"idle"} => <>(pc = "idle"))
+\* "Pause it": no auto run starts on the peer while it has an auto pause, picked or drained.
+NoAutoOnPausedPeer == ~strayed
 \* Every pass leaves its `pass` row.
 EveryPassLogs == pc \in {"skipped", "end"} => <<"pass", "candidates">> \in rows
 

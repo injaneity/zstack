@@ -36,6 +36,13 @@ def wait_for_state(d, state, secs=10):
     return False
 
 
+def live():
+    """A running run.json's pid and start: this test process, which is alive while the test runs."""
+    ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())], capture_output=True, text=True,
+                        env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"})
+    return {"pid": os.getpid(), "start": ps.stdout.strip()}
+
+
 class Hourly(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
@@ -465,6 +472,39 @@ class Hourly(unittest.TestCase):
         r = self.sh("hourly", "launch", "a3", "local", "auto", "pick")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(json.loads(j.read_text())["pool"], "hand")
+
+    def test_an_auto_pause_holds_auto_starts_on_its_host_until_its_run_ends_and_never_hand_ones(self):
+        local, vm = self.t / "root", self.t / "vm-root"
+        peers = self.peer_pkg("test-vm", vm)
+        (local / "auto-pause").write_text("test-vm until local bench   # bench on the vm\n")
+        self.queued(local, "bench", 900)
+        j = local / "review" / "bench" / "run.json"
+        j.write_text(json.dumps({**json.loads(j.read_text()), "state": "running", "pool": "hand", **live()}))
+        self.queued(vm, "va", 500, "auto")
+        self.queued(vm, "vh", 400)
+        self.queued(local, "la", 300, "auto")
+        dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
+        self.assertIn("pause: auto launches on test-vm paused until local bench ends (running)", dry)
+        self.assertIn("wait test-vm va: auto launches on test-vm paused until local bench ends (running)", dry)
+        self.assertIn("would launch test-vm vh: hand pool", dry)   # hand runs never pause
+        self.assertIn("would launch local la: auto pool", dry)   # nor auto runs on another host
+        (self.t / "hang").touch()
+        r = self.sh("hourly", "launch", "va", "test-vm", "auto", "pick", ONIGIRI_PEERS=peers)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("wait test-vm va: auto launches on test-vm paused until local bench ends (running)", r.stdout)
+        self.assertEqual(json.loads((vm / "review" / "va" / "run.json").read_text())["state"], "queued")
+        j.write_text(json.dumps({**json.loads(j.read_text()), "state": "exited", "rc": 0}))   # the bench ends: the pause lifts
+        dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
+        self.assertNotIn("pause:", dry)
+        self.assertIn("would launch test-vm va: auto pool", dry)
+        j.unlink()   # collected or gone: still lifted
+        self.assertIn("would launch test-vm va: auto pool", self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1"))
+        (local / "auto-pause").chmod(0)   # a pause file that is there but unreadable holds every host's auto launches
+        self.addCleanup((local / "auto-pause").chmod, 0o644)
+        dry = self.hourly("queue", ONIGIRI_PEERS=peers, PI_RUN_DRY="1")
+        self.assertIn("wait test-vm va: auto launches on test-vm paused: auto-pause unreadable", dry)
+        self.assertIn("wait local la: auto launches on local paused: auto-pause unreadable", dry)
+        self.assertIn("would launch test-vm vh: hand pool", dry)
 
     def test_a_peer_before_the_pools_has_every_run_counted_as_hand(self):
         old = {"sha": "s", "at_main": True, "parity": [], "free_gb": 25,

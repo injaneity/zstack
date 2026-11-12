@@ -44,6 +44,13 @@ def review(n, created, login="CMGS", bot=False):
             "labels": [], "headRefOid": f"{n:x}".ljust(40, "a"), "author": {"login": login, "is_bot": bot}}
 
 
+def live():
+    """A running run.json's pid and start: this test process, which is alive while the test runs."""
+    ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())], capture_output=True, text=True,
+                        env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"})
+    return {"pid": os.getpid(), "start": ps.stdout.strip()}
+
+
 class Pickup(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
@@ -310,6 +317,33 @@ class Pickup(unittest.TestCase):
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertIn("would launch vm cua-10:", out)
         self.assertIn("would launch mini cua-11:", out)
+
+    def test_an_auto_pause_keeps_picks_off_the_peer_until_its_run_ends(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z"), issue(11, "2026-10-02T00:00:00Z", labels=["Linux"])])
+        pause = self.root / "auto-pause"
+        pause.write_text("# bench on the vm\nvm until mini bench\n")
+        self.peer(at_main=True)
+        (self.root / "review" / "bench").mkdir()
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "running", "attempt": 1, "rc": None, **live()}))
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch mini cua-10:", out)   # the peer is paused: an unlabelled item launches here
+        self.assertIn("skip cua-11: host", out)   # and a Linux one, which only the peer can do, waits
+        (self.root / "review" / "bench" / "report.md").write_text("bench done\n")
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "exited", "attempt": 1, "pid": None, "rc": 0}))
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch vm cua-10:", out)   # the run ended: the pause lifted by itself
+        self.assertIn("would launch vm cua-11:", out)
+        pause.write_text("vm\n")   # a pause with no run to wait on holds until the row is removed
+        self.assertIn("would launch mini cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
+        pause.write_text("vm until mini\n")   # a row it cannot read holds the pause
+        self.assertIn("would launch mini cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
+        pause.write_text("other-host\n")   # a pause on another host leaves this one alone
+        self.assertIn("would launch vm cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
+        pause.write_text("vm\nmini\n")   # both paused: nothing is picked, each item skipped for its host
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertNotIn("would launch", out)
+        self.assertIn("skip cua-10: host", out)
 
     def test_an_unstick_is_picked_only_for_a_red_pr_no_thread_owns(self):
         self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate",
