@@ -44,7 +44,7 @@ M = [
     ("drain-ignores-auto-cap", "the drain starts a queued auto brief with the auto cap full",
      [("/\\ (queued = \"auto\" => SeenAuto < Auto)", "")], "CapsHold"),
     ("pick-on-step-0-count", "step 5 goes by step 0's slots: line, before the drain filled slots",
-     [("DrainDone == pc = \"drain\" /\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = Free", "DrainDone == pc = \"drain\" /\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = free")],
+     [("/\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = Free", "/\\ ~CanDrain /\\ pc' = \"pick\" /\\ free' = free")],
      "CapsHold"),
 ]
 
