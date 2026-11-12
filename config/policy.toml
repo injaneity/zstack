@@ -1,7 +1,9 @@
-# zstack policy: the standing rules, gates and model config, in one versioned file. Every reader goes through bin/policy,
-# the one parser, which refuses an unknown, missing or mistyped key. CI and hosts/check-parity run `bin/policy check`.
-# The per-PR hold and preapprove rows are not here: they stay in the merge host's append-only ledger, hold-prs.txt
-# (docs/HOST.md, Holds file). A value that came from Zane names his call in its comment.
+# zstack policy: the values the code reads (models, slots, gates, the patent hold, the hourly and pickup passes), in one
+# versioned file. Every reader goes through bin/policy, the one parser, which refuses an unknown, missing or mistyped
+# key. CI and hosts/check-parity run `bin/policy check`. The Hard rules' text is config/rules.toml, and the runtime state
+# files are config/state.toml, both read through bin/policy too. The per-PR hold and preapprove rows are not here: they
+# stay in the merge host's append-only ledger, hold-prs.txt (docs/HOST.md, Holds file). A value that came from Zane names
+# his call in its comment.
 schema = 1
 
 # The provider and model each role runs on: bin/pi-run and bin/model-for for a launch, the subagent tool for a child.
@@ -64,6 +66,21 @@ gate_check = "ci-gate"          # it owns red checks and which platform lanes a 
 never_rerun = ["cla"]           # not required on trycua/cua main: never rerun, never a reason to wait
 tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest first; a PR declaring none never merges
 preapprove_tiers = ["deep", "human"]
+
+# The hourly pass's thresholds (bin/hourly, bin/pickup, playbooks/hourly.md), moved out of bin/hourly and the playbook.
+# `floor_gb`: a peer takes launches only with this much disk free (step 3), and a host under it is a disk to prune.
+# `hung_min`: a running run with no log or session write for this long is marked HUNG? (step 2). `merge_stale_min`: the
+# merge job's `last-run` older than this is `stale` (step 0): its 15-minute cron interval plus its 40-minute kill
+# (docs/HOST.md, The merge job). `batch_hour`: the daily preapprove batch is due from this hour SGT (step 9).
+# `file_cap`: follow-up issues the chat files per pass, oldest first (step 6). `lume_prune_age_h`: a stopped
+# `cua-e2e-*` lume VM whose run is collected is pruned once this old (step 3; the 11 Nov retro).
+[hourly]
+floor_gb = 20
+hung_min = 180
+merge_stale_min = 55
+batch_hour = 8
+file_cap = 10
+lume_prune_age_h = 24
 
 # The scheduled pickup pass, bin/pickup (model/Pickup.tla), on the mini's launchd timer (hosts/mini/install-pickup.sh).
 # `interval_s` is its StartInterval (Zane, 12 Nov 11:10 SGT: start at 90 min, "reduce to 30min if it works correctly";

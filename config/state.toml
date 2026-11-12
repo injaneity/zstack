@@ -1,0 +1,205 @@
+# zstack's runtime state: every file the package writes or reads under a host's $ONIGIRI_ROOT (/srv/onigiri on the VM,
+# ~/onigiri on the mini), one [file.<name>] each. This file is the schema, not the data: the data stays on the host.
+# Each entry names its path under the root (<id> is a review id), the host that keeps it (`each` for both), its format,
+# the one module that writes it, the modules that read it, and the shape of one record. bin/policy validates it;
+# tests/test_state_files.py checks that every state file name the code opens is declared here and that each writer and
+# reader named here still names its file. A new state file is declared here in the same change that adds it.
+# Formats: json (one object, replaced whole), toml, rows (`a | b | c` lines, # comments), lines (append-only text),
+# tsv (append-only tab-separated), mark (presence is the state, its text a reason), lock (flock only).
+schema = 1
+
+[file.holds]
+path = "hold-prs.txt"
+host = "merge host"
+format = "rows"
+writer = "bin/hold-row"   # and Zane by hand; rule-guard refuses every other write (docs/RULE-GUARD.md)
+readers = ["hosts/vm/merge_job.py", "bin/hourly", "bin/check-host", "hosts/mini/sync-from-vm.sh"]
+schema = "kind | target | rules | note; kinds hold, preapprove, hands-off-path, skip-author, review-only (docs/HOST.md, Holds file)"
+
+[file.holds-copy]
+path = "sync/hold-prs.txt"
+host = "mini"
+format = "rows"
+writer = "hosts/mini/sync-from-vm.sh"
+readers = ["extensions/rule-guard/holds.ts"]
+schema = "a read-only copy of the merge host's holds file, mode 0444, refreshed at every launch; sync/synced-at is its time"
+
+
+[file.holds-lock]
+path = ".hold-row.lock"
+host = "merge host"
+format = "lock"
+writer = "bin/hold-row"
+readers = ["bin/hold-row"]
+schema = "flock only: one holds-file write at a time; each write leaves hold-prs.txt.bak-<time> beside it"
+
+[file.run]
+path = "review/<id>/run.json"
+host = "each"
+format = "json"
+writer = "bin/pi-run"
+readers = ["bin/hourly"]
+schema = "{state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes, limit_resumes, ci, ci_now} (bin/pi-run docstring, bin/PiRun.tla)"
+
+
+[file.run-log]
+path = "review/<id>/run.log"
+host = "each"
+format = "lines"
+writer = "bin/pi-run"
+readers = ["bin/pi-run", "bin/hourly"]
+schema = "`== attempt <n>` then pi's output for that attempt, then the supervisor's exit and prune lines"
+
+[file.queued-mark]
+path = "review/<id>/QUEUED"
+host = "each"
+format = "mark"
+writer = "none: the queue before run.json had the state"
+readers = ["bin/pi-run"]
+schema = "legacy: a review dir with this and no run.json becomes a queued run.json, since = the marker's time"
+
+[file.brief]
+path = "review/<id>/brief.md"
+host = "each"
+format = "lines"
+writer = "bin/new-brief"
+readers = ["bin/pi-run", "bin/hourly"]
+schema = "`# <id> (<role>)`, `role:`, `source:`, the task, then the standing lines new-brief appends"
+
+
+[file.brief-full]
+path = "review/<id>/brief.full.md"
+host = "each"
+format = "lines"
+writer = "bin/pi-run"
+readers = ["bin/pi-run"]
+schema = "the host's brief prefix and the brief, as the first attempt sent it; a continuation resends it"
+
+[file.rules]
+path = "review/<id>/rules.md"
+host = "each"
+format = "lines"
+writer = "bin/pi-run"
+readers = ["bin/pi-run"]
+schema = "config/rules.toml rendered by bin/policy rules at the start, which pi appends to the session's system prompt"
+
+[file.report]
+path = "review/<id>/report.md"
+host = "each"
+format = "lines"
+writer = "the pi session"
+readers = ["bin/hourly", "bin/pickup"]
+schema = "the run's report: PR links, then `follow-ups:`, `questions:` and, for a review, `drafts:` lists"
+
+[file.pushed]
+path = "review/<id>/pushed"
+host = "each"
+format = "lines"
+writer = "hosts/vm/patent_push.py"
+readers = ["bin/hourly"]
+schema = "<40-char sha> <branch> <utc time>, one per ref the run pushed to trycua/cua"
+
+[file.pickup-log]
+path = "pickup.log"
+host = "mini"
+format = "tsv"
+writer = "bin/hourly"
+readers = ["bin/hourly", "bin/pickup"]
+schema = "ts_sgt host action item reason free_gb, append-only"
+
+[file.auto-pause]
+path = "auto-pause"
+host = "mini"
+format = "lines"
+writer = "Zane or the chat, by hand"
+readers = ["bin/hourly"]
+schema = "`<host>` or `<host> until <run host> <run id>`, one pause per line, # comments (docs/HOST.md, Launching)"
+
+[file.fingerprint]
+path = "hourly-fingerprint.json"
+host = "mini"
+format = "json"
+writer = "bin/hourly"
+readers = ["bin/hourly"]
+schema = "{ts, fp}: the last stored pass's fingerprint"
+
+[file.snapshot]
+path = "hourly-snapshot.json"
+host = "mini"
+format = "json"
+writer = "bin/hourly"
+readers = ["bin/hourly"]
+schema = "{ts, hosts, linear, batch_due, errors, waits, ...}: the last pass's facts"
+
+[file.slots-lock]
+path = "slots.lock"
+host = "mini"
+format = "lock"
+writer = "bin/hourly"
+readers = ["bin/pi-run"]
+schema = "flock only: held while a launch counts the pools and starts its run"
+
+
+[file.queue-lock]
+path = "hourly-queue.lock"
+host = "each"
+format = "lock"
+writer = "bin/hourly"
+readers = ["bin/hourly"]
+schema = "flock only: one queue drain at a time"
+
+[file.pickup-state]
+path = "pickup/state.json"
+host = "mini"
+format = "json"
+writer = "bin/pickup"
+readers = ["bin/pickup"]
+schema = "{seen, unsent, failures, authors}: the outbox and what a delivered wake carried"
+
+[file.pickup-lock]
+path = "pickup/pickup.lock"
+host = "mini"
+format = "lock"
+writer = "bin/pickup"
+readers = ["bin/pickup"]
+schema = "flock -n only: one pickup pass at a time"
+
+[file.events]
+path = "events.log"
+host = "merge host"
+format = "lines"
+writer = "hosts/vm/merge_job.py"   # and the patent hook's patent-held lines (hosts/vm/patent_push.py)
+readers = ["hosts/vm/merge_job.py", "hosts/vm/patent_push.py"]
+schema = "<iso ts> <kind> <id> <reason>, one per decision, append-only"
+
+[file.merge-state]
+path = "tick/state.json"
+host = "merge host"
+format = "json"
+writer = "hosts/vm/merge_job.py"
+readers = ["hosts/vm/merge_job.py"]
+schema = "the merge job's per-PR memory: reruns, landed heads, sent wakes, the merge-watch window"
+
+[file.merge-last-run]
+path = "tick/last-run"
+host = "merge host"
+format = "lines"
+writer = "hosts/vm/merge_job.py"
+readers = ["bin/hourly"]
+schema = "`<iso ts> zstack <sha> ok|<n> error(s)[ paused]`, the last finished run"
+
+[file.merge-paused]
+path = "tick/PAUSED"
+host = "merge host"
+format = "mark"
+writer = "Zane, by hand"
+readers = ["hosts/vm/merge_job.py"]
+schema = "present: no merges or reruns; its first line is the reason"
+
+[file.cron-log]
+path = "tick/cron.log"
+host = "merge host"
+format = "lines"
+writer = "hosts/vm/cron-wrap.sh"
+readers = ["Zane, by hand"]
+schema = "start, end, skip and TIMEOUT lines per cron job; tick/cron-<name>.started holds each job's last start"
