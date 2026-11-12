@@ -10,7 +10,7 @@
 \*  - No silent pass when it could pick: a pass that ends with an auto slot free has launched or skipped (one row each,
 \*    naming one of the five rules) every candidate.
 \*  - The caps are never exceeded: the pass's launches stay within auto 5, and with the runs it drained within total 7
-\*    (config/slots.json). Runs the chat starts itself with `pi-run <id>` are outside the cap but count as running.
+\*    (config/policy.toml [slots]). Runs the chat starts itself with `pi-run <id>` are outside the cap but count as running.
 \*  - A held or Zane-waiting item is never picked.
 \*  - A pass wakes the chat exactly when it has output (a collected run's result, a needs-Zane item not woken before, a
 \*    result an earlier wake failed to deliver) or it failed (its deadline killed it). A silent pass never wakes.
@@ -136,7 +136,7 @@ PickDone(p) == pc[p] = "pick" /\ lock = p /\ (free = 0 \/ \A i \in Items \ taken
 Report(p) == pc[p] = "report" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "wake"] /\ had' = News
   /\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
                  lock, free, failed, woke, rows>>
-\* The deadline (config/pickup.json deadline_s): the parent kills the pass's process group and goes to the wake with the
+\* The deadline (config/policy.toml [pickup] deadline_s): the parent kills the pass's process group and goes to the wake with the
 \* outbox as it stands. Launched pi runs are in their own sessions and live on.
 Kill(p) == pc[p] \in {"collect", "drain", "pick", "report"} /\ lock = p
   /\ pc' = [pc EXCEPT ![p] = "wake"] /\ failed' = TRUE /\ had' = News

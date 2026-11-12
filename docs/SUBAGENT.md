@@ -16,7 +16,7 @@ The header of `index.ts` lists every change from upstream. The ones a caller nee
 - **Role prompts, not the session's rules.** `bin/pi-run` appends onigiri-mode's Hard rules to the parent only. A child gets its agent prompt, the no-polling line and one framing line (`buildChildPrompt` in `prompt.ts`). Each `agents/<name>.md` quotes only the rules its role could break.
 - **No nesting through the tool.** A child does not get the `subagent` tool (`PI_SUBAGENT_DEPTH`). The bound is on the tool, not the process: a child's `bash` could still run `pi`.
 - **No forge or git credentials.** Variables whose names look like credentials are dropped except the model providers', `GH_CONFIG_DIR` points at an empty directory, and `GIT_TERMINAL_PROMPT=0`.
-- **Model by role.** The child's provider and model come from `config/models.json` by agent name, with `variant` picking a seat when the role has several. A seat whose login fails falls back to the parent's model with a `WARNING` line at the top of the result. The `verifier` never falls back: the tool returns an error and runs nothing.
+- **Model by role.** The child's provider and model come from `config/policy.toml` `[models]` by agent name, with `variant` picking a seat when the role has several. A seat whose login fails falls back to the parent's model with a `WARNING` line at the top of the result. The `verifier` never falls back: the tool returns an error and runs nothing.
 - **Child sessions are saved** in `~/.pi/agent/sessions/subagents/`, named `role:<agent>[:<variant>]`, apart from top-level sessions.
 
 ## What "read-only" means

@@ -86,6 +86,18 @@ test("merging in a merge-job repo is blocked", () => {
 	blocked("gh api repos/trycua/cua/pulls/1/merge -f merge_method=squash");
 });
 
+test("approving a fork's workflow runs in a merge-job repo runs; a merge beside it stays blocked", () => {
+	// Zane, 12 Nov 11:45 SGT: sessions may approve outside-contributor (fork) workflow runs on trycua/cua so CI runs
+	for (const c of ["gh api -X POST repos/trycua/cua/actions/runs/9/approve", "gh api --method POST repos/trycua/cua/actions/runs/$RUN/approve",
+		"gh api -X POST repos/{owner}/{repo}/actions/runs/9/approve", "gh api -X POST /repos/trycua/cua/actions/runs/9/approve"]) {
+		allowed(c);
+		allowed(c, inCua);
+		allowed(c, "/tmp/x");
+	}
+	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/approve && gh pr merge 1 -R trycua/cua");
+	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/approve; gh api -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
+});
+
 test("CI reruns in a merge-job repo run, whatever the run's conclusion: the session decides them", () => {
 	// Zane, 11 Nov: reruns are decided without asking him; only real failures go to him, and the guard can't tell a
 	// runner's network failure from one the diff caused

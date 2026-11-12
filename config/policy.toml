@@ -1,0 +1,52 @@
+# zstack policy: the standing rules, gates and model config, in one versioned file. Every reader goes through bin/policy,
+# the one parser, which refuses an unknown, missing or mistyped key. CI and hosts/check-parity run `bin/policy check`.
+# The per-PR hold and preapprove rows are not here: they stay in the merge host's append-only ledger, hold-prs.txt
+# (docs/HOST.md, Holds file). A value that came from Zane names his call in its comment.
+schema = 1
+
+# The provider and model each role runs on: bin/pi-run and bin/model-for for a launch, the subagent tool for a child.
+# A list is a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the
+# parent's model when its seat fails (extensions/subagent/prompt.ts); the other agents do.
+[models]
+coding = { provider = "claude-code", model = "claude-opus-5-5" }
+explorer = { provider = "openai-codex", model = "gpt-6.1-terra" }
+designer = [
+  { provider = "claude-code", model = "claude-opus-5-5" },
+  { provider = "openai-codex", model = "gpt-6.1-terra" },
+]
+verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }
+research = { provider = "claude-code", model = "claude-opus-5-5" }
+
+# The shared pi slots across both hosts (Zane, 11 Nov: "increase the number of slots to 7, auto pickup to 5"). bin/hourly
+# reads them: `total` runs at once, `auto` of them hourly auto-launches (playbooks/hourly.md step 2).
+[slots]
+total = 7
+auto = 5
+
+# How many red heads per PR reopen the thread that pushed them (bin/pi-run ci, bin/hourly queue). Past that the PR is Zane's.
+[ci]
+fix_attempts = 3
+
+# Who "we" are: the login whose PRs the merge job merges and the hourly pass counts as ours.
+[people]
+me = "injaneity"
+
+# The trycua/cua merge gate (hosts/vm/merge_job.py, the one merger there; Hard rules, Merging). The gate is three checks
+# at the PR head: `gate_check` green, no hold row in the ledger, and a tier from `tiers` declared, with a preapprove row
+# pinned to the head for a tier in `preapprove_tiers`. Never reword or loosen without Zane's explicit ok.
+[merge]
+repo = "trycua/cua"
+gate_check = "ci-gate"          # it owns red checks and which platform lanes a PR needs
+never_rerun = ["cla"]           # not required on trycua/cua main: never rerun, never a reason to wait
+tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest first; a PR declaring none never merges
+preapprove_tiers = ["deep", "human"]
+
+# The scheduled pickup pass, bin/pickup (model/Pickup.tla), on the mini's launchd timer (hosts/mini/install-pickup.sh).
+# `interval_s` is its StartInterval (Zane, 12 Nov 11:10 SGT: start at 90 min, "reduce to 30min if it works correctly");
+# a pass still running at `deadline_s` is killed and wakes the chat failed. `label_hosts` maps a trycua/cua platform
+# label to the one host that can do its work (playbooks/hourly.md step 3); an item with none or several goes to the
+# launch host.
+[pickup]
+interval_s = 5400
+deadline_s = 1200
+label_hosts = { Linux = "vm", macOS = "mini" }

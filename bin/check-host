@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """check-host: can this host run zstack? One `ok`, `warn` or `FAIL` line per check, exit 1 on any FAIL.
 
-  check-host            every check, then one real `pi -p` call per provider in config/models.json
+  check-host            every check, then one real `pi -p` call per provider in config/policy.toml [models]
   check-host --offline  every check but the `pi -p` calls
 
 It reads the env bin/pi-run launches with ($ONIGIRI_HOST or ~/.config/onigiri/host names hosts/<name>/host.sh), so
 what it passes is what a launch sees. README's install section lists the dependencies it checks:
-  tools     pi, node, git, gh and python3 3.9 or newer on PATH
+  tools     pi, node, git, gh and python3 3.9 or newer on PATH (zoneinfo), which runs bin/policy (tomllib, else vendor/tomli)
+  policy    bin/policy accepts config/policy.toml, whose [models] names the providers below
   packages  pi lists npm:@ff-labs/pi-fff (the agents' search tools), and pi-claude-code at README's pinned commit when a
             role uses claude-code
   provider  `pi --list-models` lists a model of every provider a role uses, and the `claude` CLI is on PATH for claude-code
@@ -19,7 +20,6 @@ It changes nothing but the fetched origin/main ref.
 """
 import importlib.machinery
 import importlib.util
-import json
 import os
 import shutil
 import subprocess
@@ -54,9 +54,9 @@ def last(p):
 
 
 def seats():
-    """{provider: (model, [roles])} from config/models.json, with the first model each provider is named with."""
+    """{provider: (model, [roles])} from config/policy.toml [models], with the first model each provider is named with."""
     out = {}
-    for role, v in json.load(open(os.path.join(PKG, "config", "models.json")))["roles"].items():
+    for role, v in pr.policy().load()["models"].items():
         for s in v if isinstance(v, list) else [v]:
             model, roles = out.setdefault(s["provider"], (s["model"], []))
             roles.append(role)
@@ -80,8 +80,15 @@ def main(argv):
     py = run(["python3", "-c", "import sys, zoneinfo; print('%d.%d' % sys.version_info[:2])"], env)
     say("ok" if not py.returncode else "FAIL",
         "python3 version: " + (py.stdout.strip() if not py.returncode else "needs 3.9 or newer (zoneinfo): " + last(py)))
+    pol = run(["python3", os.path.join(PKG, "bin", "policy"), "check"], env)   # the interpreter the shebangs resolve to
+    say("ok" if not pol.returncode else "FAIL", "python3 runs bin/policy: " + last(pol))
 
-    providers = seats()
+    try:
+        providers = seats()
+        say("ok", "policy: config/policy.toml is valid")
+    except pr.policy().PolicyError as e:
+        providers = {}
+        say("FAIL", f"policy: {e}")
     listed = run(["pi", "list"], env).stdout
     need = {"npm:@ff-labs/pi-fff": "pi install npm:@ff-labs/pi-fff@0.11.0 (the agents' fffind, ffgrep, fff-multi-grep)"}
     if "claude-code" in providers:

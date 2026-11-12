@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -212,6 +213,9 @@ class Launcher(unittest.TestCase):
         (self.t / "bin").mkdir()
         (self.t / "bin" / "pi").write_text(FAKE_PI)
         (self.t / "bin" / "pi").chmod(0o755)
+        (self.t / "py").mkdir()
+        (self.t / "py" / "python3").symlink_to(sys.executable)   # the interpreter the suite runs under, so a 3.9 run tests the mini's /usr/bin one
+        (self.t / "bin" / "python3").symlink_to(sys.executable)
         (self.t / "brief.md").write_text("task\n")
         self.env = {"PATH": f"{self.t}/bin:/usr/bin:/bin", "HOME": str(self.t), "T": str(self.t), "ZSTACK_ENSURED": "1",
                     "ONIGIRI_ROOT": str(self.t / "root"), "ONIGIRI_WAKE_DRY": "1", "TEST_TOKEN": "t"}
@@ -294,9 +298,10 @@ class Launcher(unittest.TestCase):
         pkg = self.t / "pkg"
         for sub in ("bin", "config", "hosts/vm", "skills/onigiri-mode"):
             (pkg / sub).mkdir(parents=True)
-        for f in ("bin/pi-run", "bin/model-for", "config/models.json", "hosts/vm/wake.py"):
+        for f in ("bin/pi-run", "bin/model-for", "bin/policy", "config/policy.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
+        shutil.copytree(PKG / "vendor", pkg / "vendor")   # bin/policy before python3 3.11
         for text in (None, "  \n"):
             if text is not None:
                 (pkg / "skills/onigiri-mode/hard-rules.md").write_text(text)
@@ -398,7 +403,7 @@ class Launcher(unittest.TestCase):
         self.assertIn("wake: failed", self.log("term"))
 
     def test_no_pi_starts_nothing_and_a_pi_gone_after_the_check_is_a_failed_exit_not_a_loss(self):
-        r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH="/usr/bin:/bin")   # no pi on PATH
+        r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH=f"{self.t}/py:/usr/bin:/bin")   # no pi on PATH
         self.assertEqual(r.returncode, 4, r.stderr)
         self.assertIn("cannot run pi in the launch env", r.stderr)
         self.assertIsNone(self.run_json("nopi"))

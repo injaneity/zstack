@@ -1,5 +1,6 @@
 // Tests for extensions/subagent/prompt.ts and the agents/*.md role prompts. Run: node --test tests/subagent-prompt.test.ts
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { test } from "node:test";
 import { buildChildPrompt, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, VERIFIER } from "../extensions/subagent/prompt.ts";
@@ -16,7 +17,7 @@ test("a child's prompt is its role prompt, the no-polling line and the framing l
 test("the verifier is the one agent that verifies; every agent file is one of the three roles", () => {
 	const agents = fs.readdirSync(`${root}agents`).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
 	assert.deepEqual(agents, ["designer", "explorer", "verifier"]);
-	const roles = Object.keys(JSON.parse(fs.readFileSync(`${root}config/models.json`, "utf-8")).roles);
+	const roles = Object.keys(JSON.parse(execFileSync("python3", ["-I", `${root}bin/policy`, "dump"], { encoding: "utf8" })).models);
 	assert.deepEqual(roles.filter((r) => /verif|review/.test(r)), ["verifier"]);
 });
 

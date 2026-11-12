@@ -1,17 +1,20 @@
 #!/bin/bash
-# model-for <role>[:<n>]: prints "<provider> <model>" for <role> from the package's config/models.json.
+# model-for <role>[:<n>]: prints "<provider> <model>" for <role> from [models] in the package's config/policy.toml.
 # A role with several seats (designer) needs :<n>, 1-based: the bare name exits 1 naming its seats, because one
 # launch cannot run a race. model-for --roles lists every role and seat.
-# Exit 1 for a name the file lacks.
+# Exit 1 for a name the file lacks, or a policy file bin/policy refuses.
 set -eu
-pkg="$(cd "$(dirname "$0")/.." && pwd)"; cfg="$pkg/config/models.json"
+pkg="$(cd "$(dirname "$0")/.." && pwd)"
 echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 case "${1:-}" in ''|-h|--help) echo "usage: model-for <role>[:<n>] | --roles" >&2; exit 2;; esac
 exec python3 -I -c '
-import json, sys
-cfg, want = sys.argv[1:]
-data = json.load(open(cfg))
-roles = data.get("roles", {})
+import importlib.machinery as m, importlib.util as u, sys
+pol, want = sys.argv[1:]
+l = m.SourceFileLoader("policy", pol); p = u.module_from_spec(u.spec_from_loader("policy", l)); l.exec_module(p)
+try:
+    roles = p.load()["models"]
+except p.PolicyError as e:
+    sys.exit("model-for: %s" % e)
 seats = {}
 for name, v in roles.items():
     if isinstance(v, list):
@@ -25,7 +28,7 @@ race = [k for k in seats if k.startswith(want + ":")]
 if r is None and race:
     sys.exit("model-for: %s has %d seats, one per side of a race; pass one of %s. A race runs every seat."
              % (want, len(race), ", ".join(race)))
-if not (isinstance(r, dict) and isinstance(r.get("provider"), str) and isinstance(r.get("model"), str)):
-    sys.exit("model-for: no role %r in %s (roles: %s)" % (want, cfg, ", ".join(seats)))
+if r is None:
+    sys.exit("model-for: no role %r in %s (roles: %s)" % (want, p.PATH, ", ".join(seats)))
 print(r["provider"], r["model"])
-' "$cfg" "$1"
+' "$pkg/bin/policy" "$1"

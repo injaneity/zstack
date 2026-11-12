@@ -1,6 +1,6 @@
 #!/bin/bash
 # install-pickup.sh [on|off|status]: the mini's schedule for bin/pickup, a launchd LaunchAgent that starts one pass every
-# config/pickup.json interval_s seconds (StartInterval). It is a plain timer: no KeepAlive and no RunAtLoad, so launchd
+# config/policy.toml [pickup] interval_s seconds (StartInterval). It is a plain timer: no KeepAlive and no RunAtLoad, so launchd
 # never restarts a pass that ended, and a pass that is still running when the timer fires is not started again (launchd
 # coalesces it; bin/pickup's lock covers a hand run too). `on` writes the plist and loads it, again after a change of
 # interval_s; `off` unloads it and removes the plist; `status` prints the plist's interval and launchd's state.
@@ -13,7 +13,7 @@ log="${ONIGIRI_ROOT:-$HOME/onigiri}/pickup/launchd.log"
 domain="gui/$(id -u)"
 case "${1:-status}" in
   on)
-    interval=$(python3 -I -c 'import json, sys; print(int(json.load(open(sys.argv[1]))["interval_s"]))' "$pkg/config/pickup.json")
+    interval=$("$pkg/bin/policy" get pickup.interval_s)
     mkdir -p "$(dirname "$plist")" "$(dirname "$log")"
     cat > "$plist.tmp" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

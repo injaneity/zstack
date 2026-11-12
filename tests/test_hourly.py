@@ -45,6 +45,7 @@ class Hourly(unittest.TestCase):
         for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH)):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
+        (t / "bin" / "python3").symlink_to(sys.executable)   # the interpreter the suite runs under, so a 3.9 run tests the mini's /usr/bin one
         (t / "ours.json").write_text(json.dumps([{"number": 1, "headRefOid": "a" * 40}]))
         (t / "others.json").write_text(json.dumps([{"number": 2, "author": {"login": "f-trycua"}},
                                                    {"number": 3, "author": {"login": "app/dependabot", "is_bot": True}}]))
@@ -164,6 +165,21 @@ class Hourly(unittest.TestCase):
             self.assertTrue(wait_for_state(self.review(sid), "running"), sid)
         self.hourly("done", "--linear", "CUA-1,CUA-2")
         self.assertIn("skip:", self.hourly("--linear", "CUA-1,CUA-2"))
+
+    def test_an_unreachable_host_leaves_no_auto_slot_known_free(self):
+        # model/Hourly.tla CapsHold: the peer's auto runs are unknown, so counting them as none could pass the auto cap
+        down = self.t / "down"
+        down.write_text("#!/bin/bash\necho 'ssh: connect to host vm: timed out' >&2; exit 255\n")
+        down.chmod(0o755)
+        out = self.hourly("--linear", "CUA-1", ONIGIRI_PEERS=f"vm={down}")
+        self.assertIn("host vm: unreachable: ssh: connect to host vm: timed out", out)
+        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 0", out)
+        rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
+        self.assertEqual(rows[-1], ["local", "pass", "-", "candidates 1 todo, auto free 0"])
+        self.assertIn("slots: running 0/7, auto 0/5: free 7, auto 5", self.hourly("--linear", "CUA-1"))
+        # the queue's last line is what step 5 goes by: no auto slot while the peer's runs are unknown
+        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 0", self.hourly("queue", ONIGIRI_PEERS=f"vm={down}"))
+        self.assertIn("queue: 0 queued, slots now running 0/7, auto 0/5: auto free 5", self.hourly("queue"))
 
     def test_the_merge_jobs_waits_are_printed_by_who_must_act(self):
         peer = self.t / "mj"
@@ -313,7 +329,7 @@ class Hourly(unittest.TestCase):
         shell line there, like the VM's ssh wrapper."""
         home = self.t / f"{name}-home"
         pkg = home / ".pi/agent/git/github.com/injaneity/zstack"
-        for sub in ("bin", "hosts", "config", "skills/onigiri-mode"):
+        for sub in ("bin", "hosts", "config", "vendor", "skills/onigiri-mode"):
             shutil.copytree(PKG / sub, pkg / sub, ignore=shutil.ignore_patterns("playbooks", "test-*"))
         (pkg / "hosts" / "check-parity").write_text("#!/bin/bash\necho ok\n")
         (pkg / "hosts" / name).mkdir()

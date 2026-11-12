@@ -5,7 +5,7 @@
   pickup --dry    the same reads, printed as a plan: nothing collected, launched, logged or sent; no lock, and only
                   pickup/last-dry.json is written
 
-hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/pickup.json interval_s). A pass:
+hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/policy.toml [pickup] interval_s). A pass:
 
   0. Moves the package to origin/main (bin/ensure-package-main), then takes $ONIGIRI_ROOT/pickup/pickup.lock with flock -n.
      A pass that finds it held logs `pass-locked` and exits 0: passes never overlap.
@@ -14,7 +14,7 @@ hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/pi
   2. Drains every host's queue (bin/hourly queue): red PRs back to their threads, then queued runs, under the caps.
   3. Picks from GitHub (trycua/cua, the host's gh login), oldest first with `urgent` ahead: issues assigned to injaneity,
      open PRs requesting injaneity's review (a first review per head), and our PRs the merge job leaves to a session that
-     no thread took back (an unstick per head). While an auto slot is free (config/slots.json), each candidate not taken
+     no thread took back (an unstick per head). While an auto slot is free (config/policy.toml [slots]), each candidate not taken
      before (a review id on a host, or a launch row) is launched on the launch host, or skipped with one pickup.log row
      naming the one rule that holds: held, pr, overlap, zane, host (playbooks/hourly.md step 5).
   4. Reports four lists, as the chat's pass did, and one more for the chat: needs-Zane, dumpling results,
@@ -24,7 +24,7 @@ hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/pi
      outbox and records the items as seen; an item that goes away is dropped, so its return wakes again.
 
 The parent holds the lock and the deadline. The pass runs in a child in its own process group, which the parent kills at
-deadline_s; pi runs it launched are in their own sessions (bin/pi-run's supervisor calls setsid) and live on.
+[pickup] deadline_s; pi runs it launched are in their own sessions (bin/pi-run's supervisor calls setsid) and live on.
 Exit codes: 0 a pass ran or the lock was held, 1 the pass failed, 4 the package could not move to main.
 """
 from __future__ import annotations
@@ -54,8 +54,8 @@ def load(name, path):
 
 hourly = load("hourly", "bin/hourly")
 pr = hourly.pr
-CFG = json.load(open(os.path.join(PKG, "config", "pickup.json")))
-REPO, ME = "trycua/cua", "injaneity"
+CFG = hourly._policy["pickup"]   # interval_s, deadline_s, label_hosts: config/policy.toml [pickup]
+REPO, ME = hourly.REPO, hourly.ME
 RULES = ("held", "pr", "overlap", "zane", "host")   # playbooks/hourly.md step 5: the only reasons a candidate is skipped
 URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 SECTIONS = ("follow-ups", "questions", "drafts")
@@ -130,7 +130,7 @@ def launch_host(hosts, needs=None):
 
 def rule(c, h, prs, live, zane, hosts):
     """(the one skip rule that holds for candidate c, or None; the host it launches on). A platform label names the host
-    that can do it (config/pickup.json label_hosts); with none, or more than one, the launch host takes it."""
+    that can do it (config/policy.toml [pickup] label_hosts); with none, or more than one, the launch host takes it."""
     if bot(c["author"]) or c["author"]["login"] in h["skip"] or "hold" in c["labels"] or (c["kind"] != "issue" and c["n"] in h["hold"]):
         return "held", None
     if any(n in h["hold"] for n in c["linked"]):

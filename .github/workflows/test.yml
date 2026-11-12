@@ -9,6 +9,41 @@ permissions:
   contents: read
 
 jobs:
+  oldest-python:
+    # The mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it: the 12 Nov 14:36 SGT hourly pickup died there on
+    # `import tomllib`. Every python script and the suite run under that interpreter, so a 3.11-only import fails here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: python3 is 3.9
+        run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
+      - name: scripts parse under 3.9
+        run: |
+          for f in bin/* hosts/*/*; do
+            case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
+          done
+      - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
+        run: bin/policy check && bin/policy get slots.total && bin/policy dump > /dev/null
+      - name: bin/hourly starts under 3.9 (the queue pass dry, and the facts a peer is asked for)
+        env:
+          ZSTACK_ENSURED: "1"
+          ONIGIRI_HOST: ""
+          ONIGIRI_ROOT: ${{ runner.temp }}/root
+        run: PI_RUN_DRY=1 bin/hourly queue && bin/hourly facts
+      - name: bin/pickup starts under 3.9 (a dry pass)
+        env:
+          ZSTACK_ENSURED: "1"
+          ONIGIRI_HOST: ""
+          ONIGIRI_ROOT: ${{ runner.temp }}/root
+        run: bin/pickup --dry
+      - name: the suite passes under 3.9
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: model config resolves under 3.9
+        run: tests/models.sh
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -21,11 +56,13 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row and check-host tests
+      - name: config/policy.toml is valid (bin/policy check, the one parser)
+        run: bin/policy check
+      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host and policy tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: lint the VM host scripts
         run: |
-          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly bin/pickup bin/check-host bin/hold-row bin/PiRun.mutants.py model
+          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly bin/pickup bin/check-host bin/hold-row bin/policy bin/PiRun.mutants.py model
           shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/mini/sync-from-vm.sh hosts/mini/vm tests/sync-from-vm.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief bin/queue bin/model-for tests/ensure-package-main.sh tests/pirun-model.sh tests/zstack-model.sh tests/models.sh hosts/mini/install-pickup.sh tests/pickup-model.sh
       - uses: actions/setup-node@v4
         with:
@@ -53,6 +90,8 @@ jobs:
           TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
       - name: TLC passes model/Zstack.tla, every mutant fails on its rule, and the Race.cfg probe still breaks
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/zstack-model.sh
+      - name: TLC passes model/Hourly.tla (the hourly pickup), model/Hourly.mmd is its chart, every mutant fails on its rule, and the QuickLane.cfg probe still breaks
+        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/hourly-model.sh
       - name: TLC passes model/Pickup.tla (the scheduled pickup pass), model/Pickup.mmd is its chart, and every mutant fails on its rule
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pickup-model.sh
       - name: the merge gate is three checks, and verification is not one of them

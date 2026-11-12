@@ -7,7 +7,7 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 - **Model-invocable.** `disable-model-invocation: true` is stripped. In pi it hides a skill from the model instead of reserving it for a slash command.
 - **pi, not Cursor.** No `/loop`, cloud agents, `control-ui`, todo tool, Bugbot rubric, or `.cursor/` paths. Sessions are read from `~/.pi/agent/sessions/`, and PRs through `gh`.
 - **Repo-agnostic.** Project rules live in each repo's own `AGENTS.md`, and onigiri-mode's repo rules defer to it.
-- **Models per role live in the config.** pstack named a model per role inside its skills. zstack names none in skills or agent files. `config/models.json` maps each role to a provider and model.
+- **Models per role live in the config.** pstack named a model per role inside its skills. zstack names none in skills or agent files. `[models]` in `config/policy.toml` maps each role to a provider and model.
 
 ## Subagents
 
@@ -49,6 +49,10 @@ for s in verify-cua-driver verify-cua-spaces; do
   done
 done
 ```
+
+## Vendored Python
+
+`vendor/tomli` is tomli 2.2.1, the TOML parser CPython 3.11 adopted as `tomllib`. The `.py` files and `LICENSE` are copied byte for byte from the PyPI sdist `tomli-2.2.1.tar.gz` (sha256 `cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff`), and `py.typed` is left out. MIT, Taneli Hukkinen. `bin/policy` imports `tomllib` and falls back to it on python3 3.9 and 3.10, which the mini's `/usr/bin/python3` is. It is vendored, not pip-installed, so a host needs no install step and every host parses `config/policy.toml` with the same code. To update it, copy `src/tomli/*.py` and `LICENSE` from a newer sdist and change the version and sha here.
 
 ## Dropped
 

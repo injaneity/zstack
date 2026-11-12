@@ -1,0 +1,37 @@
+---
+title: "zstack hourly pickup: a pass that could pick never ends silently"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: between
+    lg1: silent
+    lg2: pass
+  }
+  class lg0 blue
+  class lg1 orange
+  class lg2 teal
+  s0: Between passes, nothing to pick
+  s1: Between passes, a Todo is pickable
+  s2: Collecting ended runs
+  s3: Draining the chat queue
+  s4: Picking Linear Todos
+  s5: Pass ended
+  s6: Pass skipped on the fingerprint
+  [*] --> s0
+  [*] --> s1
+  s0 --> s2: the hourly pass starts
+  s1 --> s0: a hold, an answer from Zane, a PR or a run changes or a Todo leaves Todo or the peer stops or starts answering
+  s1 --> s2: the hourly pass starts
+  s2 --> s3: it collects ended runs
+  s3 --> s4: the queue is drained or the total is full
+  s4 --> s5: auto slots full, or every Todo launched or skipped
+  s5 --> s0: bin/hourly done stores the fingerprint
+  s0 --> s6: the hourly pass starts
+  s6 --> s0: the pass stops with no row
+  class s0 blue
+  class s1 blue
+  class s2 teal
+  class s3 teal
+  class s4 teal
+  class s5 teal
+  class s6 orange

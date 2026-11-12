@@ -133,7 +133,7 @@ class Pickup(unittest.TestCase):
         self.github(issues=[issue(n, f"2026-10-{n:02d}T00:00:00Z", labels=["urgent"] if n == 9 else []) for n in range(1, 10)])
         out = self.pickup()
         launched = [r[1] for r in self.rows("launch")]
-        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2", "cua-3", "cua-4"])   # auto 5 (config/slots.json)
+        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2", "cua-3", "cua-4"])   # auto 5 (config/policy.toml [slots])
         self.assertIn("9 candidates (0 taken before), auto free 5", out)
         brief = (self.root / "review" / "cua-9" / "brief.md").read_text()
         for line in ("source: auto", "https://github.com/trycua/cua/issues/9", "wake: finish"):

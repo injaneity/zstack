@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""policy: the one reader of config/policy.toml, zstack's standing rules, gates and model config.
+
+  policy check          parse and validate the file: one line, exit 1 when it is not valid
+  policy get <key>      one value by dotted key (`slots.total`, `models.designer`): a string or number as is, else JSON
+  policy dump           the whole file as JSON, for readers that are not Python (the subagent extension)
+
+Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
+Every key is declared in SCHEMA: an unknown key, a missing one or a wrong type is an error, never a default, so a typo
+cannot drop a rule without a word. The per-PR hold and preapprove rows are not here: they are the merge host's ledger,
+hold-prs.txt (docs/HOST.md, Holds file). Runs on python3 3.9 or newer: 3.11 has tomllib, and older ones get vendor/tomli,
+the pinned upstream tomllib was copied from, because the mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it.
+"""
+import json
+import os
+import re
+import sys
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.join(PKG, "vendor"))
+    import tomli as tomllib
+PATH = os.path.join(PKG, "config", "policy.toml")
+
+
+class PolicyError(Exception):
+    pass
+
+
+def pos_int(v):
+    return type(v) is int and v > 0
+
+
+def seat(v):
+    return isinstance(v, dict) and set(v) == {"provider", "model"} and all(isinstance(x, str) and x.strip() for x in v.values())
+
+
+def names(v):
+    """A list of distinct non-empty strings (it may be empty)."""
+    return isinstance(v, list) and all(isinstance(x, str) and x.strip() for x in v) and len(set(v)) == len(v)
+
+
+def words(v):
+    """Distinct lowercase words: the merge job builds its risk regex from them, so nothing else may appear."""
+    return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
+
+
+def repo(v):
+    return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
+
+
+def seats(v):
+    """One seat, or a non-empty list of them: a role run as a race has one seat per side (the designers)."""
+    return seat(v) or isinstance(v, list) and bool(v) and all(seat(x) for x in v)
+
+
+# Each section: {key: (check, what it must be)}. Every key is required and no other is allowed: [models] names exactly
+# the roles bin/pi-run launches and the agents in agents/, so a misspelt verifier is an error, not a child that runs
+# on the parent's model.
+SEAT = (seats, "a {provider, model} table or a non-empty list of them")
+SCHEMA = {
+    "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
+    "slots": {"total": (pos_int, "a positive integer"), "auto": (pos_int, "a positive integer")},
+    "ci": {"fix_attempts": (pos_int, "a positive integer")},
+    "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
+    "pickup": {
+        "interval_s": (pos_int, "a positive integer"),
+        "deadline_s": (pos_int, "a positive integer"),
+        "label_hosts": (lambda v: isinstance(v, dict) and all(isinstance(x, str) and x.strip() for x in [*v, *v.values()]),
+                        "a table of label = host name"),
+    },
+    "merge": {
+        "repo": (repo, "owner/name"),
+        "gate_check": (lambda v: isinstance(v, str) and v.strip() != "", "a check name"),
+        "never_rerun": (names, "a list of distinct check names"),
+        "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
+        "preapprove_tiers": (words, "a list of distinct lowercase words"),
+    },
+}
+
+
+def validate(data):
+    if type(data.get("schema")) is not int or data["schema"] != 1:
+        raise PolicyError(f"schema must be 1, not {data.get('schema')!r}")
+    for key in data.keys() - SCHEMA.keys() - {"schema"}:
+        raise PolicyError(f"unknown key {key}")
+    for name, spec in SCHEMA.items():
+        sec = data.get(name)
+        if not isinstance(sec, dict) or not sec:
+            raise PolicyError(f"[{name}] is missing or empty")
+        for k in sec.keys() - spec.keys():
+            raise PolicyError(f"unknown key {name}.{k}")
+        for k, (check, want) in spec.items():
+            if k not in sec:
+                raise PolicyError(f"missing {name}.{k}")
+            if not check(sec[k]):
+                raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
+    if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
+        raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
+    if data["pickup"]["deadline_s"] >= data["pickup"]["interval_s"]:
+        raise PolicyError("pickup.deadline_s must be under pickup.interval_s, so a pass ends before the next one is due")
+    return data
+
+
+def load(path=PATH):
+    try:
+        with open(path, "rb") as f:
+            return validate(tomllib.load(f))
+    except OSError as e:
+        raise PolicyError(f"cannot read {path}: {e.strerror}") from None
+    except tomllib.TOMLDecodeError as e:
+        raise PolicyError(f"{path} is not TOML: {e}") from None
+
+
+def get(data, key):
+    v = data
+    for part in key.split("."):
+        if not isinstance(v, dict) or part not in v:
+            raise PolicyError(f"no key {key}")
+        v = v[part]
+    return v
+
+
+def main(argv):
+    try:
+        if argv == ["check"]:
+            load()
+            return print(f"policy: {PATH} is valid") or 0
+        if argv == ["dump"]:
+            return print(json.dumps(load())) or 0
+        if len(argv) == 2 and argv[0] == "get":
+            v = get(load(), argv[1])
+            return print(v if type(v) in (str, int) else json.dumps(v)) or 0
+    except PolicyError as e:
+        print(f"policy: {e}", file=sys.stderr)
+        return 1
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
