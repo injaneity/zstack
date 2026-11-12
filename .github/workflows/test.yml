@@ -90,7 +90,7 @@ jobs:
         run: |
           # Zane, 10 Nov: a verified comment is posted, but merging needs only ci-gate green, no hold row, and a preapproval for deep/human
           if grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif' \
-              skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/hard-rules.md skills/onigiri-mode/SKILL.md; then
+              skills/onigiri-mode/playbooks/pull-requests.md config/policy.toml skills/onigiri-mode/SKILL.md; then
             echo "a line above makes verification a merge condition"; exit 1
           fi
       - name: skills and agent types have frontmatter

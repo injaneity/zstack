@@ -15,7 +15,7 @@ license: MIT
 
 ## Hard rules
 
-The rules are [`hard-rules.md`](hard-rules.md), beside this file, and nowhere else. `bin/pi-run` appends that file to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, reads that file now.
+The rules are the `[hard_rules]` text in zstack's [`config/policy.toml`](../../config/policy.toml), word for word, and nowhere else. `bin/pi-run` appends that text to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, reads it now: `bin/policy render hard-rules` prints it.
 
 ## Non-negotiables
 

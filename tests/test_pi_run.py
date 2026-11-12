@@ -22,7 +22,16 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
-RULES = PKG / "skills" / "onigiri-mode" / "hard-rules.md"
+# the Hard rules text bin/pi-run appends, rendered by the one parser
+RULES = subprocess.run([sys.executable, str(PKG / "bin" / "policy"), "render", "hard-rules"], capture_output=True, text=True,
+                       check=True).stdout
+
+
+def appended(args):
+    """The --append-system-prompt value from the fake pi's args file, which printf writes one line per argument line: the
+    value's own final newline is the empty line before -p."""
+    at = args.index("--append-system-prompt") + 1
+    return "\n".join(args[at:args.index("-p", at)])
 # fake pi: `--list-models` lists a claude-code model only when $TEST_TOKEN (its credential) is set, and never openai-codex.
 # A run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
 # pi does, so a forwarded signal is visible.
@@ -270,7 +279,7 @@ class Launcher(unittest.TestCase):
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args[args.index("--session-id") + 1], "cua-1")
         self.assertEqual(args[args.index("--name") + 1], "role:coding")
-        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))
+        self.assertEqual(appended(args), RULES)
         wakes = [json.loads(line) for line in self.log("cua-1").splitlines() if line.startswith("{")]
         self.assertEqual([(w["kind"], w["id"]) for w in wakes], [("failed", "cua-1")])
         mid = json.loads((self.t / "session-wake").read_text())
@@ -281,18 +290,19 @@ class Launcher(unittest.TestCase):
         self.finished("rules")
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args.count("--append-system-prompt"), 1)
-        self.assertEqual(args[args.index("--append-system-prompt") + 1], str(RULES))   # the file, so pi reads main's text
+        self.assertEqual(appended(args), RULES)   # the policy's text itself, word for word
         self.assertEqual((self.t / "int-ignored").read_text().strip(), "False")
 
-    def test_the_hard_rules_are_one_file_and_the_skill_holds_no_second_copy(self):
-        rules, skill = RULES.read_text(), (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text()
+    def test_the_hard_rules_are_one_policy_section_and_the_skill_holds_no_second_copy(self):
+        rules, skill = RULES, (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text()
         self.assertTrue(rules.startswith("## Hard rules\n"))
         self.assertEqual([x for x in rules.splitlines() if x.startswith("## ")], ["## Hard rules"])
         heads = [x for x in rules.splitlines() if x.startswith("### ")]
         self.assertEqual(heads, ["### Work", "### Patent hold", "### Commits and PR text", "### Checks", "### Scope",
                                  "### Merging", "### Changing these rules"])
         self.assertEqual([h for h in heads if h in skill], [])
-        self.assertIn("(hard-rules.md)", skill)
+        self.assertIn("bin/policy render hard-rules", skill)
+        self.assertFalse((PKG / "skills" / "onigiri-mode" / "hard-rules.md").exists())   # one source: the policy
 
     def test_no_hard_rules_file_starts_nothing(self):
         pkg = self.t / "pkg"
@@ -302,9 +312,9 @@ class Launcher(unittest.TestCase):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
         shutil.copytree(PKG / "vendor", pkg / "vendor")   # bin/policy before python3 3.11
-        for text in (None, "  \n"):
-            if text is not None:
-                (pkg / "skills/onigiri-mode/hard-rules.md").write_text(text)
+        head = (PKG / "config/policy.toml").read_text().partition("[hard_rules]\n")[0]
+        for text in (head, head + '[hard_rules]\ntext = ""\n', head + "[hard_rules]\ntext = '''\n## Hard rules\n\n'''\n"):
+            (pkg / "config/policy.toml").write_text(text)
             r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "norules", "coding", str(self.t / "brief.md")],
                                capture_output=True, text=True, env=self.env, timeout=30)
             self.assertEqual(r.returncode, 2, r.stderr)

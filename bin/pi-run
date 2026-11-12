@@ -43,8 +43,8 @@ $ONIGIRI_HOST when set, else the name in ~/.config/onigiri/host, names hosts/<na
 for the host's paths and env (ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief), so
 a launch from any shell (nohup, ssh, cron) loads it. A start then asks pi for the role's model in that env and
 exits 4, before any run state or wake, when pi lists none of the provider's models there (no credential). The role picks provider and
-model through bin/model-for. onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md) are appended to the system
-prompt as that file. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
+model through bin/model-for. onigiri-mode's Hard rules ([hard_rules] in config/policy.toml, word for word) are appended to
+the system prompt as that text. A start first moves the package to origin/main (bin/ensure-package-main). The shipped host files
 then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
 """
 import calendar
@@ -59,7 +59,6 @@ import time
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
-RULES = os.path.join(PKG, "skills", "onigiri-mode", "hard-rules.md")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
          "| pi-run list [<state>...]")
@@ -390,13 +389,16 @@ def launch(sid, role, brief, extra):
     if os.environ.get("PI_RUN_DRY"):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
-    if not os.path.isfile(RULES) or not open(RULES).read().strip():
-        die(2, f"no Hard rules in {RULES}")
+    pol = policy()
+    try:   # bin/policy refuses a missing or empty [hard_rules], so no session starts without them
+        rules = pol.load()["hard_rules"]["text"]
+    except pol.PolicyError as e:
+        die(2, f"{sid}: no Hard rules: {e}")
     env.pop("PI_RUN_DRAIN", None)
     env.pop("PI_RUN_COUNTED", None)
     env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0")
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
-           "--append-system-prompt", RULES, *extra, "-p", "--", text]
+           "--append-system-prompt", rules, *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check(d, sid, r.run, **f)

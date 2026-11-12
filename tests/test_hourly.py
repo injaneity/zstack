@@ -82,7 +82,7 @@ class Hourly(unittest.TestCase):
         text = Path(r.stdout.strip()).read_text()
         self.assertEqual(Path(r.stdout.strip()), self.review("cua-1") / "brief.md")
         for line in ("role: coding", "source: auto", TASK.strip(), "wake: finish",
-                     "Follow onigiri-mode's Hard rules (skills/onigiri-mode/hard-rules.md in zstack; bin/pi-run appends them to your system prompt).",
+                     "Follow onigiri-mode's Hard rules ([hard_rules] in zstack's config/policy.toml; bin/pi-run appends them to your system prompt).",
                      "No invented limits: a restriction must trace to Zane's words or the policy. "
                      "If you think one is needed, put it under questions: instead of applying it."):
             self.assertIn(line, text.splitlines())

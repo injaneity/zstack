@@ -3,7 +3,8 @@
 
   policy check          parse and validate the file: one line, exit 1 when it is not valid
   policy get <key>      one value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON
-  policy dump           the whole file as JSON, for readers that are not Python (the subagent extension)
+  policy dump           the whole file as JSON, for readers that are not Python (the subagent extension, rule-guard)
+  policy render <name>  a prose section's text exactly as written: hard-rules (bin/pi-run's system prompt) or brief
 
 Python readers load this file as a module and call load(), which returns the validated dict or raises PolicyError.
 Every key is declared in SCHEMA: an unknown key, a missing one or a wrong type is an error, never a default, so a typo
@@ -47,6 +48,11 @@ def words(v):
     return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
 
 
+def prose(v):
+    """Text kept word for word: a TOML literal string ending in one newline."""
+    return isinstance(v, str) and v.strip() != "" and v.endswith("\n") and not v.endswith("\n\n")
+
+
 def repo(v):
     return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
 
@@ -70,6 +76,8 @@ SCHEMA = {
         "public_repo": (repo, "owner/name"),
         "private_repo": (repo, "owner/name"),
     },
+    "hard_rules": {"text": (lambda v: prose(v) and v.startswith("## Hard rules\n"), "the Hard rules text, starting `## Hard rules`")},
+    "brief": {"text": (lambda v: prose(v) and "wake: finish" in v.splitlines(), "the brief's closing lines, with `wake: finish`")},
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
     "merge": {
         "repo": (repo, "owner/name"),
@@ -104,6 +112,9 @@ def validate(data):
     return data
 
 
+RENDER = {"hard-rules": "hard_rules", "brief": "brief"}   # `policy render <name>`: the section whose text it prints
+
+
 def load(path=PATH):
     try:
         with open(path, "rb") as f:
@@ -128,6 +139,8 @@ def main(argv):
         if argv == ["check"]:
             load()
             return print(f"policy: {PATH} is valid") or 0
+        if len(argv) == 2 and argv[0] == "render" and argv[1] in RENDER:
+            return sys.stdout.write(load()[RENDER[argv[1]]]["text"]) and 0
         if argv == ["dump"]:
             return print(json.dumps(load())) or 0
         if len(argv) == 2 and argv[0] == "get":

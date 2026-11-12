@@ -46,6 +46,12 @@ class Policy(unittest.TestCase):
         self.assertEqual(len(json.loads(self.run_("get", "models.designer").stdout)), 2)
         self.assertEqual(json.loads(self.run_("dump").stdout), tomllib.loads(SHIPPED))
 
+    def test_render_prints_the_prose_word_for_word(self):
+        data = tomllib.loads(SHIPPED)
+        self.assertEqual(self.run_("render", "hard-rules").stdout, data["hard_rules"]["text"])
+        self.assertEqual(self.run_("render", "brief").stdout, data["brief"]["text"])
+        self.assertEqual(self.run_("render", "nope").returncode, 2)
+
     def test_a_missing_key_is_named(self):
         r = self.run_("get", "slots.nope")
         self.assertEqual((r.returncode, r.stderr), (1, "policy: no key slots.nope\n"))
@@ -72,6 +78,9 @@ class Policy(unittest.TestCase):
              'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
             ("[slots]", "[slots", "is not TOML"),
             ('me = "injaneity"', 'me = ""', "people.me must be a GitHub login"),
+            ("text = '''\n## Hard rules\n", "text = '''\n# Hard rules\n", "hard_rules.text must be the Hard rules text"),
+            ("text = '''\n## Hard rules\n", "text = '''\n\n## Hard rules\n", "hard_rules.text must be the Hard rules text"),
+            ("wake: finish\n'''", "'''", "brief.text must be the brief's closing lines"),
             ('held_words = ["teleport", "keyvault", "pairing"]', "held_words = []", "patent.held_words must be a non-empty list"),
             ('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
             ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),

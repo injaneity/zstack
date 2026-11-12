@@ -26,7 +26,7 @@ Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe 
 
 ## what you get
 
-- **`onigiri-mode`**: one skill for both readers, the pi session that does the work and the chat orchestrator that files it. It holds the hard rule (coding runs in pi, one session per task), the principles, subagent rules, autonomy, and the routing table, and beside it `hard-rules.md` (holds, patent hold, commit and PR text, checks, scope, merging), the one copy of the Hard rules, which `bin/pi-run` appends to every session's system prompt. Five playbooks: diagnose, change (bug fix, feature, or refactor), measure, pull requests (open, land, verify), and resume. It replaces pstack's `poteto-mode`.
+- **`onigiri-mode`**: one skill for both readers, the pi session that does the work and the chat orchestrator that files it. It holds the hard rule (coding runs in pi, one session per task), the principles, subagent rules, autonomy, and the routing table, and it points to the Hard rules (holds, patent hold, commit and PR text, checks, scope, merging). Their one copy is `[hard_rules]` in `config/policy.toml`, which `bin/pi-run` appends to every session's system prompt. Five playbooks: diagnose, change (bug fix, feature, or refactor), measure, pull requests (open, land, verify), and resume. It replaces pstack's `poteto-mode`.
 - **`how`** and **`why`**: how code works, and what forces shaped it, with confidence-tiered citations.
 - **`architect`**: competing design sketches before code.
 - **`unslop`**: strips AI tells from prose.

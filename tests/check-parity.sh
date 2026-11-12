@@ -16,7 +16,6 @@ git clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
 mkdir -p "$tmp/seed/hosts/vm" "$tmp/seed/hosts/h" "$tmp/seed/agents" "$tmp/seed/bin" "$tmp/seed/config" "$tmp/seed/skills/onigiri-mode"
 cp "$src/hosts/check-parity" "$tmp/seed/hosts/"; cp "$src/hosts/vm/pre-push" "$tmp/seed/hosts/vm/"; cp "$src/agents/"*.md "$tmp/seed/agents/"
 cp "$src/bin/pi-run" "$src/bin/model-for" "$src/bin/policy" "$src/bin/ensure-package-main" "$tmp/seed/bin/"; cp "$src/config/policy.toml" "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"
-cp "$src/skills/onigiri-mode/hard-rules.md" "$tmp/seed/skills/onigiri-mode/"
 # the line both shipped host files end with
 grep -h 'check-parity' "$src/hosts/vm/host.sh" | tail -1 > "$tmp/seed/hosts/h/host.sh"
 check "the vm and mini host files run the same parity line" "$(grep -h 'check-parity"' "$src/hosts/vm/host.sh")" "$(grep -h 'check-parity"' "$src/hosts/mini/host.sh")"
