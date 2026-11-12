@@ -149,10 +149,13 @@ class Hourly(unittest.TestCase):
         self.assertIn("linear todo 2: CUA-1,CUA-2", out)
         self.hourly("done")
         self.assertIn("skip:", self.hourly())   # no Todo: nothing to pick, so an unchanged pass may skip
+        self.assertIn("skip:", self.hourly("--linear", ""))   # an empty list from Linear is no Todo too
+        self.hourly("done", "--linear", "CUA-1")
+        self.assertIn("linear todo 0: none passed", self.hourly("--linear", ""))   # the Todo went: a report, with no candidates
         rows = [x.split("\t")[1:5] for x in (self.t / "root" / "pickup.log").read_text().splitlines()[2:]]
         passes = [x for x in rows if x[1] == "pass"]
         self.assertEqual(passes[0], ["local", "pass", "-", "candidates 2 todo, auto free 5"])
-        self.assertEqual(passes[-1], ["local", "pass", "-", "candidates 0 todo, auto free 5, skip: nothing changed"])
+        self.assertEqual(passes[-2], ["local", "pass", "-", "candidates 0 todo, auto free 5, skip: nothing changed"])
         (self.t / "hang").touch()
         for sid in ("p1", "p2", "p3", "p4", "p5"):   # every auto slot held: an unchanged pass with Todos may skip again
             self.queued(self.t / "root", sid, 100, "auto")
