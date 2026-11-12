@@ -1,0 +1,5 @@
+{
+  "interval_s": 5400,
+  "deadline_s": 1200,
+  "label_hosts": { "Linux": "vm", "macOS": "mini" }
+}

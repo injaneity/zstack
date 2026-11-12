@@ -85,7 +85,7 @@ Each is `playbooks/<name>.md`. Read the matched one in full, and list its number
 - **Measure** (`measure`). Improve a number, once or in a loop, against a frozen harness.
 - **Pull requests** (`pull-requests`). Open a PR at the end of every change. On request, land one or verify someone else's.
 - **Resume** (`resume`). Pick up prior work, or pause so it can be picked up.
-- **Hourly** (`hourly`). The chat's hourly pickup, run by `bin/hourly`. Only the chat runs it, never a pi session.
+- **Hourly** (`hourly`). The pickup: `bin/pickup` on the mini's schedule, and the chat's judgment steps with `bin/hourly`. Never a pi session.
 
 Editing a skill is a Change. Match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
 

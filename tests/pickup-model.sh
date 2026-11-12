@@ -1,0 +1,25 @@
+#!/bin/bash
+# Model-checks model/Pickup.tla, the scheduled pickup pass (bin/pickup): TLC passes every rule in model/Small.cfg (the
+# safety rules; PICKUP_FULL=1 adds model/Pickup.cfg, the same at config/slots.json's caps, ~7 min) and model/Liveness.cfg
+# (the temporal rules, on a smaller world), model/Pickup.mmd
+# is the chart model/PickupChart.cfg draws, and every mutant in model/pickup_mutants.py fails on the rule it names.
+# usage: tests/pickup-model.sh   (TLA2TOOLS=<tla2tools.jar> and JAVA=<java> skip the mise lookup)
+set -u
+src="$(cd "$(dirname "$0")/.." && pwd)"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+jar=${TLA2TOOLS:-$(mise where "http:tla2tools[url=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar,checksum=sha256:936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88]@1.7.4")/tla2tools.jar}
+java=${JAVA:-$(mise which java --tool java@temurin-25)}
+cp "$src"/model/Pickup.tla "$src"/model/Pickup.cfg "$src"/model/Small.cfg "$src"/model/Liveness.cfg "$tmp/"
+tlc() { (cd "$tmp" && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -metadir "$tmp/meta-$1" -config "$1.cfg" Pickup.tla); }
+for cfg in Small Liveness ${PICKUP_FULL:+Pickup}; do
+  tlc "$cfg" > "$tmp/$cfg.out" 2>&1
+  grep -q "Model checking completed. No error has been found." "$tmp/$cfg.out" ||
+    { tail -40 "$tmp/$cfg.out"; echo "FAIL  TLC did not pass model/$cfg.cfg"; exit 1; }
+  echo "ok    model/$cfg.cfg: $(grep -E 'distinct states found' "$tmp/$cfg.out" | tail -1)"
+done
+"$src/skills/statechart/scripts/statechart" "$src/model/Pickup.tla" --config "$src/model/PickupChart.cfg" --view "$src/model/Pickup.view.mts" \
+  --out "$tmp/chart" > "$tmp/chart.report" 2>&1 || { cat "$tmp/chart.report"; echo "FAIL  the statechart command failed on model/PickupChart.cfg"; exit 1; }
+diff -u "$src/model/Pickup.mmd" "$tmp/chart/chart.mmd" || { echo "FAIL  model/Pickup.mmd is not the chart model/PickupChart.cfg draws; copy the new chart in"; exit 1; }
+echo "ok    model/Pickup.mmd is the chart"
+python3 -I "$src/model/pickup_mutants.py" "$jar" "$java" "$tmp/mutants" || { echo "FAIL  a model/pickup_mutants.py mutant was not killed by its rule"; exit 1; }
+echo "ok    model/Pickup.tla holds, and every mutant fails on its rule"
