@@ -363,7 +363,8 @@ def launch(sid, role, brief, extra):
     migrate(root)
     run = read_json(os.path.join(d, "run.json"))
     cont = continuation(run)
-    pool = (run or {}).get("pool") or "hand" if cont else pool_of(open(brief).read(), role)
+    # the pool its run.json was tagged with when queued, which the drain counted; untagged, a continuation is hand
+    pool = (run or {}).get("pool") or ("hand" if cont else pool_of(open(brief).read(), role))
     if cont:   # the same session goes on: its role, pi args and brief are the ones it started with
         role, extra = run.get("role") or role, run.get("extra") or []
         text = CI_RESUME.format(**run["ci_now"]) if run.get("ci_now") else RESUME

@@ -246,8 +246,9 @@ def slots(hosts):
 
 
 def of(r):
-    """A run's pool in `facts`; a peer whose package predates the pools sends only auto, and its other runs are hand."""
-    return r.get("pool") or ("auto" if r.get("auto") else "hand")
+    """A run's pool in `facts`. A peer whose package predates the pools sends no pool: its runs are untagged, so a running
+    one is hand, and a queued one is auto only when its brief says so (`auto`)."""
+    return r.get("pool") or ("auto" if r.get("auto") and r["state"] == "queued" else "hand")
 
 
 def unknown(hosts):

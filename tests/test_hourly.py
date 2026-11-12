@@ -273,8 +273,8 @@ class Hourly(unittest.TestCase):
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: zstack s at main, free 25G", out)
-        self.assertIn("running  v1 auto idle_min=200  HUNG?", out)
-        self.assertIn("slots: auto 1/3, hand 0/5, quick 0 (no cap): auto free 2", out)
+        self.assertIn("running  v1 hand idle_min=200  HUNG?", out)   # untagged and running: hand, whatever its brief says
+        self.assertIn("slots: auto 0/3, hand 1/5, quick 0 (no cap): auto free 3", out)
         self.assertIn("launch host: vm", out)
         peer.write_text(peer.read_text().replace('"free_gb": 25', '"free_gb": 19'))
         self.assertIn("launch host: local", self.hourly(ONIGIRI_PEERS=f"vm={peer}"))
@@ -417,6 +417,14 @@ class Hourly(unittest.TestCase):
         j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
         runs = json.loads(self.hourly("facts"))["runs"]
         self.assertEqual((runs["old-auto"]["pool"], runs["new-auto"]["pool"]), ("hand", "auto"))
+        (self.review("new-auto") / "brief.md").write_text("task\nrole: coding\nsource: chat\n")   # tagged at queue: the tag wins
+        self.queued(self.t / "root", "tagged", 100, "auto")
+        j = self.review("tagged") / "run.json"   # tagged auto when queued, as `pi-run queue` writes it
+        j.write_text(json.dumps({**json.loads(j.read_text()), "pool": "auto"}))
+        (self.review("tagged") / "brief.md").write_text("task tagged\nrole: coding\nsource: chat\n")
+        (self.t / "hang").touch()
+        self.assertIn("started tagged", self.hourly("queue"))
+        self.assertEqual(json.loads((self.review("tagged") / "run.json").read_text())["pool"], "auto")
 
     def test_hourly_launch_waits_while_its_pool_is_full_or_a_host_is_unknown(self):
         (self.t / "hang").touch()
