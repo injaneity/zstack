@@ -206,19 +206,25 @@ def sections(text):
     return {"prs": list(dict.fromkeys(URL.findall(text))), **{k: v[:20] for k, v in got.items()}}
 
 
-def collect(hosts, dry, state):
-    """Step 1: each ended run's report into the outbox, then its collect, one row each."""
+def collect(hosts, dry, state, errors):
+    """Step 1: each ended run's report into the outbox, then its collect, one row each. A run whose report cannot be read
+    is not collected: it stays exited, an error this pass, and the next pass reads it again."""
     for h, f in hosts.items():
         for sid, r in sorted(f.get("runs", {}).items()):
             if r["state"] not in ("exited", "lost"):
                 continue
             rep = hourly.on(h, ["bin/hourly", "report", sid])
-            res = {"id": sid, "host": h, "rc": r.get("rc"), "state": r["state"], "author": state["authors"].pop(sid, None),
-                   **sections(rep.stdout if not rep.returncode else "")}
+            if rep.returncode:
+                errors.append(f"report {sid} on {h}: " + (rep.stderr.strip().splitlines() or [f"exit {rep.returncode}"])[-1][:150]
+                              + "; not collected")
+                continue
+            res = {"id": sid, "host": h, "rc": r.get("rc"), "state": r["state"], "author": state["authors"].get(sid),
+                   **sections(rep.stdout)}
             if dry:
                 print(f"would collect {h} {sid}: rc={r.get('rc')}, prs {len(res['prs'])}")
                 continue
             state["unsent"] = [x for x in state["unsent"] if (x["id"], x["host"]) != (sid, h)] + [res]   # a pass killed here redoes it
+            state["authors"].pop(sid, None)
             write(state_path(), state)
             p = hourly.on(h, ["bin/pi-run", "collect", sid])
             print(f"collect {h} {sid}: {(p.stdout or p.stderr).strip()[-200:]}")
@@ -257,7 +263,7 @@ def taken_ids(hosts):
 def run_pass(dry):
     state, errors = read_state(), []
     hosts = hourly.all_facts()
-    collect(hosts, dry, state)
+    collect(hosts, dry, state, errors)
     lines = drain(dry)
     hosts = hourly.all_facts() if not dry else hosts
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
@@ -266,7 +272,12 @@ def run_pass(dry):
     h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds("")
     if mh and "holds" not in hosts.get(mh, {}):
         errors.append(f"no holds file read on the merge host {mh}: nothing is picked this pass")
-    owned = {int(n) for n, _, _, sid, _ in hourly.owners(hosts, [w for w in waits if " wait who=session: " in w], hourly.branch_of) if sid}
+    def branch_of(n):   # a head GitHub cannot name leaves the PR's thread unknown: no unstick may be picked this pass
+        got = hourly.branch_of(n)
+        if got[0] == "unknown":
+            errors.append(f"gh pr view {n}: its head and thread are unknown")
+        return got
+    owned = {int(n) for n, _, _, sid, _ in hourly.owners(hosts, [w for w in waits if " wait who=session: " in w], branch_of) if sid}
     cands = candidates(errors, waits, owned)
     prs = open_prs(errors)
     live = {n for f in hosts.values() for r in f.get("runs", {}).values() for n in r.get("nums", [])}

@@ -232,6 +232,32 @@ class Pickup(unittest.TestCase):
         self.pickup()
         self.assertEqual(len(self.wakes()), 2)   # delivered: nothing new
 
+    def test_a_run_whose_report_cannot_be_read_is_not_collected_and_loses_no_result(self):
+        d = self.root / "review" / "chat-job"
+        d.mkdir()
+        (d / "brief.md").write_text("task\nrole: coding\nsource: chat\n")
+        self.assertEqual(subprocess.run([str(self.bin / "pi-run"), "chat-job", "coding", str(d / "brief.md")], env=self.env,
+                                        capture_output=True).returncode, 0)
+        self.assertTrue(self.wait("chat-job", "exited"))
+        (d / "run.log").unlink()   # bin/hourly report has nothing to read: exit 2
+        out = self.pickup()
+        self.assertEqual(self.state("chat-job"), "exited")
+        self.assertIn("no picks: report chat-job on local:", out)
+        self.assertEqual(len(self.wakes()), 1)
+        self.assertIn("not collected", self.wakes()[0][1])
+        (d / "report.md").write_text("Opened https://github.com/trycua/cua/pull/7415.\n")
+        self.pickup()
+        self.assertEqual(self.state("chat-job"), "collected")
+        self.assertIn("prs=https://github.com/trycua/cua/pull/7415", self.wakes()[-1])
+
+    def test_an_unknown_pr_head_blocks_every_pick(self):
+        (self.t / "bin" / "gh").write_text(FAKE_GH.replace('"pr view"*) echo', '"pr view"*) exit 1; echo'))
+        self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate"])
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup()
+        self.assertIn("no picks: gh pr view 7229: its head and thread are unknown", out)
+        self.assertEqual(self.rows("launch"), [])
+
     def test_a_standing_needs_zane_item_wakes_once_and_again_only_after_it_went_away(self):
         wait = "cua#7374 0b660ff71 wait who=zane: declared deep: needs Zane (no preapprove row)"
         self.peer(waits=[wait])
