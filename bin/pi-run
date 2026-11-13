@@ -298,9 +298,116 @@ def limit_until(last, rc, got):
     return utc(time.time() + 60 * int(m.group(1)) if m else None)
 
 
-def supervise(d, sid, cmd, env, cap):
+def idle_limit():
+    """config/policy.toml run.idle_min in seconds. A bad policy stops the launch."""
+    pol = policy()
+    try:
+        return pol.load()["run"]["idle_min"] * 60
+    except pol.PolicyError as e:
+        die(2, str(e))
+
+
+def _entries_tail(path, size=262144):
+    """The JSON entries at the end of a session file, oldest first: the last `size` bytes, doubled until they hold a
+    whole assistant message (one with a large tool call can be bigger than any fixed tail) or the whole file."""
+    try:
+        total = os.path.getsize(path)
+        with open(path, "rb") as f:
+            while True:
+                f.seek(max(0, total - size))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+                if size < total:
+                    lines = lines[1:]   # the first line may be cut
+                out = []
+                for line in lines:
+                    try:
+                        out.append(json.loads(line))
+                    except ValueError:
+                        pass
+                if size >= total or any((e.get("message") or {}).get("role") == "assistant" for e in out):
+                    return out
+                size *= 2
+    except OSError:
+        return []
+
+
+def _stamp(entry):
+    try:
+        return calendar.timegm(time.strptime(entry["timestamp"][:19], "%Y-%m-%dT%H:%M:%S"))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def session_progress(path):
+    """The last time a session file shows work: its last entry that is not a cache-warming refresh (pi appends those
+    while it waits, so the file's mtime moves with no work done), or, while that entry's tool calls are still running,
+    the latest end of the timeouts they declared."""
+    entries = [e for e in _entries_tail(path) if e.get("type") != "usage" and _stamp(e)]
+    if not entries:
+        return 0
+    last, done = _stamp(entries[-1]), set()
+    for e in reversed(entries):
+        m = e.get("message") or {}
+        if m.get("role") == "toolResult":
+            done.add(m.get("toolCallId"))
+            continue
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            ends = [_stamp(e) + x["arguments"]["timeout"] for x in m["content"]
+                    if x.get("type") == "toolCall" and x.get("id") not in done
+                    and isinstance((x.get("arguments") or {}).get("timeout"), (int, float))]
+            return max([last] + ends)
+        break
+    return last
+
+
+def session_files(d, sid):
+    """The run's pi session files and its subagents': pi names the session dir after the real cwd (a symlinked root,
+    as /srv/onigiri on the VM, is resolved), and the subagent tool names a child `<parent session id>-<agent>-<call id>`."""
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    sessions, out = os.path.join(agent, "sessions"), []
+    for p in {d, os.path.realpath(d)}:
+        s = os.path.join(sessions, "--" + p.strip("/").replace("/", "-") + "--")
+        out += [os.path.join(s, f) for f in (os.listdir(s) if os.path.isdir(s) else []) if f.endswith(".jsonl")]
+    child = re.compile(r"[^_]+_" + re.escape(sid) + r"-[a-z]+(-\d+)?-\w+\.jsonl")   # <time>_<sid>-<agent[-seat]>-<call id>
+    sub = os.path.join(sessions, "subagents")
+    out += [os.path.join(sub, f) for f in (os.listdir(sub) if os.path.isdir(sub) else []) if child.fullmatch(f)]
+    return out
+
+
+def files_progress(d, since):
+    """The newest mtime of a file under the review dir outside its worktrees, stopping at the first one newer than
+    `since` (a bench's or a lume run's log counts as progress)."""
+    newest = 0
+    for root, dirs, files in os.walk(d):
+        dirs[:] = [x for x in dirs if not (root == d and x.startswith("wt")) and x not in (".git", "target", "node_modules")]
+        for x in files:
+            try:
+                newest = max(newest, os.lstat(os.path.join(root, x)).st_mtime)
+            except OSError:
+                continue
+            if newest > since:
+                return newest
+    return newest
+
+
+def last_progress(d, sid, since=float("inf")):
+    """The last time the run showed progress (config/policy.toml [run]): run.log, its sessions, or a file it wrote.
+    With `since`, it stops at the first signal newer than that, which is all the supervisor needs to know."""
+    try:
+        t = os.path.getmtime(os.path.join(d, "run.log"))
+    except OSError:
+        t = 0
+    for p in session_files(d, sid):
+        if t > since:
+            return t
+        t = max(t, session_progress(p))
+    return t if t > since else max(t, files_progress(d, since))
+
+
+def supervise(d, sid, cmd, env, cap, idle):
     """The forked child: owns the run until pi exits, then writes exited, or queued after a 429 while fewer than `cap`
-    resumes have been spent. Never returns."""
+    resumes have been spent. A pi that shows no progress for `idle` seconds (config/policy.toml run.idle_min) is
+    stopped, TERM then KILL, and its run exits failed. Never returns."""
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
@@ -327,14 +434,30 @@ def supervise(d, sid, cmd, env, cap):
             rc = 127
         if got and proc:
             proc.send_signal(got[0])
+    stalled = 0
+    while rc is None and proc is not None:
+        try:
+            rc = proc.wait(timeout=min(60, max(1, idle // 10)))
+        except subprocess.TimeoutExpired:
+            quiet = time.time() - last_progress(d, sid, since=time.time() - idle)
+            if quiet >= idle and not stalled:
+                stalled = int(quiet // 60)
+                print(f"pi-run: no progress for {stalled} min, past run.idle_min in config/policy.toml: stopping pi", flush=True)
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    rc = proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
     if rc is None:
-        rc = 128 + got[0] if proc is None else proc.wait()
+        rc = 128 + got[0]
     killed, rc = rc < 0, 128 - rc if rc < 0 else rc   # a signal-killed pi is a failure, whatever it printed last
+    if stalled:   # an idle stop is a failure even when pi handles TERM and exits 0
+        killed, rc = True, rc or 128 + signal.SIGTERM
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
         last = last_line(d, r.run["attempt"])
         until = limit_until(last, rc, got or killed)
         done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap)
-        why = f"{sid} exited rc={rc}"
+        why = f"{sid} exited rc={rc}" + (f": stopped after {stalled} min with no progress (run.idle_min)" if stalled else "")
         if done["state"] == "queued":
             print(f"pi-run: back in the queue after an upstream limit ({done['limit_resumes']} of {cap} resumes); "
                   f"the hourly drain resumes it after {done['resume_at']}", flush=True)
@@ -411,7 +534,7 @@ def launch(sid, role, brief, extra):
     if pm.returncode:
         die(2, pm.stderr.strip())
     provider, model = pm.stdout.split()
-    cap = resume_cap()
+    cap, idle = resume_cap(), idle_limit()
     check(d, sid, run, **f)   # refuse before setup; checked again under the lock below
     try:   # pi lists a provider's models only when it has a credential (a model missing from pi's catalog still runs)
         ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
@@ -452,7 +575,7 @@ def launch(sid, role, brief, extra):
             os.close(r.fd)   # the lock stays the launcher's until run.json names this child
             gate is None or os.close(gate)   # and slots.lock until run.json counts this run
             try:
-                supervise(d, sid, cmd, env, cap)
+                supervise(d, sid, cmd, env, cap, idle)
             finally:
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),

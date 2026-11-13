@@ -57,7 +57,7 @@ def restated(text, pol):
     h, s, p = pol["hourly"], pol["slots"], pol["pickup"]
     numbers = {
         "hourly.floor_gb": rf"\b{h['floor_gb']} ?G(B|iB)?\b",
-        "hourly.hung_min": rf"\b({h['hung_min']} ?min(ute)?s?|{h['hung_min'] / 60:g} ?h(ours?)?)\b",
+        "run.idle_min": rf"\b({pol['run']['idle_min']} ?min(ute)?s?|{pol['run']['idle_min'] / 60:g} ?h(ours?)?)\b",
         "hourly.merge_stale_min": rf"\b{h['merge_stale_min']} ?min(ute)?s?\b",
         "hourly.batch_hour": rf"\b0?{h['batch_hour']}:00 SGT\b",
         "hourly.file_cap": rf"\bat most {h['file_cap']}\b",
@@ -130,7 +130,7 @@ class NoRestatedValues(unittest.TestCase):
 
     def test_the_check_catches_what_the_playbook_said_before(self):
         """Lines from playbooks/hourly.md before the move, each a value the policy now holds."""
-        old = {"it has at least 20G free": "hourly.floor_gb", "no log or session write for 3h": "hourly.hung_min",
+        old = {"it has at least 20G free": "hourly.floor_gb", "no progress for 2.5h": "run.idle_min",
                "(none in the last 55 minutes": "hourly.merge_stale_min", "The first pass after 08:00 SGT": "hourly.batch_hour",
                "at most 10 a pass": "hourly.file_cap", "lume VMs older than 24h": "hourly.lume_prune_age_h",
                "we should have 3 slots for autopickup and up to 5 hand started work": "slots.auto",

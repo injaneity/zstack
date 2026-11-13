@@ -72,6 +72,7 @@ SCHEMA = {
     "slots": {"auto": (pos_int, "a positive integer"), "hand": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "resume": {"cap": (pos_int, "a positive integer")},
+    "run": {"idle_min": (pos_int, "a positive integer")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
@@ -81,7 +82,6 @@ SCHEMA = {
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
     "hourly": {
         "floor_gb": (pos_int, "a positive integer"),
-        "hung_min": (pos_int, "a positive integer"),
         "merge_stale_min": (pos_int, "a positive integer"),
         "batch_hour": (lambda v: type(v) is int and 0 <= v <= 23, "an hour of the day, 0 to 23"),
         "file_cap": (pos_int, "a positive integer"),

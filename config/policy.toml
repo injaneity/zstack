@@ -80,16 +80,26 @@ fixes = "Fixes #{issue}"
 salvaged_from = "Salvaged from #{pr}"
 since = "2026-07-22"
 
+# How long a running run may show no progress before its supervisor stops it (bin/pi-run supervise; Zane, 13 Nov: "lets
+# investigate and see if we can not let this issues happen again", after a run held an auto slot for 20 hours). Progress
+# is any of: a run.log write, a session entry of the run or of its subagents that is not a cache-warming refresh, a file
+# written under review/<id> outside its worktrees, or a tool call still inside the `timeout` it declared. A stopped run
+# exits failed and sends the failed wake, and the pickup collects it like any failed run. bin/hourly marks a run HUNG?
+# past the same limit, for a supervisor too old to stop it. tool-guard gives every bash call that declares no timeout
+# this limit as its timeout, so a call blocked on a process that never ends returns to the session instead of hanging
+# it. The value is above the longest silence of a working run on either host in Nov and below the shortest stuck one.
+[run]
+idle_min = 150
+
 # The hourly pass's thresholds (bin/hourly, bin/pickup, playbooks/hourly.md), moved out of bin/hourly and the playbook.
 # `floor_gb`: a peer takes launches only with this much disk free (step 3), and a host under it is a disk to prune.
-# `hung_min`: a running run with no log or session write for this long is marked HUNG? (step 2). `merge_stale_min`: the
+# `merge_stale_min`: the
 # merge job's `last-run` older than this is `stale` (step 0): its 15-minute cron interval plus its 40-minute kill
 # (docs/HOST.md, The merge job). `batch_hour`: the daily preapprove batch is due from this hour SGT (step 9).
 # `file_cap`: follow-up issues the chat files per pass, oldest first (step 6). `lume_prune_age_h`: a stopped
 # `cua-e2e-*` lume VM whose run is collected is pruned once this old (step 3; the 11 Nov retro).
 [hourly]
 floor_gb = 20
-hung_min = 180
 merge_stale_min = 55
 batch_hour = 8
 file_cap = 10
