@@ -193,7 +193,8 @@ def validate_rules(data, pol):
             "issue-close": [f"`{iss['repo']}`"],
             "salvage-fixes": [f"`{iss['salvaged_from'].format(pr='<pr>')}`", f"`{iss['fixes'].format(issue='<issue>')}`"],
             "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['patent']['public_repo']}`", f"`{pol['patent']['private_repo']}`"],
-            "merge-risk": ["|".join(pol["merge"]["tiers"])]}
+            "merge-risk": ["|".join(pol["merge"]["tiers"])],
+            "lume-prune": [f"older than {pol['hourly']['lume_prune_age_h']}h"]}
     for rid, words in need.items():
         if rid not in seen:
             raise PolicyError(f"rules: no rule {rid}, which states config/policy.toml's values")

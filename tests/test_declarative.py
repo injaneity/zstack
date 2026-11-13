@@ -96,6 +96,13 @@ class Rules(unittest.TestCase):
             for rid in re.findall(r"^\{\{rule ([a-z-]+)\}\}$", (PKG / f).read_text(), re.M):
                 self.assertIn(rid, ids, f)
 
+    def test_the_12_nov_retro_lines_are_rules_word_for_word(self):
+        """Zane's rules from the 12 Nov retro, in the Hard rules every session gets."""
+        md = policy.render(RULES)
+        for line in ("When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool.",
+                     "Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed."):
+            self.assertIn(line[:-1], md)
+
     def test_render_of_named_rules_is_one_bullet_each_in_order(self):
         self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",
@@ -114,7 +121,8 @@ class Rules(unittest.TestCase):
                                    ("salvage-fixes", "`Fixes #<issue>`", "`Closes #<issue>`", "`Fixes #<issue>`"),
                                    ("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
                                    ("patent-scope", "Keyvault", "Vault", "keyvault"),
-                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human")):
+                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human"),
+                                   ("lume-prune", "older than 24h", "older than 48h", "older than 24h")):
             with self.subTest(rid=rid), self.assertRaisesRegex(policy.PolicyError, re.escape(why)):
                 policy.validate_rules(bad(rid, old, new), POLICY)
         dup = json.loads(json.dumps(RULES))
