@@ -166,7 +166,7 @@ class Pickup(unittest.TestCase):
         (self.t / "hang").touch()
         holds = "hold | 302 | no | note\nskip-author | app/cua-agents | no | bots\nreview-only | f-trycua | no | teammate\n"
         self.peer(waits=["cua#303 3030000aa wait who=zane: declared deep: needs Zane (no preapprove row)"], holds=holds,
-                  runs={"busy": {"state": "running", "auto": False, "nums": [104]}})
+                  runs={"busy": {"state": "running", "pool": "hand", "nums": [104]}})
         self.github(issues=[issue(101, "2026-10-01T00:00:00Z", labels=["hold"]),
                             issue(102, "2026-10-02T00:00:00Z", linked=[900]),
                             issue(103, "2026-10-03T00:00:00Z", linked=[901]),
@@ -361,12 +361,12 @@ class Pickup(unittest.TestCase):
         pause.write_text("# bench on the vm\nvm until mini bench\n")
         self.peer(at_main=True)
         (self.root / "review" / "bench").mkdir()
-        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "running", "attempt": 1, "rc": None, **live()}))
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "running", "attempt": 1, "rc": None, "pool": "hand", **live()}))
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertIn("would launch mini cua-10:", out)
         self.assertIn("skip cua-11: host", out)
         (self.root / "review" / "bench" / "report.md").write_text("bench done\n")
-        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "exited", "attempt": 1, "pid": None, "rc": 0}))
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "exited", "attempt": 1, "pid": None, "rc": 0, "pool": "hand"}))
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertIn("would launch vm cua-10:", out)
         self.assertIn("would launch vm cua-11:", out)

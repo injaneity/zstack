@@ -38,11 +38,7 @@ _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
-_pol = pr.policy()
-try:
-    _policy = _pol.load()
-except _pol.PolicyError as e:
-    pr.die(2, f"hourly: {e}")
+_policy = pr.conf()
 FLOOR_GB, HUNG_MIN, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "hung_min", "batch_hour"))
 MERGE_STALE_MIN = _policy["hourly"]["merge_stale_min"]
 REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]
@@ -102,7 +98,7 @@ NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")
 def facts(full=True):
     r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
     if ls.returncode:
-        return {"error": "pi-run list: " + (ls.stderr.strip().splitlines() or [f"exit {ls.returncode}"])[-1][:200]}
+        return {"error": "pi-run list: " + pr.tail(ls)}
     out = ls.stdout
     runs, ids = {}, []
     for line in out.splitlines():
@@ -112,13 +108,13 @@ def facts(full=True):
             continue
         d, f = os.path.join(r, "review", sid), dict(x.split("=", 1) for x in kv)
         brief = open(os.path.join(d, "brief.md"), errors="replace").read() if os.path.exists(os.path.join(d, "brief.md")) else ""
-        f.update(state=state, pool=pool(state, pr.read_json(os.path.join(d, "run.json")) or {}, brief),
+        f.update(state=state, pool=pr.read_json(os.path.join(d, "run.json"))["pool"],
                  nums=sorted({int(n) for n in NUM.findall(brief)}))
         if state == "running" and full:
             f["idle_min"] = activity_min(d)
         runs[sid] = f
     if not full:
-        return {"runs": runs, "pools": 1}
+        return {"runs": runs}
     parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     last = os.path.join(r, "tick", "last-run")
     try:
@@ -129,15 +125,7 @@ def facts(full=True):
     if os.path.isfile(holds) and os.environ.get("ONIGIRI_MERGE_HOST") == SELF:
         merge["holds"] = open(holds, errors="replace").read()
     return {"ids": ids, "sha": pr.sha(), "at_main": parity.returncode == 0, "parity": [x for x in parity.stdout.splitlines() if x.startswith("FAIL")],
-            "free_gb": free_gb(r), "runs": runs, "pools": 1, "pushed": pushed(os.path.join(r, "review")), **merge}
-
-
-def pool(state, run, brief):
-    if run.get("pool") in pr.POOLS:
-        return run["pool"]
-    if state == "running" or pr.continuation(run):
-        return "hand"
-    return pr.pool_of(brief, run.get("role") or "coding")
+            "free_gb": free_gb(r), "runs": runs, "pushed": pushed(os.path.join(r, "review")), **merge}
 
 
 def pushed(review):
@@ -191,7 +179,7 @@ def reopen(hosts, waits, dry):
             print(f"reopen {h} {sid}: {p.stdout.strip()}")
             log(h, "ci-reopen", sid, f"cua#{n} at {sha[:9]}: {why}")
         else:
-            err = (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1].removeprefix("pi-run: ")
+            err = pr.tail(p, None).removeprefix("pi-run: ")
             print(f"red cua#{n} {sha[:9]}: {err}" + ("; needs Zane" if "spent" in err else ""))
 
 
@@ -216,26 +204,18 @@ def all_facts(full=True):
         try:
             hosts[h] = json.loads(p.stdout)
         except ValueError:
-            hosts[h] = {"error": (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:200]}
+            hosts[h] = {"error": pr.tail(p)}
     return hosts
 
 
 def slots(hosts):
     rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] == "running"]
-    return {p: sum(of(r) == p for r in rs) for p in pr.POOLS}
-
-
-def of(r):
-    return r.get("pool") or "hand"
+    return {p: sum(r["pool"] == p for r in rs) for p in pr.POOLS}
 
 
 def pool_at(hosts, host, sid, brief):
-    f = hosts.get(host, {})
-    if sid in f.get("runs", {}):
-        return of(f["runs"][sid])
-    if not f.get("pools"):
-        return "hand"
-    return pr.pool_of(brief, next((x.split(":", 1)[1].strip() for x in brief.splitlines() if x.startswith("role:")), "coding"))
+    run = hosts.get(host, {}).get("runs", {}).get(sid)
+    return run["pool"] if run else pr.pool_of(brief, pr.field(brief, "role", "coding"))
 
 
 def unknown(hosts):
@@ -268,11 +248,12 @@ def paused(hosts, host):
 
 
 def auto_free(hosts):
-    return 0 if unknown(hosts) else max(0, pr.caps()["auto"] - slots(hosts)["auto"])
+    return 0 if unknown(hosts) else max(0, pr.conf("slots")["auto"] - slots(hosts)["auto"])
 
 
 def slots_line(n):
-    return f"auto {n['auto']}/{pr.caps()['auto']}, hand {n['hand']}/{pr.caps()['hand']}, quick {n['quick']} (no cap)"
+    cap = pr.conf("slots")
+    return f"auto {n['auto']}/{cap['auto']}, hand {n['hand']}/{cap['hand']}, quick {n['quick']} (no cap)"
 
 
 def slots_lock():
@@ -287,18 +268,21 @@ def snapshot(linear):
     def gh(*a):
         p = run(["gh", "pr", "list", "-R", REPO, "--state", "open", "--limit", "2000", *a])
         if p.returncode:
-            errors.append(f"gh pr list {a[0]} {a[1]}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
+            errors.append(f"gh pr list {a[0]} {a[1]}: " + pr.tail(p, 150))
         return json.loads(p.stdout) if not p.returncode and p.stdout.strip() else []
     errors = []
     ours = gh("--author", ME, "--json", "number,headRefOid")
     others = gh("--search", f"-author:{ME}", "--json", "number,author")
-    bot = lambda a: a.get("is_bot") or a["login"].startswith("app/") or a["login"].endswith("[bot]")  # noqa: E731
     waits = merge_waits(errors)
     mh = HOST[0].get("ONIGIRI_MERGE_HOST")
     return {"hosts": hosts, "linear": sorted(linear), "batch_due": batch_due(root()), "errors": errors, "waits": waits,
             "merge": merge_health(hosts[mh].get("merge_last")) if mh in hosts and "error" not in hosts[mh] else None,
             "ours": sorted(f"{p['number']}:{p['headRefOid'][:9]}" for p in ours),
             "others": sorted(f"{p['number']}:{p['author']['login']}" for p in others if not bot(p["author"]))}
+
+
+def bot(author):
+    return bool(author.get("is_bot")) or author["login"].startswith("app/") or author["login"].endswith("[bot]")
 
 
 def merge_health(line):
@@ -341,7 +325,7 @@ def report(s, fp, last):
         print(f"host {h}: zstack {f['sha'][:9]} {'at main' if f['at_main'] else 'NOT at main: ' + '; '.join(f['parity'])}, free {f['free_gb']}G")
         for sid, r in sorted(f["runs"].items(), key=lambda x: (x[1]["state"], x[1].get("since", ""))):
             extra = " ".join(f"{k}={r[k]}" for k in ("rc", "since", "resume_at", "idle_min") if k in r and r[k] != "None")
-            print(f"  {r['state']:<8} {sid} {of(r)} {extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}")
+            print(f"  {r['state']:<8} {sid} {r['pool']} {extra}{'  HUNG?' if r.get('idle_min', 0) >= HUNG_MIN else ''}")
     vm = [h for h, f in s["hosts"].items() if h != SELF and f.get("at_main") and f.get("free_gb", 0) >= FLOOR_GB
           and not paused(s["hosts"], h)]
     print(f"slots: {slots_line(slots(s['hosts']))}: auto free {auto_free(s['hosts'])}")
@@ -373,7 +357,7 @@ def merge_waits(errors):
         return []
     p = on(h, ["hosts/vm/merge_job.py", "--dry-run"])
     if p.returncode:
-        errors.append(f"merge job dry run on {h}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150])
+        errors.append(f"merge job dry run on {h}: " + pr.tail(p, 150))
     return sorted(x.split(" ", 1)[1] for x in p.stdout.splitlines() if x.startswith("dry-run ") and " wait who=" in x)
 
 
@@ -435,7 +419,7 @@ def drain():
     for h in hosts:
         if pause := paused(hosts, h):
             print(f"pause: {pause}")
-    queued = sorted((r.get("since", ""), h, sid, of(r)) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
+    queued = sorted((r.get("since", ""), h, sid, r["pool"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
                     if r["state"] == "queued")
     rc = 0
     for since, h, sid, p in queued:
@@ -455,7 +439,7 @@ def drain():
             n[p] += 1
         else:
             rc = 1
-    free = 0 if blind else max(0, pr.caps()["auto"] - n["auto"])
+    free = 0 if blind else max(0, pr.conf("slots")["auto"] - n["auto"])
     print(f"queue: {len(queued)} queued, slots now {slots_line(n)}: auto free {free}")
     return rc
 
@@ -520,7 +504,7 @@ def main(argv):
             pr.die(2, f"{rest[0]}: no review/{rest[0]}/brief.md on {SELF}; write it with bin/new-brief")
         text = open(brief).read()
         queued = (pr.read_json(os.path.join(d, "run.json")) or {}).get("role")
-        role = next((x.split(":", 1)[1].strip() for x in text.splitlines() if x.startswith("role:")), queued or "coding")
+        role = pr.field(text, "role", queued or "coding")
         env = {**os.environ, "PI_RUN_DRAIN": "1"} if rest[1:] == ["--drain"] else {k: v for k, v in os.environ.items() if k != "PI_RUN_DRAIN"}
         os.execve(os.path.join(PKG, "bin", "pi-run"), ["pi-run", rest[0], role, brief], env)
     if cmd == "report" and len(rest) == 1 and pr.ID.fullmatch(rest[0]):

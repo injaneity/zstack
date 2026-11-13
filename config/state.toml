@@ -50,14 +50,6 @@ writer = "bin/pi-run"
 readers = ["bin/pi-run", "bin/hourly"]
 schema = "`== attempt <n>` then pi's output for that attempt, then the supervisor's exit and prune lines"
 
-[file.queued-mark]
-path = "review/<id>/QUEUED"
-host = "each"
-format = "mark"
-writer = "none: the queue before run.json had the state"
-readers = ["bin/pi-run"]
-schema = "legacy: a review dir with this and no run.json becomes a queued run.json, since = the marker's time"
-
 [file.brief]
 path = "review/<id>/brief.md"
 host = "each"

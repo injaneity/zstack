@@ -104,7 +104,7 @@ class Hourly(unittest.TestCase):
 
     def test_queue_then_hourly_shows_it_and_launch_starts_it_and_logs_it(self):
         self.sh("new-brief", "q1", "research", stdin=TASK)
-        r = self.sh("queue", "q1")
+        r = self.sh("pi-run", "queue", "q1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"^q1 queued role=research pool=quick since=\S+Z\n$")
         out = self.hourly()
@@ -292,7 +292,7 @@ class Hourly(unittest.TestCase):
     def test_slots_and_launch_host_follow_the_peer(self):
         peer = self.t / "peer"
         peer.write_text("#!/bin/bash\n" + 'echo \'{"sha": "s", "at_main": true, "parity": [], "free_gb": 25, "runs": '
-                        '{"v1": {"state": "running", "auto": true, "idle_min": 200}}}\'\n')
+                        '{"v1": {"state": "running", "pool": "hand", "idle_min": 200}}}\'\n')
         peer.chmod(0o755)
         out = self.hourly(ONIGIRI_PEERS=f"vm={peer}")
         self.assertIn("host vm: zstack s at main, free 25G", out)
@@ -350,7 +350,7 @@ class Hourly(unittest.TestCase):
         (d / "brief.md").write_text(f"task {sid}\nrole: coding\nsource: {source}\n")
         utc = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))   # noqa: E731
         run = {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
-               "resume_at": None, "since": utc(time.time() - age), "role": "coding"}
+               "resume_at": None, "since": utc(time.time() - age), "role": "coding", "pool": source if source in ("auto", "quick") else "hand"}
         if resume_in is not None:
             (d / "brief.full.md").write_text(f"task {sid}\n")
             run.update(attempt=1, rc=1, resume_at=utc(time.time() + resume_in), extra=[])
@@ -391,15 +391,13 @@ class Hourly(unittest.TestCase):
             self.assertEqual(run(root_, sid)["state"], "queued", sid)
         self.assertIn("queue: 5 queued, slots now auto 3/3, hand 5/5, quick 1 (no cap): auto free 0", r.stdout)
 
-    def test_a_hand_start_past_the_hand_pool_is_queued_and_says_so_and_untagged_runs_count_as_hand(self):
+    def test_a_hand_start_past_the_hand_pool_is_queued_and_says_so(self):
         local = self.t / "root"
         (self.t / "hang").touch()
         for i in range(6):
             self.queued(local, f"old{i}", 2000)
             r = self.sh("pi-run", f"old{i}", "coding", str(self.review(f"old{i}") / "brief.md"), PI_RUN_COUNTED="1")
             self.assertEqual(r.returncode, 0, r.stderr)
-            j = self.review(f"old{i}") / "run.json"
-            j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
         self.assertIn("slots: auto 0/3, hand 6/5, quick 0 (no cap): auto free 3", self.hourly())
         brief = self.t / "new.md"
         brief.write_text("task new\nrole: coding\nsource: chat\n")
@@ -426,24 +424,6 @@ class Hourly(unittest.TestCase):
             self.assertEqual(self.sh("pi-run", "collect", f"old{i}").returncode, 0)
         self.assertIn("started new attempt 1", self.hourly("queue"))
         self.assertIn("hand 5/5", self.hourly())
-
-    def test_an_untagged_continuation_counts_as_hand_as_its_resume_will(self):
-        self.queued(self.t / "root", "old-auto", 900, "auto", resume_in=-60)
-        j = self.review("old-auto") / "run.json"
-        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
-        self.queued(self.t / "root", "new-auto", 100, "auto")
-        j = self.review("new-auto") / "run.json"
-        j.write_text(json.dumps({k: v for k, v in json.loads(j.read_text()).items() if k != "pool"}))
-        runs = json.loads(self.hourly("facts"))["runs"]
-        self.assertEqual((runs["old-auto"]["pool"], runs["new-auto"]["pool"]), ("hand", "auto"))
-        (self.review("new-auto") / "brief.md").write_text("task\nrole: coding\nsource: chat\n")
-        self.queued(self.t / "root", "tagged", 100, "auto")
-        j = self.review("tagged") / "run.json"
-        j.write_text(json.dumps({**json.loads(j.read_text()), "pool": "auto"}))
-        (self.review("tagged") / "brief.md").write_text("task tagged\nrole: coding\nsource: chat\n")
-        (self.t / "hang").touch()
-        self.assertIn("started tagged", self.hourly("queue"))
-        self.assertEqual(json.loads((self.review("tagged") / "run.json").read_text())["pool"], "auto")
 
     def test_hourly_launch_waits_while_its_pool_is_full_or_a_host_is_unknown(self):
         (self.t / "hang").touch()
@@ -502,19 +482,6 @@ class Hourly(unittest.TestCase):
         self.assertIn("wait local la: auto launches on local paused: auto-pause unreadable", dry)
         self.assertIn("would launch test-vm vh: hand pool", dry)
 
-    def test_a_peer_before_the_pools_has_every_run_counted_as_hand(self):
-        old = {"sha": "s", "at_main": True, "parity": [], "free_gb": 25,
-               "runs": {"q": {"state": "queued", "auto": True, "since": "2026-11-10T00:00:00Z"}}}
-        peer = self.t / "old"
-        peer.write_text("#!/bin/bash\necho '" + json.dumps(old) + "'\n")
-        peer.chmod(0o755)
-        (self.t / "hang").touch()
-        for i in range(5):
-            self.queued(self.t / "root", f"h{i}", 100)
-            self.assertEqual(self.sh("hourly", "launch", f"h{i}", "local", "chat").returncode, 0)
-        out = self.hourly("queue", ONIGIRI_PEERS=f"vm={peer}", PI_RUN_DRY="1")
-        self.assertIn("wait vm q: hand pool full: 5/5 running", out)
-
     def test_a_pr_red_after_its_rerun_reopens_the_thread_that_pushed_its_head_once_per_head(self):
         sha, other = "a5d26a5a" + "1" * 32, "b" * 40
         d = self.review("salvage-7255")
@@ -527,7 +494,7 @@ class Hourly(unittest.TestCase):
         (e / "pushed").write_text(f"{sha} salvage/7255 2026-11-10T02:00:00.000000Z\n")
         (d / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "pid": 1, "start": "t", "rc": 0, "wake_finish": True,
                                                 "wake": "done", "resume_at": None, "since": "2026-11-10T20:10:17Z", "role": "coding",
-                                                "extra": []}))
+                                                "extra": [], "pool": "hand"}))
         peer = self.t / "mj"
         peer.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' "
                         f"'dry-run cua#7338 {sha[:9]} wait who=session: red after rerun: ci-gate, contract clients / result' "
@@ -570,12 +537,12 @@ class Hourly(unittest.TestCase):
             f.write_text("#!/bin/bash\necho '" + json.dumps({"sha": "s", "at_main": True, "parity": [], "free_gb": free, "runs": runs}) + "'\n")
             f.chmod(0o755)
             return f"vm={f}"
-        q = {"state": "queued", "auto": False, "since": "2026-11-10T00:00:00Z"}
+        q = {"state": "queued", "pool": "hand", "since": "2026-11-10T00:00:00Z"}
         held = {f"r{i}": {"state": "running", "pool": "hand"} for i in range(4)}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(19, {"v": q, **held}))
         self.assertIn("wait vm v: 19G free, under 20G", out)
         self.assertIn("slots: auto 0/3, hand 4/5", self.hourly(ONIGIRI_PEERS=peer(25, held)))
-        back = {"state": "queued", "auto": False, "since": "2026-11-09T00:00:00Z", "resume_at": "2099-01-01T00:00:00Z"}
+        back = {"state": "queued", "pool": "hand", "since": "2026-11-09T00:00:00Z", "resume_at": "2099-01-01T00:00:00Z"}
         out = self.hourly("queue", ONIGIRI_PEERS=peer(25, {"v": q, "p": back, **held}), PI_RUN_DRY="1")
         self.assertIn("wait vm p: after a 429, not before resume_at 2099-01-01T00:00:00Z", out)
         self.assertIn("would launch vm v", out)
@@ -657,7 +624,7 @@ class Hourly(unittest.TestCase):
 
     def test_every_entry_point_prints_the_sha_it_runs(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-        for prog, argv in (("hourly", ["facts"]), ("queue", ["nothing"]), ("pi-run", ["list"]), ("model-for", ["coding"])):
+        for prog, argv in (("hourly", ["facts"]), ("pi-run", ["list"])):
             self.assertEqual(self.sh(prog, *argv).stderr.splitlines()[0], f"zstack {sha}", prog)
         r = subprocess.run([sys.executable, str(PKG / "hosts" / "vm" / "wake.py"), "failed", "x"], capture_output=True, text=True,
                            env=self.env, timeout=30)

@@ -6,7 +6,7 @@
 # his call in its comment.
 schema = 1
 
-# The provider and model each role runs on: bin/pi-run and bin/model-for for a launch, the subagent tool for a child.
+# The provider and model each role runs on: bin/pi-run (bin/policy seat) for a launch, the subagent tool for a child.
 # A list is a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the
 # parent's model when its seat fails (extensions/subagent/prompt.ts); the other agents do.
 [models]

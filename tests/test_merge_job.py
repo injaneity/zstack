@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -758,18 +757,6 @@ class Stage(unittest.TestCase):
                          ["urgent cua#10 webhook failed: HTTP 502", "urgent cua#10 webhook sent (200)"])
         self.assertGreater(json.loads((self.d / "tick/state.json").read_text())["merges"]["since"], "2026-11-06")
 
-    def test_the_old_buffers_urgent_keys_carry_over_and_the_rest_is_dropped(self):
-        key = f"unexpected-merge|cua#10|{'c' * 40}"
-        (self.d / "tick/state.json").write_text(json.dumps({"buffered": {key: "t", f"merge-blocked|cua#9|{H}": "t"},
-                                                            "merges": {"since": "2026-11-05T00:00:00+08:00"}}))
-        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
-                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
-        self.run_()
-        self.assertEqual(self.woken(), [])
-        st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertNotIn("buffered", st)
-        self.assertEqual(list(st["woken"]), [key])
-
     def test_merge_watch_seeds_then_alerts_once_for_a_merge_it_did_not_make(self):
         self.run_()
         st = json.loads((self.d / "tick/state.json").read_text())
@@ -867,46 +854,6 @@ class Stage(unittest.TestCase):
         self.assertIsNone(mj.queue_merged_by([add("injaneity"), gone("checks_timed_out")]))
         self.assertIsNone(mj.queue_merged_by([]))
         self.assertIsNone(mj.queue_merged_by([add("injaneity")]))
-
-    def test_the_first_run_seeds_the_allow_list_from_events_log(self):
-        at = lambda h: (datetime.now(mj.SGT) - timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731  inside the window
-        with open(self.d / "events.log", "w") as e:
-            e.write(f"{at(2)} merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
-                    f"{at(2)} merge-queued cua#7181 squash at d18608a73: green\n"
-                    f"{at(1)} merge-noted cua#7001 merged by f-trycua\n")
-        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T00:00:00+08:00"}}))
-        self.merged = [{"number": n, "headRefOid": h + "e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
-                        "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}
-                       for n, h in ((7180, "c18608a73"), (7181, "d18608a73"))]
-        self.run_()
-        self.assertEqual(self.woken(), [])
-        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")
-
-    def test_a_seeded_merge_does_not_wake_while_it_is_still_in_the_window(self):
-        head = "872f49fb0bc3" + "0" * 28
-        (self.d / "events.log").write_text(f"2026-11-10T12:32:07+08:00 merged cua#7145 squash at {head[:9]}: green, risk deep\n")
-        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T12:00:00+08:00"}}))
-        self.merged = [{"number": 7145, "headRefOid": head, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-10T04:35:44Z",
-                        "title": "t", "mergeCommit": {"oid": "e730ff4cb65e" + "0" * 28}}]
-        tick = datetime(2026, 11, 10, 12, 47, 31, tzinfo=mj.SGT)
-        while tick <= datetime(2026, 11, 10, 19, 2, 31, tzinfo=mj.SGT):
-            with patch.object(mj.time, "time", return_value=tick.timestamp()), \
-                    patch.object(mj, "now", return_value=tick.isoformat(timespec="seconds")):
-                self.run_()
-            self.assertEqual(self.woken(), [], tick)
-            tick += timedelta(minutes=15)
-        st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertGreater(st["merges"]["since"], "2026-11-10T12:35:44+08:00")
-        self.assertEqual(st["landed"], {})
-
-    def test_the_seed_takes_the_queued_head_over_a_later_merged_line(self):
-        ev = [f"2026-11-10T12:00:00+08:00 merge-queued cua#7240 squash at {H[:9]}: green",
-              f"2026-11-10T12:30:00+08:00 merged cua#7240 squash at {H2[:9]}, mergedAt x: green",
-              f"2026-10-26T12:36:34+08:00 merged cua#5775 squash at {H[:9]}: green, verify PASS"]
-        self.assertEqual(mj.seed_landed(ev), {"7240": {"head": H[:9], "at": "2026-11-10T12:00:00+08:00"},
-                                              "5775": {"head": H[:9], "at": "2026-10-26T12:36:34+08:00"}})
-        self.assertEqual(mj.merge_audit([{"number": 7240, "headRefOid": H2, "mergedBy": {"login": "injaneity"}}],
-                                        {int(k): v["head"] for k, v in mj.seed_landed(ev).items()}, {}), [(7240, "injaneity")])
 
     def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
         since = "2026-11-05T00:00:00+08:00"

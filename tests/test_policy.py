@@ -21,7 +21,7 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
+        for f in ("bin/policy", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
                   "config/rules.toml", "config/state.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
@@ -108,7 +108,7 @@ class Policy(unittest.TestCase):
 
     def test_readers_refuse_a_policy_bin_policy_rejects(self):
         self.write(SHIPPED.replace("fix_attempts = 3", "fix_attempts = -1"))
-        for prog, args in (("bin/model-for", ["coding"]), ("bin/hourly", ["log", "h", "a", "i", "r"])):
+        for prog, args in (("bin/policy", ["seat", "coding"]), ("bin/hourly", ["log", "h", "a", "i", "r"])):
             with self.subTest(prog=prog):
                 r = self.run_(*args, prog=prog)
                 self.assertNotEqual(r.returncode, 0, r.stdout)

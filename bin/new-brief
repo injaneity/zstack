@@ -6,7 +6,7 @@ echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 id=$1 role=$2 source=${3:-chat}
 case "$id" in [A-Za-z0-9]*) ;; *) echo "new-brief: bad id $id" >&2; exit 2;; esac
 case "$source" in auto|chat|quick) ;; *) echo "new-brief: source is auto, chat or quick, not $source" >&2; exit 2;; esac
-"$pkg/bin/model-for" "$role" >/dev/null
+"$pkg/bin/policy" seat "$role" >/dev/null
 root=$(python3 -I -c 'import importlib.machinery as m, importlib.util as u, sys
 l = m.SourceFileLoader("p", sys.argv[1]); p = u.module_from_spec(u.spec_from_loader("p", l)); l.exec_module(p)
 print(p.host_env("list")[1])' "$pkg/bin/pi-run")

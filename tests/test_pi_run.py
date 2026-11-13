@@ -299,7 +299,7 @@ class Launcher(unittest.TestCase):
         pkg = self.t / "pkg"
         for sub in ("bin", "config", "hosts/vm"):
             (pkg / sub).mkdir(parents=True)
-        for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "config/state.toml", "hosts/vm/wake.py"):
+        for f in ("bin/pi-run", "bin/hourly", "bin/policy", "config/policy.toml", "config/state.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
         shutil.copytree(PKG / "vendor", pkg / "vendor")
@@ -634,7 +634,6 @@ class Launcher(unittest.TestCase):
             self.assertEqual(self.pi_run("queue", sid).returncode, 0)
             time.sleep(1.1)
         self.assertEqual((self.run_json("qa")["state"], self.run_json("qa")["role"]), ("queued", "research"))
-        self.assertFalse((self.t / "root/review/qa/QUEUED").exists())
         lines = self.pi_run("list", "queued").stdout.splitlines()
         self.assertEqual([x.split()[:3] for x in lines], [["qa", "queued", "attempt=0"], ["qb", "queued", "attempt=0"]])
         self.assertRegex(lines[0], r" since=\d{4}-\d\d-\d\dT")
@@ -647,24 +646,11 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("qa", "coding", str(self.t / "brief.md"))
         self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: qa: attempt 1 was collected; a retry is a fresh id"))
 
-    def test_a_paused_run_from_the_old_code_becomes_a_queued_continuation(self):
-        d = self.t / "root" / "review" / "old-pause"
-        d.mkdir(parents=True)
-        (d / "brief.full.md").write_text("task\n")
-        (d / "run.json").write_text(json.dumps({**Step.R(Step(), "paused", rc=1, start="Tue Nov 10 04:53:24 2026"), "pid": 99999999,
-                                                "resume_at": "2026-11-10T06:00:00Z", "role": "coding", "extra": []}))
-        self.assertEqual(self.pi_run("list").stdout,
-                         "old-pause queued attempt=1 rc=1 since=2026-11-10T04:53:24Z resume_at=2026-11-10T06:00:00Z\n")
-        self.assertEqual(self.pi_run("old-pause", "coding", str(self.t / "brief.md")).returncode, 3)
-        r = self.pi_run("old-pause", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("resumed old-pause attempt 1", r.stdout)
-
     def test_a_drain_that_set_up_a_fresh_start_refuses_a_run_that_became_a_continuation_meanwhile(self):
         d = self.t / "root" / "review" / "race"
         d.mkdir(parents=True)
         q = {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
-             "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "coding"}
+             "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "coding", "pool": "hand"}
         (d / "run.json").write_text(json.dumps(q))
         cont = {**q, "attempt": 1, "rc": 1, "resume_at": "2026-11-10T02:00:00Z", "extra": []}
         swap = f'echo {json.dumps(json.dumps(cont))} > "{d}/run.json";'
@@ -685,25 +671,6 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("rr", "verifier", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("as role coding: claude-code", r.stdout)
-
-    def test_a_live_queued_marker_becomes_a_queued_run_with_its_place(self):
-        for sid, mark in (("old", ""), ("rq", "research\n")):
-            d = self.t / "root" / "review" / sid
-            d.mkdir(parents=True)
-            (d / "brief.md").write_text("task\nrole: coding\n")
-            (d / "QUEUED").write_text(mark)
-            os.utime(d / "QUEUED", (1762743960, 1762743960))
-        done = self.t / "root" / "review" / "done"
-        done.mkdir()
-        (done / "QUEUED").write_text("")
-        (done / "run.json").write_text(json.dumps(Step.R(Step(), "collected", rc=0)))
-        self.assertEqual(self.pi_run("list").stdout.splitlines(), ["done collected attempt=1 rc=0",
-                                                                    "old queued attempt=0 rc=None since=2025-11-10T03:06:00Z",
-                                                                    "rq queued attempt=0 rc=None since=2025-11-10T03:06:00Z"])
-        self.assertEqual((self.run_json("old")["role"], self.run_json("rq")["role"]), ("coding", "research"))
-        self.assertFalse((self.t / "root/review/old/QUEUED").exists())
-        self.assertTrue((done / "QUEUED").exists())
-        self.assertEqual(self.pi_run("list").stdout.count("queued"), 2)
 
     def test_every_entry_point_prints_its_zstack_sha(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()

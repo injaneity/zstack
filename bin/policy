@@ -7,6 +7,8 @@ import sys
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
     '  policy check          parse and validate all three: one line, exit 1 when one is not valid\n'
+    '  policy seat <role>[:<n>]  "<provider> <model>" for a role from [models]; a role with several seats needs :<n>\n'
+    '  policy seats          every role and seat\n'
     '  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON\n'
     '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
     "  policy rules          the Hard rules as the markdown bin/pi-run appends to every session's system prompt\n"
@@ -224,6 +226,24 @@ def state(path=STATE):
     return validate_state(read(path))
 
 
+def seats_of(data):
+    out = {}
+    for name, v in data["models"].items():
+        for i, s in enumerate(v, 1) if isinstance(v, list) else [(None, v)]:
+            out[name if i is None else f"{name}:{i}"] = s
+    return out
+
+
+def model_for(want, data=None):
+    seats = seats_of(data or load())
+    race = [k for k in seats if k.startswith(want + ":")]
+    if want not in seats and race:
+        raise PolicyError(f"{want} has {len(race)} seats, one per side of a race; pass one of {', '.join(race)}. A race runs every seat.")
+    if want not in seats:
+        raise PolicyError(f"no role {want!r} in {PATH} (roles: {', '.join(seats)})")
+    return seats[want]["provider"], seats[want]["model"]
+
+
 def get(data, key):
     v = data
     for part in key.split("."):
@@ -242,6 +262,10 @@ def main(argv):
             return print(render(rules(), argv[1:]), end="") or 0
         if argv == ["dump"]:
             return print(json.dumps(load())) or 0
+        if len(argv) == 2 and argv[0] == "seat":
+            return print(*model_for(argv[1])) or 0
+        if argv == ["seats"]:
+            return print("\n".join(seats_of(load()))) or 0
         if len(argv) == 2 and argv[0] == "get":
             v = get(load(), argv[1])
             return print(v if type(v) in (str, int) else json.dumps(v)) or 0

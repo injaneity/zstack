@@ -15,14 +15,9 @@ import time
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
-def load(name, path):
-    loader = importlib.machinery.SourceFileLoader(name, os.path.join(PKG, path))
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(mod)
-    return mod
-
-
-hourly = load("hourly", "bin/hourly")
+_l = importlib.machinery.SourceFileLoader("hourly", os.path.join(PKG, "bin", "hourly"))
+hourly = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
+_l.exec_module(hourly)
 pr = hourly.pr
 CFG = hourly._policy["pickup"]
 ISSUES = hourly._policy["issues"]
@@ -37,7 +32,7 @@ def gh(errors, *args):
     p = hourly.run(["gh", *args])
     try:
         return json.loads(p.stdout) if not p.returncode else errors.append(
-            f"gh {' '.join(args[:3])}: " + (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1][:150]) or []
+            f"gh {' '.join(args[:3])}: " + pr.tail(p, 150)) or []
     except ValueError:
         errors.append(f"gh {' '.join(args[:3])}: not JSON")
         return []
@@ -54,10 +49,6 @@ def holds(text):
         elif f[0] in ("skip-author", "review-only"):
             h["skip" if f[0] == "skip-author" else "review_only"].add(f[1])
     return h
-
-
-def bot(author):
-    return bool(author.get("is_bot")) or author["login"].startswith("app/") or author["login"].endswith("[bot]")
 
 
 def candidates(errors, waits, owned):
@@ -95,7 +86,7 @@ def launch_host(hosts, needs=None):
 
 
 def rule(c, h, prs, live, zane, hosts):
-    if bot(c["author"]) or c["author"]["login"] in h["skip"] or "hold" in c["labels"] or (c["kind"] != "issue" and c["n"] in h["hold"]):
+    if hourly.bot(c["author"]) or c["author"]["login"] in h["skip"] or "hold" in c["labels"] or (c["kind"] != "issue" and c["n"] in h["hold"]):
         return "held", None
     if any(n in h["hold"] for n in c["linked"]):
         return "held", None
@@ -214,7 +205,7 @@ def collect(hosts, dry, state, errors):
                 continue
             rep = hourly.on(h, ["bin/hourly", "report", sid])
             if rep.returncode:
-                errors.append(f"report {sid} on {h}: " + (rep.stderr.strip().splitlines() or [f"exit {rep.returncode}"])[-1][:150]
+                errors.append(f"report {sid} on {h}: " + pr.tail(rep, 150)
                               + "; not collected")
                 continue
             res = {"id": sid, "host": h, "rc": r.get("rc"), "state": r["state"], "author": state["authors"].get(sid),

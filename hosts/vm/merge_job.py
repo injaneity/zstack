@@ -317,17 +317,6 @@ def merge_audit(merged, job_heads, known):
     return out
 
 
-def seed_landed(events):
-    out, queued = {}, set()
-    for x in events:
-        if m := re.match(r"(\S+) (merged|merge-queued) cua#(\d+) squash at ([0-9a-f]+)", x):
-            at, kind, n, head = m.groups()
-            if kind == "merge-queued" or n not in queued:
-                out[n] = {"head": head, "at": at}
-            queued |= {n} if kind == "merge-queued" else set()
-    return out
-
-
 
 def sh(args, timeout=120):
     r = subprocess.run(args, env=ENV, capture_output=True, text=True, timeout=timeout)
@@ -374,10 +363,6 @@ class Job:
         self.can_act = not dry and not self.paused
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}
         self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed")}
-        if "woken" not in s:
-            self.s["woken"] = {k: v for k, v in s.get("buffered", {}).items() if k.split("|")[0] in URGENT}
-        if "landed" not in s:
-            self.s["landed"] = seed_landed(read(EVENTS).splitlines() if os.path.exists(EVENTS) else [])
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -579,8 +564,7 @@ class Job:
             return self.wake("merge-watch-overflow", "merge-watch", mw["since"], why)
         mw["since"] = max(mw["since"], min([start, *unsent]))
         mw["seen"] = {k: v for k, v in known.items() if v.get("at", "") >= mw["since"]}
-        merged_at = {str(n): at_of(p).astimezone(SGT).isoformat(timespec="seconds") for n, p in by_n.items()}
-        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if max(v["at"], merged_at.get(k, "")) >= mw["since"]}
+        self.s["landed"] = {k: v for k, v in self.s["landed"].items() if v["at"] >= mw["since"]}
 
     def run(self):
         if self.paused:
