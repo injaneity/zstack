@@ -10,7 +10,7 @@ head), it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no 
 tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
 of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE), and
-one that read more checks than its count (a check added while paging) is read again once (read_pr). A
+one that changed while it was paged (more checks than its count, or a new head) is read again once (read_pr). A
 mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
 next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
 must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
@@ -277,7 +277,7 @@ OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE,
             f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
 ONE_PR = f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
 MORE = (f"query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ "
-        f"pullRequest(number: $n) {{ files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
+        f"pullRequest(number: $n) {{ headRefOid files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
         f"commits(last: 1) @include(if: $c) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100, after: $checks) {{ {PAGE} "
         f"nodes {{ __typename {CHECKS} }} }} }} }} }} }} }} }} }}")
 
@@ -286,8 +286,14 @@ def contexts_of(node):
     return (((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
 
 
+class HeadMoved(RuntimeError):
+    """A push landed between the PR's first page and MORE, so the pages would mix two heads' checks and files."""
+
+
 def read_rest(node):
-    """Page the PR's files and checks past the first 100 each (MORE), in place, until GitHub says there are no more."""
+    """Page the PR's files and checks past the first 100 each (MORE), in place, until GitHub says there are no more.
+    MORE reads the PR's head as it is now, so a page from another head raises HeadMoved instead of joining the list
+    (cua#7508 and #7527 on 13 Nov: a push between the pages read `100 of 116` and `100 of 117 checks`)."""
     files = node["files"]
     checks = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False}}
     while files["pageInfo"]["hasNextPage"] or checks["pageInfo"]["hasNextPage"]:
@@ -296,6 +302,8 @@ def read_rest(node):
                         *(["-f", f"files={files['pageInfo']['endCursor']}"] if f else []),
                         *(["-f", f"checks={checks['pageInfo']['endCursor']}"] if c else []),
                         "-f", f"query={MORE}"])["data"]["repository"]["pullRequest"]
+        if page["headRefOid"] != node["headRefOid"]:
+            raise HeadMoved(f"cua#{node['number']}: head moved from {node['headRefOid'][:9]} to {page['headRefOid'][:9]} while paging")
         if f:
             files["nodes"] += page["files"]["nodes"]
             files["pageInfo"] = page["files"]["pageInfo"]
@@ -307,12 +315,17 @@ def read_rest(node):
 
 
 def read_pr(node):
-    """from_graphql() over the PR with every page read. A check added while the job paged shows up as more checks read than
-    the first page's totalCount (cua#3897, #7338, #7345 on 11 Nov): the PR is read again once (ONE_PR), and that read must
-    match its own count. Fewer checks than the count is never re-read: from_graphql() raises on it."""
-    node = read_rest(node)
-    contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
-    if len(contexts["nodes"]) > contexts["totalCount"]:
+    """from_graphql() over the PR with every page read. The PR is read again once (ONE_PR) when paging saw it change: a
+    check added while the job paged shows up as more checks read than the first page's totalCount (cua#3897, #7338,
+    #7345 on 11 Nov), and a push shows up as HeadMoved (cua#7508, #7527 on 13 Nov). That read must match its own count
+    and keep its head. Fewer checks than the count is never re-read: from_graphql() raises on it."""
+    try:
+        node = read_rest(node)
+        contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
+        changed = len(contexts["nodes"]) > contexts["totalCount"]
+    except HeadMoved:
+        changed = True
+    if changed:
         node = read_rest(gh_json(["api", "graphql", "-F", f"n={node['number']}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])
     return from_graphql(node)
 

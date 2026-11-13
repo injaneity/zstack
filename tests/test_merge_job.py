@@ -307,7 +307,7 @@ class Stage(unittest.TestCase):
                 return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": ev}}}}}
             node = self.node(n, kv.get("files"), kv.get("checks"))
             if "@include" in query:   # MORE: only the connections asked for
-                node = {k: node[k] for k in (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
+                node = {k: node[k] for k in ["headRefOid"] + (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
             return {"data": {"repository": {"pullRequest": node}}}
         if args[:2] == ["pr", "list"]:
             self.lists.append(args)
@@ -616,6 +616,48 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
         self.assertEqual(self.reads.count(6364), 4)   # read again once, not in a loop
         self.assertIn("error cua#6364 merge: RuntimeError: cua#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
+
+    def test_a_pr_with_117_checks_reads_all_117_and_decides_red(self):
+        """cua#7527's 117 checks: two pages, every check read, and a red ci-gate is a rerun, not an error."""
+        self.add(6366, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate", conclusion="FAILURE")])
+        with patch.object(mj, "gh_json", self.gh):
+            p = mj.read_pr(self.node(6366))
+        self.assertEqual(len(p["statusCheckRollup"]), 117)
+        self.run_()
+        self.assertEqual(self.reads.count(6366), 4)   # this test's read and its MORE, then the run's search and MORE
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual(len(self.of(["gh", "run", "rerun"])), 1)
+
+    def test_a_push_while_paging_reads_the_new_head_again_once_and_decides_on_it(self):
+        """cua#7527 on 13 Nov: a push 20s before the pass, and MORE paged the new head's checks past the old head's cursor:
+        `read 11 of 11 files, 100 of 117 checks`. The PR is read again at its new head and decided there."""
+        self.add(6367, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate")])
+        real, pushed = self.gh, []
+
+        def gh(args):
+            if "@include" in args[-1] and not pushed:   # the push lands between the search and the first MORE page
+                pushed.append(1)
+                self.prs[6367].update(headRefOid=H2, statusCheckRollup=[cr(f"lane {i}") for i in range(93)] + [cr("ci-gate")])
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.reads.count(6367), 3)   # search, MORE at the new head, the one re-read (one page)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual([(c[3], c[-1]) for c in self.of(["gh", "pr", "merge"])], [("6367", H2)])
+
+    def test_a_head_still_moving_after_the_one_reread_is_an_error_never_a_merge(self):
+        self.add(6368, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
+        real, heads = self.gh, iter([H2, "c" * 40, "d" * 40])
+
+        def gh(args):   # every MORE page finds a new head
+            if "@include" in args[-1]:
+                self.prs[6368]["headRefOid"] = next(heads)
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertEqual(self.reads.count(6368), 4)   # search, MORE, the one re-read, its MORE: read again once, not in a loop
+        self.assertIn(f"error cua#6368 merge: HeadMoved: cua#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
 
     def test_fewer_checks_than_the_count_is_never_read_again(self):
         self.add(6365)
