@@ -20,6 +20,17 @@ export function mergeOwned(dump: () => string): Owned {
 	}
 }
 
+/** The repo whose issues a session closes by hand only with a comment naming the PR that fixed it, `issues.repo` in
+ * config/policy.toml (Hard rules, Scope: issue-close), from the same dump. Unreadable is null: every hand close is refused. */
+export function issuesOwned(dump: () => string): Owned {
+	try {
+		const repo = JSON.parse(dump())?.issues?.repo;
+		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Whether the session's brief allows merging, so it may ready its own draft. The launcher sets $ONIGIRI_READY_ALLOWED
  * from the brief's `merge: allowed` header; the extension reads it once at load, so the session can't set it later. */
 export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
@@ -170,7 +181,7 @@ function ghNamedRepo(w: string[]): string | undefined {
 		if (GH_VALUE_OPTS.has(a)) i++;
 	}
 	for (const a of operands(w.slice(1), GH_VALUE_OPTS)) {
-		const r = named(a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions)\//));
+		const r = named(a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions|issues)\//));
 		if (r) return r;
 	}
 	return undefined;
@@ -201,23 +212,11 @@ const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
 
 // gh pr merge/ready options that take the next word as their value
-const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit"]);
+const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit", "-c", "--comment", "-r", "--reason", "--duplicate-of"]);
 
-function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
-	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
-	const who = owned ? `${[...owned].join(", ")} is merged only by its merge job` : "the repo the merge job owns is unknown (bin/policy dump failed)";
-	const api = w[1] === "api" && ghApiWrites(w);
-	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
-		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
-	// a flag, not the value of the option before it (`--subject --help`)
-	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
-	const help = flag("--help") || flag("-h");
-	const act = help ? undefined :
-		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
-		w[1] === "pr" && w[2] === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
-		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
-	if (!act) return undefined;
-	if (!owned) return `${act} while ${who}`;
+/** Every repo (lower-case owner/name) a gh command `c` may act on, undefined where one can't be told: its -R, URL or
+ * `gh api` path, else GH_REPO, else the checkout of each directory it might run in. */
+function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string | undefined)[] {
 	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one,
 	// and a remote shell never had it
 	const pre = raw.slice(0, raw.length - w.length);
@@ -233,10 +232,73 @@ function ghOwned({ words: w, raw, dirs, remote }: Cmd, owned: Owned, host: Host,
 		const [o, n] = r.split("/");
 		return pattern!.replace(/\{owner\}/g, o).replace(/\{repo\}/g, n);
 	};
-	const repos = pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
+	return pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
+}
+
+function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
+	const w = c.words;
+	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
+	const who = owned ? `${[...owned].join(", ")} is merged only by its merge job` : "the repo the merge job owns is unknown (bin/policy dump failed)";
+	const api = w[1] === "api" && ghApiWrites(w);
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
+		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
+	// a flag, not the value of the option before it (`--subject --help`)
+	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
+	const help = flag("--help") || flag("-h");
+	const act = help ? undefined :
+		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
+		w[1] === "pr" && w[2] === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
+		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
+	if (!act) return undefined;
+	if (!owned) return `${act} while ${who}`;
+	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${who}`;
 	const hit = repos.find((r) => owned.has(r as string));
 	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
+}
+
+// A comment names the PR that fixed the issue: `#123` or a pull URL.
+const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+const CLOSE_WAY = "Close a trycua/cua issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment \"Fixed by #<pr>.\"` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.";
+
+/** Why a gh command closes an issue in an `issues` repo other than as the issue-close rule allows, or undefined: `gh
+ * issue close` needs `--comment` text naming a PR and no not-planned or duplicate reason; the REST and GraphQL closes
+ * carry no comment, so they are refused. */
+function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
+	const w = c.words;
+	if ((issues && !issues.size) || w[0] !== "gh") return undefined;
+	const opt = (names: string[]) => {
+		for (let i = 0; i < w.length; i++) {
+			const m = w[i].match(/^(--?[\w-]+)=(.*)$/s);
+			if (m && names.includes(m[1])) return m[2];
+			if (names.includes(w[i])) return w[i + 1] ?? "";
+			const short = names.find((n) => /^-\w$/.test(n) && w[i].startsWith(n) && w[i].length > 2 && !w[i].startsWith("--"));
+			if (short) return w[i].slice(2);
+		}
+		return undefined;
+	};
+	let act: string | undefined;
+	if (w[1] === "issue" && w[2] === "close" && !w.includes("--help") && !w.includes("-h")) {
+		const comment = opt(["-c", "--comment"]);
+		const reason = opt(["-r", "--reason"]);
+		if (opt(["--duplicate-of"]) !== undefined || (reason !== undefined && !/^completed$/i.test(reason)))
+			act = "`gh issue close` as not planned or a duplicate";
+		else if (comment === undefined || !NAMES_PR.test(comment) || /^\$/.test(comment))
+			act = "`gh issue close` without a `--comment` that names the PR that fixed it";
+	} else if (w[1] === "api" && ghApiWrites(w)) {
+		const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
+		if (ops[0] === "graphql" && w.some((a) => /\bcloseIssue\b/.test(a))) act = "a GraphQL closeIssue mutation";
+		else if (/\/issues\/[^/]+\/?$/.test(ops[0] ?? "") && w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a)))
+			act = "an issue close through `gh api`";
+	}
+	if (!act) return undefined;
+	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (bin/policy dump failed)`;
+	// GraphQL names a node id, not a repo, so it counts for any covered repo
+	if (act.includes("GraphQL")) return act;
+	const repos = targetRepos(c, host);
+	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown)`;
+	const hit = repos.find((r) => issues.has(r as string));
+	return hit ? `${act} in ${hit}` : undefined;
 }
 
 /** The words that are not options. `valued` lists options that take the next word. */
@@ -286,8 +348,8 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 	return false;
 }
 
-/** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(). */
-export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false): string | undefined {
+/** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(), `issues` issuesOwned(). */
+export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false, issues: Owned = new Set()): string | undefined {
 	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
 	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
 	// bodies included. The bare reads go first, then quotes and backslashes, as the shell joins `ONIGIRI_READY_""ALLOWED`
@@ -300,6 +362,8 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
+		const close = ghIssueClose(c, issues, host);
+		if (close) return `blocked: ${close}. ${CLOSE_WAY}`;
 	}
 	return undefined;
 }

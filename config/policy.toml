@@ -67,6 +67,19 @@ never_rerun = ["cla"]           # not required on trycua/cua main: never rerun, 
 tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest first; a PR declaring none never merges
 preapprove_tiers = ["deep", "human"]
 
+# Closing trycua/cua issues and linking salvages to them (Zane, 13 Nov 2026 15:31 SGT, "go ahead with all", on the
+# issue-close audit; Hard rules `issue-close` and `salvage-fixes`). `repo` is whose issues rule-guard lets a session close
+# by hand only with a comment naming a PR. A salvage PR's body names its source with `salvaged_from` and carries `fixes`
+# once per issue the source fixes, so GitHub closes the issue when the salvage merges. bin/pickup writes both lines into
+# every review brief, and each pass lists for the chat an open salvage that lacks a `fixes` line for an open issue, and,
+# for salvages merged on or after `since` (the day of Zane's call), an issue left open or a source PR still open
+# (playbooks/hourly.md step 7).
+[issues]
+repo = "trycua/cua"
+fixes = "Fixes #{issue}"
+salvaged_from = "Salvaged from #{pr}"
+since = "2026-11-13"
+
 # The hourly pass's thresholds (bin/hourly, bin/pickup, playbooks/hourly.md), moved out of bin/hourly and the playbook.
 # `floor_gb`: a peer takes launches only with this much disk free (step 3), and a host under it is a disk to prune.
 # `hung_min`: a running run with no log or session write for this long is marked HUNG? (step 2). `merge_stale_min`: the

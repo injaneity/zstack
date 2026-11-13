@@ -100,6 +100,14 @@ SCHEMA = {
         "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "preapprove_tiers": (words, "a list of distinct lowercase words"),
     },
+    "issues": {
+        "repo": (repo, "owner/name"),
+        "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
+                   "one line with {issue} once and no other placeholder"),
+        "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5],
+                           "one line ending in ` #{pr}`, with no other placeholder"),
+        "since": (lambda v: isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) is not None, "a YYYY-MM-DD date"),
+    },
 }
 
 
@@ -180,7 +188,10 @@ def validate_rules(data, pol):
             if r["id"] in seen:
                 raise PolicyError(f"rules: two rules have the id {r['id']}")
             seen[r["id"]] = r["text"]
+    iss = pol["issues"]
     need = {"patent-scope": [w for w in pol["patent"]["held_words"]],
+            "issue-close": [f"`{iss['repo']}`"],
+            "salvage-fixes": [f"`{iss['salvaged_from'].format(pr='<pr>')}`", f"`{iss['fixes'].format(issue='<issue>')}`"],
             "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['patent']['public_repo']}`", f"`{pol['patent']['private_repo']}`"],
             "merge-risk": ["|".join(pol["merge"]["tiers"])]}
     for rid, words in need.items():

@@ -7,7 +7,7 @@
 # Strings are TOML literal strings, so backticks and quotes need no escaping. The text is Zane's wording, moved verbatim
 # from the old skills/onigiri-mode/hard-rules.md. Never reword a hold, patent or merge rule without Zane's explicit ok.
 schema = 1
-intro = '''`bin/pi-run` appends this section, and only this section, to every session's system prompt. The orchestrator reads it with `bin/policy rules`. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready` and holds-file writes in code.'''
+intro = '''`bin/pi-run` appends this section, and only this section, to every session's system prompt. The orchestrator reads it with `bin/policy rules`. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, issue closes that name no PR, and holds-file writes in code.'''
 
 [[section]]
 title = '''Work'''
@@ -55,6 +55,10 @@ id = "text-spdx"
 text = '''New files carry the repository's SPDX/FSL header where neighbouring files do.'''
 
 [[section.rule]]
+id = "salvage-fixes"
+text = '''A salvage PR's body says `Salvaged from #<pr>` and, on a line of its own, `Fixes #<issue>` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges (Zane, 13 Nov 15:31 SGT).'''
+
+[[section.rule]]
 id = "text-pr-body"
 text = '''Write the plan and proof as if they become the PR body. Call the checks "the scoped repository checks" and never write local machine paths.'''
 
@@ -83,6 +87,10 @@ title = '''Scope'''
 [[section.rule]]
 id = "scope-prs"
 text = '''Do not salvage or rewrite PRs by injaneity or bots. PRs by f-trycua, ddupont808 and 0xjohnnydev are review-only: a first review is allowed, but never push to, rebase, salvage, rewrite, close, comment on or request changes on them.'''
+
+[[section.rule]]
+id = "issue-close"
+text = '''Close a `trycua/cua` issue by hand only when one of our merged PRs fixed it, and only with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment "Fixed by #<pr>."`. Otherwise never close an issue by hand (Zane, 13 Nov 15:31 SGT).'''
 
 [[section.rule]]
 id = "scope-no-config"

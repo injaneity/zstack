@@ -80,7 +80,7 @@ class Policy(unittest.TestCase):
             ('private_repo = "trycua/cua-staging"', 'private_repo = "trycua/cua"', "patent.private_repo must differ"),
             ('private_repo = "trycua/cua-staging"', 'private_repo = "TryCua/CUA"', "patent.private_repo must differ"),
             ('public_repo = "trycua/cua"\n', "", "missing patent.public_repo"),
-            ('\nrepo = "trycua/cua"', '\nrepo = "trycua"', "merge.repo must be owner/name"),
+            ('[merge]\nrepo = "trycua/cua"', '[merge]\nrepo = "trycua"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
             ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
             ('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard", "de.p", "deep", "human"]',
@@ -90,6 +90,11 @@ class Policy(unittest.TestCase):
             ("interval_s = 1800", "interval_s = 0", "pickup.interval_s must be a positive integer, not 0"),
             ("deadline_s = 1200", "deadline_s = 1800", "pickup.deadline_s must be under pickup.interval_s"),
             ('label_hosts = { Linux = "vm", macOS = "mini" }', 'label_hosts = { Linux = "" }', "pickup.label_hosts must be a table"),
+            ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
+            ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
+            ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
+            ('since = "2026-11-13"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
+            ('[issues]\nrepo = "trycua/cua"', '[issues]\nrepo = "cua"', "issues.repo must be owner/name"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):

@@ -6,10 +6,13 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
 // the owned set as the extension loads it: config/policy.toml's merge.repo through the real bin/policy
-const OWNED = mergeOwned(() => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" }));
+const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
+const OWNED = mergeOwned(DUMP);
+// and config/policy.toml's issues.repo, whose issues close by hand only with a comment naming the PR that fixed them
+const ISSUES = issuesOwned(DUMP);
 // a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
 // and /scratch is a directory outside any checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
@@ -463,4 +466,52 @@ test("the owned repo is config/policy.toml's merge.repo, and an unreadable polic
 		assert.match(checkBash(c, null, host, "/zs") ?? "", /bin\/policy dump failed/, c);
 	for (const c of ["gh pr view 1", "gh run rerun 9 --failed", "gh pr merge 1 --help", "git push"])
 		assert.equal(checkBash(c, null, host, "/zs"), undefined, c);
+});
+
+test("closing a trycua/cua issue by hand needs a comment naming the PR that fixed it", () => {
+	// Zane, 13 Nov 15:31 SGT: allowed only when one of our merged PRs fixed it, with a comment naming that PR
+	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, false, ISSUES) ?? "", /^blocked: .*issue-close/, c);
+	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, false, ISSUES), undefined, c);
+	assert.deepEqual(ISSUES, new Set(["trycua/cua"]));
+	for (const c of [
+		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928."',
+		"gh issue close 6853 -R trycua/cua -c 'Fixed by #6928'",
+		'gh issue close 6853 -R trycua/cua --comment="Fixed by https://github.com/trycua/cua/pull/6928"',
+		'gh issue close https://github.com/trycua/cua/issues/6853 -c "Fixed by #6928" --reason completed',
+		'gh pr close 3138 -R trycua/cua --comment "Replaced by #7587, which merged."',
+		"gh issue close --help",
+		"gh issue view 6853 -R trycua/cua",
+		"gh issue comment 6853 -R trycua/cua --body 'x'",
+		"gh pr close 1 -R injaneity/zstack",
+	]) ok(c);
+	ok('gh issue close 6853 --comment "Fixed by #6928"', inCua);
+	for (const c of [
+		"gh issue close 6853 -R trycua/cua",
+		'gh issue close 6853 -R trycua/cua --comment "fixed on main"',
+		'gh issue close 6853 -R trycua/cua --comment "see issue&#35;1"',
+		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928" --reason "not planned"',
+		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928" -r duplicate',
+		'gh issue close 6853 -R trycua/cua --duplicate-of 6000 --comment "dup of #6000"',
+		"gh issue close https://github.com/trycua/cua/issues/6853",
+		'gh issue close 6853 -R trycua/cua --comment "$MSG"',
+		"gh api -X PATCH repos/trycua/cua/issues/6853 -f state=closed",
+		`gh api repos/trycua/cua/issues/6853 --input - <<< '{"state": "closed"}' -X PATCH`,
+		`gh api graphql -f query='mutation { closeIssue(input: {issueId: "X"}) { clientMutationId } }'`,
+		'ssh vm "gh issue close 6853 -R trycua/cua"',
+		"GH_REPO=trycua/cua gh issue close 6853",
+	]) no(c);
+	no("gh issue close 6853", inCua);
+	no("cd /cua/wt && gh issue close 6853");
+	no("gh issue close 6853", "/zs", { ...host, ghRepo: "trycua/cua" });
+	// another repo's issues are not covered, and a repo that can't be told is refused
+	ok("gh issue close 12 -R injaneity/zstack");
+	ok("gh issue close 12", "/scratch");
+	ok("gh api -X PATCH repos/injaneity/zstack/issues/12 -f state=closed");
+	ok("gh api -X PATCH repos/trycua/cua/issues/6853 -f title=x");
+	no("gh issue close 12", "/tmp/x");
+	// an unreadable policy refuses every hand close; an empty one covers nothing
+	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
+	assert.equal(checkBash("gh issue close 6853 -R trycua/cua", OWNED, host, "/zs", false, new Set()), undefined);
+	assert.equal(issuesOwned(() => "{}"), null);
+	assert.equal(issuesOwned(() => { throw new Error("x"); }), null);
 });

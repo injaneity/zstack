@@ -17,7 +17,8 @@ hosts/mini/install-pickup.sh runs it from a launchd StartInterval job (config/po
      before (a review id on a host, or a launch row) is launched on the launch host, or skipped with one pickup.log row
      naming the one rule that holds: held, pr, overlap, zane, host (playbooks/hourly.md step 5).
   4. Reports four lists, as the chat's pass did, and one more for the chat: needs-Zane, dumpling results,
-     outside-contributor drafts, teammate comment drafts, and chat (follow-ups to file, hung runs, disk to prune).
+     outside-contributor drafts, teammate comment drafts, and chat (follow-ups to file, hung runs, disk to prune, and
+     salvage links to fix or close: config/policy.toml [issues], playbooks/hourly.md step 7).
   5. Wakes the chat ($ONIGIRI_WAKE, else hosts/vm/wake.py: `done`; `failed` for a pass that died or hit deadline_s) when the outbox holds
      results or a list item is not in the last delivered wake. Nothing new: no wake. Only a delivered wake empties the
      outbox and records the items as seen; an item that goes away is dropped, so its return wakes again.
@@ -52,6 +53,7 @@ def load(name, path):
 hourly = load("hourly", "bin/hourly")
 pr = hourly.pr
 CFG = hourly._policy["pickup"]   # interval_s, deadline_s, label_hosts: config/policy.toml [pickup]
+ISSUES = hourly._policy["issues"]   # repo, fixes, salvaged_from, since: config/policy.toml [issues]
 REPO, ME = hourly.REPO, hourly.ME
 RULES = ("held", "pr", "overlap", "zane", "host")   # playbooks/hourly.md step 5: the only reasons a candidate is skipped
 URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
@@ -145,6 +147,48 @@ def rule(c, h, prs, live, zane, hosts):
     return ("host", None) if there is None else (None, there)
 
 
+def salvage_lines(n):
+    """The two body lines a salvage of PR n carries (Hard rules, salvage-fixes), from config/policy.toml [issues]."""
+    return ISSUES["salvaged_from"].format(pr=n), ISSUES["fixes"].format(issue="<issue>")
+
+
+def salvage_check(errors, h):
+    """Chat items for our salvage PRs (Hard rules, salvage-fixes and issue-close), as [key, text]: an open salvage missing a
+    `fixes` line for an open issue its source PR closes, and, for one merged since [issues] since, an issue it left open
+    or a source PR still open (playbooks/hourly.md step 7). A held source PR is left alone."""
+    head = ISSUES["salvaged_from"].replace("#{pr}", "")
+    src_rx = re.compile(re.escape(head) + r"(?:#|https://github\.com/" + re.escape(REPO) + r"/pull/)(\d+)", re.I)
+    ours = gh(errors, "pr", "list", "-R", REPO, "--author", ME, "--state", "all", "--search", f'"{head.strip()}" in:body',
+              "--limit", "1000", "--json", "number,state,body,mergedAt,closingIssuesReferences")
+    ours = [p for p in ours if p["state"] == "OPEN" or (p["state"] == "MERGED" and (p["mergedAt"] or "") >= ISSUES["since"])]
+    items, sources = [], {}
+    for p in ours:
+        for n in dict.fromkeys(int(x) for x in src_rx.findall(p["body"] or "")):
+            if n not in sources:   # a source GitHub can't show (an issue number, a typo) only goes unchecked
+                got = gh([], "pr", "view", str(n), "-R", REPO, "--json", "number,state,closingIssuesReferences")
+                sources[n] = got if isinstance(got, dict) else None
+            src = sources[n]
+            if src is None:
+                continue
+            linked = {x["number"] for x in p.get("closingIssuesReferences") or []}
+            want = [x["number"] for x in src.get("closingIssuesReferences") or [] if x["number"] not in linked]
+            if p["state"] == "OPEN":
+                if want:
+                    items.append([f"salvage-fixes:{p['number']}:{n}", f"salvage cua#{p['number']} of cua#{n} lacks "
+                                  + ", ".join(f"`{ISSUES['fixes'].format(issue=i)}`" for i in want) + " in its body: add it"])
+                continue
+            for i in want:
+                st = gh([], "issue", "view", str(i), "-R", REPO, "--json", "state")
+                if not isinstance(st, dict) or st.get("state") != "OPEN":
+                    continue
+                items.append([f"issue-open:{p['number']}:{i}", f"cua#{i} is still open: our merged salvage cua#{p['number']} fixed it "
+                              f"but lacked `{ISSUES['fixes'].format(issue=i)}`; close it with a comment naming cua#{p['number']}"])
+            if src["state"] == "OPEN" and n not in h["hold"]:
+                items.append([f"salvaged-open:{n}:{p['number']}", f"cua#{n} is still open after its salvage cua#{p['number']} "
+                              f"merged: close it with a comment naming cua#{p['number']} (playbooks/hourly.md step 7)"])
+    return items
+
+
 def task(c, h):
     head = f" at head {c['head']}" if c["head"] else ""
     if c["kind"] == "issue":
@@ -156,9 +200,13 @@ def task(c, h):
                 "If main or another PR already has its change, close it instead and say what replaced it.\n")
     who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"] in h["review_only"] else \
         "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
+    frm, fixes = salvage_lines(c["n"])
     return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
             f"requested of {ME}. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
-            "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n")
+            "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n"
+            f"A salvage PR's body carries `{frm}` and a `{fixes}` line for each issue #{c['n']} fixes or was opened for "
+            f"(`gh pr view {c['n']} -R {REPO} --json closingIssuesReferences`, and the issues its body names), "
+            "so GitHub closes them when the salvage merges.\n")
 
 
 # ---------------- the pass (the child) ----------------
@@ -310,7 +358,10 @@ def run_pass(dry):
         else:
             errors.append(f"launch {c['id']} on {there} failed")
             break
-    return {**report(hosts, waits, lines, errors), **({"unsent": state["unsent"]} if dry else {})}
+    salvages = salvage_check(errors, h)   # before the report, so a GitHub read it could not make is a needs-Zane error
+    out = report(hosts, waits, lines, errors)
+    out["chat"] += salvages
+    return {**out, **({"unsent": state["unsent"]} if dry else {})}
 
 
 def report(hosts, waits, lines, errors):
