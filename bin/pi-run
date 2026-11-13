@@ -6,6 +6,8 @@
   pi-run queue <id>                               queue review/<id>/brief.md for the hourly drain (bin/queue)
   pi-run ci <id> <pr> <head> <why...>             reopen a collected run for its trycua/cua PR that is red at <head>
   pi-run stop <id> <why...>                       stop a running run on purpose: it ends with no wake
+  pi-run rename <id> <new-id> <why...>            supersede a run: stop it like `stop`, then move review/<id> and its
+                                                  pi session to <new-id>, so <id> is free for a new brief
   pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc> [since= resume_at=]
 
 A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes,
@@ -44,7 +46,12 @@ A deliberate stop is not a failure (12 Nov retro: three runs stopped on purpose,
 failed wake). `pi-run stop <id> <why>` writes review/<id>/stopped (`<utc> <why>`) and then sends TERM to the run's
 supervisor, and KILL to its process group if it is still there after STOP_GRACE seconds. While that marker exists the
 run's exit records rc and stopped and sends no wake, and the collect of a lost run sends none either. A `pi-run ci`
-reopen removes it, so the next attempt wakes as usual. Stop a run before renaming its dir to a .vN.
+reopen removes it, so the next attempt wakes as usual. `pi-run rename <id> <id>.vN <why>` is the one way to supersede
+a run: it writes the marker (stopping the run first when it is running, or marking a lost one), so neither its exit nor
+its collect wakes, then
+moves review/<id> and the pi session file pi keeps for it under that cwd (12 Nov: raw-macos-build.v2, started after a
+hand rename, reopened v1's transcript, because pi finds a session by cwd and id). A queued run is refused: under its new
+name the drain would still start it.
 
 lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
 transition holds flock on the review dir, so two launchers or a launcher and a collect never interleave. A review dir
@@ -76,7 +83,7 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
-         "| pi-run stop <id> <why...> "
+         "| pi-run stop <id> <why...> | pi-run rename <id> <new-id> <why...> "
          "| pi-run list [<state>...]")
 # pi's whole last line when the upstream refused on a usage limit or cut a response short: Claude Code's 429, its
 # incomplete response with status 200, unknown or 5xx (the relay lost it; five runs on 11 Nov passed when run again), or
@@ -828,6 +835,62 @@ def stop(sid, why):
     return 0
 
 
+def session_dir(d):
+    """pi's session dir for a run whose cwd is d: named after the real path (a symlinked root, as /srv/onigiri on the VM,
+    is resolved)."""
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    return os.path.join(agent, "sessions", "--" + os.path.realpath(d).strip("/").replace("/", "-") + "--")
+
+
+def own_sessions(d, sid):
+    """The session files under d's session dir whose header names session id sid: the ones `pi --session-id <sid>` with
+    cwd d would reopen."""
+    s, out = session_dir(d), []
+    for f in sorted(os.listdir(s)) if os.path.isdir(s) else []:
+        try:
+            with open(os.path.join(s, f), errors="replace") as fh:
+                head = json.loads(fh.readline() or "{}")
+        except (OSError, ValueError):
+            continue
+        if f.endswith(".jsonl") and head.get("type") == "session" and head.get("id") == sid:
+            out.append(os.path.join(s, f))
+    return out
+
+
+def rename(sid, to, why):
+    """Supersede a run: stop it on purpose when it is running (as `pi-run stop`), mark it stopped when it is lost (its
+    collect would wake; an exited run already sent its wake and a collected one sends none), then move
+    review/<sid> to review/<to> and its pi session files to <to>'s session dir. Each step survives a rerun: a run already
+    stopped is not stopped again, and a move that is done is skipped."""
+    _, root = host_env("list")
+    d, new = os.path.join(root, sid), os.path.join(root, to)
+    if sid == to:
+        die(2, f"{sid}: rename to itself")
+    if os.path.exists(new):
+        die(3, f"{to}: already exists; pick another name")
+    if not os.path.exists(os.path.join(d, "run.json")):
+        die(3, f"{sid}: no run")
+    if alive(read_json(os.path.join(d, "run.json"))):
+        stop(sid, why)
+    with Run(d) as r:
+        if alive(r.run):
+            die(3, f"{sid}: still running after the stop; nothing renamed")
+        if r.run["state"] == "queued":
+            die(3, f"{sid}: queued, so the drain would start it under {to}; nothing renamed")
+        if r.run["state"] == "running" and not stop_mark(d):   # lost: its collect would send the failed wake
+            with open(os.path.join(d, STOPPED + ".tmp"), "w") as f:
+                f.write(f"{utc()} {why}\n")
+            os.replace(os.path.join(d, STOPPED + ".tmp"), os.path.join(d, STOPPED))
+        sessions = own_sessions(d, sid)
+        os.rename(d, new)   # under the lock: no start or collect of sid runs while it moves
+    dest = session_dir(new)
+    for f in sessions:
+        os.makedirs(dest, exist_ok=True)
+        os.replace(f, os.path.join(dest, os.path.basename(f)))
+    print(f"pi-run: renamed {sid} to {to} ({why}); it sends no wake, and {sid} is free for a new brief")
+    return 0
+
+
 def list_runs(states):
     _, root = host_env("list")
     migrate(root)
@@ -893,7 +956,9 @@ def main(argv):
         return list_runs(argv[1:])
     if len(argv) >= 3 and argv[0] == "stop" and ID.fullmatch(argv[1]):
         return stop(argv[1], " ".join(argv[2:]))
-    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop"):
+    if len(argv) >= 4 and argv[0] == "rename" and ID.fullmatch(argv[1]) and ID.fullmatch(argv[2]):
+        return rename(argv[1], argv[2], " ".join(argv[3:]))
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop", "rename"):
         return start(argv[0], argv[1], argv[2], argv[3:])
     die(2, USAGE)
 
