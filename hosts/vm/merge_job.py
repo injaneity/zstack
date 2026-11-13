@@ -10,7 +10,8 @@ head), it runs gate() (exactly three checks at the PR head: ci-gate SUCCESS, no 
 tier from TIERS, with a preapprove row pinned to the head for deep/human) and blockers() (what stops any merge: draft,
 conflict, mergeability not MERGEABLE, PAUSED), over one GraphQL search per pass (OPEN_PRS) that returns every open PR
 of ME with the fields both read. A PR with more checks or files than the search's first page reads the rest (MORE), and
-one that changed while it was paged (more checks than its count, or a new head) is read again once (read_pr). A
+one that changed while it was paged (a new head, or any list read longer or shorter than its count) is read again once
+(read_pr). A
 mergeability GitHub has not computed yet (UNKNOWN) is read again in the same run when it is the only thing in the way.
 next_action() turns both into one action: merge, rerun a red ci-gate's failed runs once per head, or wait, with who
 must act: zane (a hold, PAUSED, a hands-off path, a deep/human tier with no preapproval at the head), session (no
@@ -320,15 +321,22 @@ def read_rest(node):
     return node
 
 
+def miscounted(node):
+    """The lists whose read length differs from their totalCount, in either direction, as `<read> of <count> <list>`."""
+    contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
+    return [f"{len(x['nodes'])} of {x['totalCount']} {name}" for name, x in
+            (("files", node["files"]), ("checks", contexts), ("labels", node["labels"])) if len(x["nodes"]) != x["totalCount"]]
+
+
 def read_pr(node):
     """from_graphql() over the PR with every page read. The PR is read again once (ONE_PR) when paging saw it change: a
-    check added while the job paged shows up as more checks read than the first page's totalCount (cua#3897, #7338,
-    #7345 on 11 Nov), and a push shows up as HeadMoved (cua#7508, #7527 on 13 Nov). That read must match its own count
-    and keep its head. Fewer checks than the count is never re-read: from_graphql() raises on it."""
+    push shows up as HeadMoved (cua#7508, #7527 on 13 Nov), and a check, file or label added or dropped while the job
+    paged shows up as a list whose read length differs from its first page's totalCount, more (cua#3897, #7338, #7345 on
+    11 Nov) or fewer (the 12 Nov retro saw both). That read must match its own counts and keep its head, else
+    from_graphql() raises: the job never decides on a partial read, and never reads in a loop."""
     try:
         node = read_rest(node)
-        contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
-        changed = len(contexts["nodes"]) > contexts["totalCount"]
+        changed = bool(miscounted(node))
     except HeadMoved:
         changed = True
     if changed:
@@ -343,8 +351,7 @@ def from_graphql(node):
     files = node["files"]
     contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
     labels = node["labels"]   # a risk:<tier> label is a gate input, so a partial list is never decided on either
-    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]) or \
-            labels["totalCount"] != len(labels["nodes"]):
+    if miscounted(node):
         raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
                            f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
                            f"{len(labels['nodes'])} of {labels['totalCount']} labels")

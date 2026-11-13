@@ -711,7 +711,9 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.reads.count(6368), 4)   # search, MORE, the one re-read, its MORE: read again once, not in a loop
         self.assertIn(f"error cua#6368 merge: HeadMoved: cua#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
 
-    def test_fewer_checks_than_the_count_is_never_read_again(self):
+    def test_fewer_checks_than_the_count_reads_again_once_and_merges_on_a_whole_read(self):
+        """12 Nov retro: `read N of M checks` errors in both directions. A check dropped between the count and the list
+        is read again once, like one added."""
         self.add(6365)
         real = self.gh
 
@@ -723,8 +725,43 @@ class Stage(unittest.TestCase):
             return out
         with patch.object(mj, "gh_json", gh):
             self.run_()
-        self.assertEqual(self.reads.count(6365), 1)
-        self.assertIn("error cua#6365 merge: RuntimeError: cua#6365: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+        self.assertEqual(self.reads.count(6365), 2)   # the search, then the one re-read
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6365"])
+
+    def test_a_count_short_on_the_one_reread_too_is_an_error_never_a_merge(self):
+        self.add(6369)
+        real = self.gh
+
+        def gh(args):   # every read says one check more than it lists
+            out = real(args)
+            for n in (out["data"]["search"]["nodes"] if "search(" in args[-1] else [out["data"]["repository"]["pullRequest"]]):
+                n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = 3
+            return out
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.reads.count(6369), 2)   # read again once, not in a loop
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertIn("error cua#6369 merge: RuntimeError: cua#6369: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+
+    def test_a_file_or_label_count_off_reads_again_once(self):
+        for n, key in ((6370, "files"), (6371, "labels")):
+            self.add(n)
+            real, once = self.gh, []
+
+            def gh(args, key=key, n=n, once=once, real=real):
+                out = real(args)
+                if "search(" in args[-1] and not once:
+                    once.append(1)
+                    for x in out["data"]["search"]["nodes"]:
+                        if x["number"] == n:
+                            x[key]["totalCount"] += 1
+                return out
+            with patch.object(mj, "gh_json", gh):
+                self.run_()
+            self.assertEqual(self.reads.count(n), 2, key)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual(sorted({c[3] for c in self.of(["gh", "pr", "merge"])} & {"6370", "6371"}), ["6370", "6371"])
 
     def test_a_queued_pr_whose_gate_cannot_be_read_in_full_leaves_the_queue(self):
         self.queue = True
