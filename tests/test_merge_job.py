@@ -259,10 +259,10 @@ class Stage(unittest.TestCase):
         d = Path(td.name)
         (d / "tick").mkdir()
         (d / "hold-prs.txt").write_text(HOLDS)
-        self.drift, self.unknown, self.sleeps = None, {}, []
+        self.drift, self.unknown, self.sleeps, self.free = None, {}, [], 99
         p = patch.multiple(mj, ROOT=str(d), EVENTS=str(d / "events.log"), HOLDS_FILE=str(d / "hold-prs.txt"),
                            STATE=str(d / "tick/state.json"), PAUSED=str(d / "tick/PAUSED"), LAST=str(d / "tick/last-run"),
-                           gh_json=self.gh, sh=self.sh, parity_problem=lambda: self.drift)
+                           gh_json=self.gh, sh=self.sh, parity_problem=lambda: self.drift, free_gb=lambda: self.free)
         p.start()
         self.addCleanup(p.stop)
         z = patch.object(mj.time, "sleep", self.sleeps.append)
@@ -571,6 +571,27 @@ class Stage(unittest.TestCase):
         self.drift = None
         self.run_()
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
+
+    def test_free_disk_under_the_floor_wakes_once_per_episode_and_keeps_merging(self):
+        """12 Nov: the VM sat at 15 to 18G, under the 20G floor, from about 14:00 and nothing woke anyone."""
+        self.assertEqual(mj.FLOOR_GB, 20)   # config/policy.toml [hourly] floor_gb
+        self.add(6350)
+        self.free = 18
+        with patch.object(mj, "now", lambda: "2026-11-12T14:00:00+08:00"):
+            self.run_()
+        self.free = 15
+        with patch.object(mj, "now", lambda: "2026-11-12T15:00:00+08:00"):
+            self.run_()   # still the same episode: no second wake
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("disk", "host")])
+        self.assertIn("18G free", self.woken()[0]["reason"])
+        self.assertIn("6350", {c[3] for c in self.of(["gh", "pr", "merge"])})
+        self.free = 20
+        self.run_()
+        self.assertTrue(any(x.startswith("disk-ok host 20G free") for x in self.events()))
+        self.free = 19
+        with patch.object(mj, "now", lambda: "2026-11-13T09:00:00+08:00"):
+            self.run_()   # a new episode wakes again
+        self.assertEqual([b["kind"] for b in self.woken()], ["disk", "disk"])
 
     def test_one_search_reads_every_pr_and_only_one_with_more_than_a_page_reads_again(self):
         """Before: one `pr list` plus one `pr view` per PR. Now: one search, and a follow-up only past 100 files or checks."""
