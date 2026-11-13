@@ -236,6 +236,17 @@ class Holds(unittest.TestCase):
         self.assertIn(5675, h["hold"])
 
 
+class GhJson(unittest.TestCase):
+    def test_a_github_timeout_is_retried_and_the_error_keeps_the_504(self):
+        """gh's first try answers `HTTP 504`, and a retry of the same call can answer `unexpected end of JSON input` with
+        an empty body. Both are GitHub's side, so both are retried, and the error the job logs keeps the 504."""
+        errs = iter(["gh: HTTP 504\n", "unexpected end of JSON input\n", "unexpected end of JSON input\n"])
+        with patch.object(mj, "sh", lambda a, timeout=120: (1, "", next(errs))), patch.object(mj.time, "sleep", lambda s: None):
+            with self.assertRaisesRegex(RuntimeError, r"gh api graphql -f: HTTP 504; then unexpected end of JSON input"):
+                mj.gh_json(["api", "graphql", "-f", "q=x", "-f", "query=y"])
+        self.assertRaises(StopIteration, next, errs)   # all three tries ran
+
+
 class Stage(unittest.TestCase):
     """Job.run() over a fake GitHub (gh_json and sh mocked) on a temp ONIGIRI_ROOT. Each run is a fresh Job, as cron
     runs it, so the once-per-head allowances must survive in state.json between runs."""
@@ -292,12 +303,13 @@ class Stage(unittest.TestCase):
 
     def gh(self, args):
         if args[:2] == ["api", "graphql"]:
-            query = args[-1].split("=", 1)[1]
-            kv = dict(a.split("=", 1) for a in args[2:-1] if "=" in a)
-            if "search(" in query:
-                return {"data": {"search": {"nodes": [self.node(n) for n, p in self.prs.items()
-                                                      if p["state"] == "OPEN" and p["author"] == "injaneity"],
-                                            "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+            kv = dict(a.split("=", 1) for a in args[2:] if "=" in a)
+            query = kv.pop("query")
+            if "search(" in query:   # GitHub's search: `first` PRs a page, the cursor is the index of the next one
+                size, at = int(re.search(r"search\([^)]*first: (\d+)", query).group(1)), int(kv.get("after", 0))
+                mine = [n for n, p in self.prs.items() if p["state"] == "OPEN" and p["author"] == "injaneity"]
+                return {"data": {"search": {"nodes": [self.node(n) for n in mine[at:at + size]],
+                                            "pageInfo": {"hasNextPage": at + size < len(mine), "endCursor": str(at + size)}}}}
             n = int(kv["n"])
             if "mergeQueueEntry" in query:
                 return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
@@ -579,6 +591,25 @@ class Stage(unittest.TestCase):
             p = mj.from_graphql(mj.read_rest(self.node(6351)))
         self.assertEqual((len(p["statusCheckRollup"]), len(p["files"])), (231, 120))
         self.assertEqual(job.evaluate(p, FIX)[0], [])   # green: every one of the 231 checks was read, ci-gate last
+
+    def test_the_search_pages_ten_prs_at_a_time_from_no_cursor(self):
+        """13 Nov: with 38 open PRs, 25 a page (each with 100 files and 100 checks) ran past GitHub's timeout, so
+        the search answered HTTP 504 and the merge step read no PR at all. Ten a page: the exact calls, first with no cursor."""
+        for n in range(6400, 6423):
+            self.add(n)
+        seen = []
+        real = self.gh
+        with patch.object(mj, "gh_json", lambda a: seen.append(a) or real(a)):
+            out = self.run_(dry=True)
+        q = f"q=repo:trycua/cua is:pr is:open author:injaneity"
+        self.assertEqual([a for a in seen if any("search(" in x for x in a)],
+                         [["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}"],
+                          ["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}", "-f", "after=10"],
+                          ["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}", "-f", "after=20"]])
+        self.assertIn("search(query: $q, type: ISSUE, first: 10, after: $after)", mj.OPEN_PRS)
+        self.assertEqual(sorted(int(x.split()[1].split("#")[1]) for x in out.splitlines() if x.startswith("dry-run cua#")),
+                         list(range(6400, 6423)))
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
 
     def test_a_count_that_does_not_match_what_was_read_raises(self):
         self.add(6360)
