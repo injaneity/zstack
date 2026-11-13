@@ -17,6 +17,7 @@ mkdir -p "$tmp/seed/hosts/vm" "$tmp/seed/hosts/h" "$tmp/seed/agents" "$tmp/seed/
 cp "$src/hosts/check-parity" "$tmp/seed/hosts/"; cp "$src/hosts/vm/pre-push" "$tmp/seed/hosts/vm/"; cp "$src/agents/"*.md "$tmp/seed/agents/"
 cp "$src/bin/pi-run" "$src/bin/model-for" "$src/bin/policy" "$src/bin/ensure-package-main" "$tmp/seed/bin/"; cp "$src/config/policy.toml" "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"
 cp "$src/config/rules.toml" "$src/config/state.toml" "$tmp/seed/config/"
+cp "$src/.gitignore" "$tmp/seed/"   # as the real package: python's __pycache__ from loading bin/policy is not a local change
 # the line both shipped host files end with
 grep -h 'check-parity' "$src/hosts/vm/host.sh" | tail -1 > "$tmp/seed/hosts/h/host.sh"
 check "the vm and mini host files run the same parity line" "$(grep -h 'check-parity"' "$src/hosts/vm/host.sh")" "$(grep -h 'check-parity"' "$src/hosts/mini/host.sh")"
