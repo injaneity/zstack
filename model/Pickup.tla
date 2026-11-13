@@ -22,7 +22,9 @@
 \* host, disk, the merge job, 429s, red-PR reopens (bin/hourly queue's, modelled in bin/PiRun.tla). Runs are counts.
 EXTENDS Naturals, TLC
 
-CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules
+CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules, Foreign
+\* Foreign: items whose id names a review dir that holds another launcher's brief and no run (a Linear-era CUA-<n> brief
+\* is review/cua-<n>, the id issue #<n> gets). bin/hourly foreign_briefs lists them with the host's ids, so they start taken.
 \* Rules: playbook step 5's reasons a candidate is skipped, and no others ("held", "pr", "overlap", "zane", "host").
 \* A config may check a subset that keeps "held" and "zane": the others act alike.
 Active == {"collect", "drain", "pick", "report", "wake"}   \* a pass past the lock
@@ -31,7 +33,7 @@ Sub(a, b) == IF a > b THEN a - b ELSE 0
 
 VARIABLES
   blocker,   \* per item: "none", or the one rule that holds for it now
-  taken,     \* items a run was launched for (a review dir or a launch row on a host): no longer candidates
+  taken,     \* items a run was launched for (a review dir or a launch row on a host), or Foreign: no longer candidates
   auto,      \* running auto-pool runs, on either host
   drained,   \* running hand-pool runs (chat-queued ones the drain started, or the chat's own)
   chat,      \* running quick runs the chat started itself (in no pool)
@@ -61,7 +63,7 @@ Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 News == unsent \/ (standing /\ ~seen)
 
 \* Runs from earlier passes are running at the start, one short of each pool, so the drain and the picks meet both edges.
-Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = {}
+Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = Foreign
   /\ auto = Sub(Auto, 1) /\ drained = Sub(Hand, 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
   /\ standing = FALSE /\ seen = FALSE /\ unsent = FALSE /\ pending = FALSE
   /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ rows = {}
@@ -185,6 +187,9 @@ WakeIffOutputOrFailure == [][\A p \in Passes : pc[p] \in Active /\ pc'[p] = "off
 \* A collected result stays in the outbox until a wake delivered it, and one is delivered at some point.
 NoResultLost == pending => unsent
 ResultReachesChat == pending ~> ~pending
+\* "Never launch another launcher's brief as written" (cua-3627, 13 Nov: a Linear-era unstick brief of a PR merged two
+\* days before ran when issue #3627 mapped to its id).
+ForeignNeverLaunched == \A i \in Foreign : <<i, "launch">> \notin rows
 EveryPassEnds == \A p \in Passes : pc[p] \in Active ~> pc[p] = "off"
 
 \* For the chart only (PickupChart.cfg ACTION_CONSTRAINT): the pass's own steps, with runs ending around it; blockers, hosts,
