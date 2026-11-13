@@ -5,10 +5,11 @@
   pi-run collect <id>                             take a finished run's result, exactly once
   pi-run queue <id>                               queue review/<id>/brief.md for the hourly drain (bin/queue)
   pi-run ci <id> <pr> <head> <why...>             reopen a collected run for its trycua/cua PR that is red at <head>
+  pi-run stop <id> <why...>                       stop a running run on purpose: it ends with no wake
   pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc> [since= resume_at=]
 
 A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes,
-limit_resumes (its upstream-limit requeues, at most config/policy.toml resume.cap), and once its PR's CI reopened it:
+limit_resumes (its upstream-limit requeues, at most config/policy.toml resume.cap), stopped (pi-run stop's why), and once its PR's CI reopened it:
 ci {pr: [heads]}, ci_now}. pool is the slot pool it counts in (config/policy.toml [slots]), tagged at
 queue and start from the brief: `source: auto` is auto, `source: quick` or role research is quick (the quick-check
 lane, in no pool), anything else is hand. A running run with no pool tag (started before the pools) counts as hand.
@@ -38,6 +39,12 @@ step() is the whole lifecycle:
                                       names the PR, head and failure, so the drain reopens the same session with them.
                                       Once per PR and head, at most ci.fix_attempts heads per PR (config/policy.toml).
   collected is otherwise final: a retry is a fresh id (onigiri-mode: nothing restarts a session)
+
+A deliberate stop is not a failure (12 Nov retro: three runs stopped on purpose, two replaced by .vN briefs, each sent a
+failed wake). `pi-run stop <id> <why>` writes review/<id>/stopped (`<utc> <why>`) and then sends TERM to the run's
+supervisor, and KILL to its process group if it is still there after STOP_GRACE seconds. While that marker exists the
+run's exit records rc and stopped and sends no wake, and the collect of a lost run sends none either. A `pi-run ci`
+reopen removes it, so the next attempt wakes as usual. Stop a run before renaming its dir to a .vN.
 
 lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
 transition holds flock on the review dir, so two launchers or a launcher and a collect never interleave. A review dir
@@ -69,12 +76,14 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
+         "| pi-run stop <id> <why...> "
          "| pi-run list [<state>...]")
 # pi's whole last line when the upstream refused on a usage limit or cut a response short: Claude Code's 429, its
 # incomplete response with status 200, unknown or 5xx (the relay lost it; five runs on 11 Nov passed when run again), or
 # ChatGPT's limit (which names the wait). Another 4xx is the request itself, so it would fail again: that stays a failure.
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
                    r"|You have hit your ChatGPT usage limit.*)")
+STOPPED, STOP_GRACE = "stopped", 30   # review/<id>/stopped: the run was stopped on purpose (pi-run stop)
 RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
           "Carry on with the task from where you stopped.")
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
@@ -169,9 +178,11 @@ def step(run, event, alive=False, **f):
             raise Refused(f"already reopened for cua#{f['pr']} at {f['head']}")
         if len(heads) >= f["cap"]:
             raise Refused(f"fix attempts spent for cua#{f['pr']}: {len(heads)} of {f['cap']} ({', '.join(heads)})")
-        return {**run, "state": "queued", "rc": None, "wake": None, "resume_at": f["now"],
+        return {**{k: v for k, v in run.items() if k != "stopped"}, "state": "queued", "rc": None, "wake": None, "resume_at": f["now"],
                 "ci": {**(run.get("ci") or {}), f["pr"]: heads + [f["head"]]},
                 "ci_now": {"pr": f["pr"], "head": f["head"], "why": f["why"], "n": len(heads) + 1, "cap": f["cap"]}}
+    if event == "exit" and s == "running" and run["pid"] == f["pid"] and f.get("stopped"):   # a deliberate stop: no wake
+        return {**run, "state": "exited", "rc": f["rc"], "wake": None, "stopped": f["stopped"]}
     if event == "exit" and s == "running" and run["pid"] == f["pid"]:
         n = run.get("limit_resumes", 0)
         if f["rc"] and f.get("resume_at") and n < f["cap"]:
@@ -179,6 +190,8 @@ def step(run, event, alive=False, **f):
         wake = "failed" if f["rc"] else "done" if run.get("wake_finish") else None
         return {**run, "state": "exited", "rc": f["rc"], "wake": wake}
     if event == "collect" and s in ("exited", "lost"):
+        if s == "lost" and f.get("stopped"):   # killed on purpose: no failed wake
+            return {**run, "state": "collected", "wake": None, "stopped": f["stopped"]}
         return {**run, "state": "collected", "wake": "failed" if s == "lost" else run.get("wake")}
     raise Refused({
         ("start", "running"): f"already running (pid {run and run['pid']})",
@@ -456,7 +469,7 @@ def supervise(d, sid, cmd, env, cap, idle):
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
         last = last_line(d, r.run["attempt"])
         until = limit_until(last, rc, got or killed)
-        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap)
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap, stopped=stop_mark(d))
         why = f"{sid} exited rc={rc}" + (f": stopped after {stalled} min with no progress (run.idle_min)" if stalled else "")
         if done["state"] == "queued":
             print(f"pi-run: back in the queue after an upstream limit ({done['limit_resumes']} of {cap} resumes); "
@@ -637,10 +650,10 @@ def collect(sid):
     with Run(d) as r:
         lost = r.run["state"] == "running" and not alive(r.run)
         try:
-            done = step(r.run, "collect", not lost)
+            done = step(r.run, "collect", not lost, stopped=stop_mark(d))
         except Refused as e:
             die(3, f"{sid}: {e}")
-        if lost:   # its supervisor died with pi and sent nothing: the wake goes before the write, as in supervise()
+        if lost and done.get("wake"):   # its supervisor died with pi and sent nothing: the wake goes before the write, as in supervise()
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
         r.write(done)
@@ -772,6 +785,45 @@ def migrate(root):
             os.unlink(mark)
 
 
+def stop_mark(d):
+    """review/<id>/stopped's text (`<utc> <why>`), or None when the run was not stopped on purpose."""
+    try:
+        with open(os.path.join(d, STOPPED), errors="replace") as f:
+            return f.read().strip() or "stopped"
+    except OSError:
+        return None
+
+
+def stop(sid, why):
+    """Stop a running run on purpose: the marker first, so its exit or collect sees it, then TERM to the supervisor (it
+    forwards to pi), then KILL to the process group if it is still there after STOP_GRACE seconds."""
+    _, root = host_env("list")
+    d = os.path.join(root, sid)
+    if not os.path.exists(os.path.join(d, "run.json")):
+        die(3, f"{sid}: no run")
+    with Run(d) as r:
+        if not alive(r.run):
+            die(3, f"{sid}: not running ({r.run['state']}); nothing to stop")
+        run = r.run
+        with open(os.path.join(d, STOPPED + ".tmp"), "w") as f:
+            f.write(f"{utc()} {why}\n")
+        os.replace(os.path.join(d, STOPPED + ".tmp"), os.path.join(d, STOPPED))
+    try:
+        os.kill(run["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    end = time.time() + STOP_GRACE
+    while alive(run) and time.time() < end:
+        time.sleep(0.2)
+    if alive(run):
+        try:
+            os.killpg(run["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    print(f"pi-run: stopped {sid} on purpose ({why}); its exit sends no wake")
+    return 0
+
+
 def list_runs(states):
     _, root = host_env("list")
     migrate(root)
@@ -802,6 +854,10 @@ def ci(sid, pr_n, head, why):
             r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=cap))
         except Refused as e:
             die(3, f"{sid}: {e}")
+        try:   # the reopened attempt is not stopped: its exit wakes as usual
+            os.remove(os.path.join(d, STOPPED))
+        except FileNotFoundError:
+            pass
     n = r.run["ci_now"]
     print(f"{sid} queued for cua#{pr_n} at {head}: fix {n['n']} of {n['cap']}")
     return 0
@@ -835,7 +891,9 @@ def main(argv):
         return ci(argv[1], argv[2], argv[3], " ".join(argv[4:]))
     if argv[:1] == ["list"]:
         return list_runs(argv[1:])
-    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci"):
+    if len(argv) >= 3 and argv[0] == "stop" and ID.fullmatch(argv[1]):
+        return stop(argv[1], " ".join(argv[2:]))
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop"):
         return start(argv[0], argv[1], argv[2], argv[3:])
     die(2, USAGE)
 
