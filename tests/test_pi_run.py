@@ -460,6 +460,19 @@ class Launcher(unittest.TestCase):
         self.assertIn("pi-run: no progress for 1 min, past run.idle_min in config/policy.toml: stopping pi", self.log("stuck"))
         self.assertIn("stopped after 1 min with no progress (run.idle_min)", self.log("stuck"))
 
+    def test_an_idle_stop_is_a_failure_even_when_pi_exits_0_on_term(self):
+        pkg = self.idle_package()
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace("trap 'echo TERM > \"$T/got-sig\"; exit 143' TERM",
+                                                           "trap 'echo TERM > \"$T/got-sig\"; exit 0' TERM"))
+        (self.t / "rc").write_text("0")
+        (self.t / "hang").touch()
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "stuck0", "coding", str(self.t / "w.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("stuck0") or {}).get("state") == "exited", 120), self.run_json("stuck0"))
+        self.assertEqual((self.run_json("stuck0")["rc"], self.run_json("stuck0")["wake"]), (143, "failed"))
+
     def test_a_slow_run_that_keeps_writing_a_log_is_not_stopped(self):
         """A bench or a lume run that takes longer than the limit but appends to a log under its review dir is progress."""
         pkg = self.idle_package()
@@ -499,6 +512,10 @@ class Launcher(unittest.TestCase):
                 f.write_text("".join(json.dumps(e) + "\n" for e in entries))
                 self.assertEqual(pr.session_progress(str(f)), want)
                 self.assertEqual(pr.session_files(str(d), "w"), [str(f)])
+        big = call("2026-11-13T09:00:00.000Z", timeout=3600)   # a tool call far larger than the tail read first
+        big["message"]["content"][0]["arguments"]["command"] = "x" * 600000
+        f.write_text(json.dumps(big) + "\n" + "".join(json.dumps(warm) + "\n" for _ in range(3)))
+        self.assertEqual(pr.session_progress(str(f)), t0 + 3600)
         sub = self.t / ".pi" / "agent" / "sessions" / "subagents"
         sub.mkdir()
         for name in ("2026-11-13T09-40-00-000Z_w-verifier-AbC123.jsonl", "2026-11-13T09-40-00-000Z_w-designer-2-AbC123.jsonl",

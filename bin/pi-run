@@ -308,20 +308,27 @@ def idle_limit():
 
 
 def _entries_tail(path, size=262144):
-    """The JSON entries in the last `size` bytes of a session file, oldest first."""
+    """The JSON entries at the end of a session file, oldest first: the last `size` bytes, doubled until they hold a
+    whole assistant message (one with a large tool call can be bigger than any fixed tail) or the whole file."""
     try:
+        total = os.path.getsize(path)
         with open(path, "rb") as f:
-            f.seek(max(0, os.path.getsize(path) - size))
-            lines = f.read().decode("utf-8", "replace").splitlines()
+            while True:
+                f.seek(max(0, total - size))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+                if size < total:
+                    lines = lines[1:]   # the first line may be cut
+                out = []
+                for line in lines:
+                    try:
+                        out.append(json.loads(line))
+                    except ValueError:
+                        pass
+                if size >= total or any((e.get("message") or {}).get("role") == "assistant" for e in out):
+                    return out
+                size *= 2
     except OSError:
         return []
-    out = []
-    for line in lines:
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            pass
-    return out
 
 
 def _stamp(entry):
@@ -444,6 +451,8 @@ def supervise(d, sid, cmd, env, cap, idle):
     if rc is None:
         rc = 128 + got[0]
     killed, rc = rc < 0, 128 - rc if rc < 0 else rc   # a signal-killed pi is a failure, whatever it printed last
+    if stalled:   # an idle stop is a failure even when pi handles TERM and exits 0
+        killed, rc = True, rc or 128 + signal.SIGTERM
     with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
         last = last_line(d, r.run["attempt"])
         until = limit_until(last, rc, got or killed)

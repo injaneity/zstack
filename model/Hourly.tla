@@ -30,7 +30,9 @@
 \* `bin/hourly launch` counts again under that lock before each pick starts. Each action reads the counts as they are,
 \* which slots.lock makes true of the code: no launch counts or starts while another holds it.
 \*
-\* Left out: priority and age order (the pass may take Todos in any order, a superset of oldest first), the batch, the
+\* Left out: a running run that shows no progress: its supervisor stops it at config/policy.toml run.idle_min and it
+\* exits failed (bin/PiRun.tla Stall, IdleStop, StuckFreesItsSlot), so to this pass it is a run that ends (RunEnds).
+\* Also priority and age order (the pass may take Todos in any order, a superset of oldest first), the batch, the
 \* merge job, filing and review, disk (step 3's pruning, lume VMs included), 429s. Runs are counts per kind, not ids.
 EXTENDS Naturals
 
