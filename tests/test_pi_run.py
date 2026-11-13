@@ -524,6 +524,23 @@ class Launcher(unittest.TestCase):
         self.assertEqual((r.stdout, [x for x in r.stderr.splitlines() if x.startswith("{")]), ("lostb.v1 attempt=1 lost\n", []))
         self.assertIsNone(self.run_json("lostb.v1")["wake"])
 
+    def test_a_rename_that_died_after_moving_the_sessions_finishes_when_run_again(self):
+        env = {"PI_CODING_AGENT_DIR": str(self.t / ".pi" / "agent")}
+        self.start("half", hang=True, **env)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        self.assertEqual(self.pi_run("stop", "half", "superseded", **env).returncode, 0)
+        self.finished("half")
+        old = self.session("half")   # the first try moved this session to half.v1's session dir, then died before the dir
+        dest = self.t / ".pi" / "agent" / "sessions" / ("--" + str((self.t / "root" / "review").resolve()).strip("/").replace("/", "-") + "-half.v1--")
+        dest.mkdir(parents=True)
+        old.rename(dest / old.name)
+        r = self.pi_run("rename", "half", "half.v1", "superseded", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.t / "root" / "review" / "half").exists())
+        self.assertIsNone(self.run_json("half.v1")["wake"])
+        self.assertEqual([p.name for p in dest.iterdir()], [old.name])
+        self.assertEqual(list(old.parent.iterdir()), [])
+
     def test_pi_run_rename_refuses_a_taken_name_a_queued_run_and_no_run(self):
         self.start("done1")
         self.finished("done1")
