@@ -288,11 +288,13 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 			act = "`gh issue close` without a `--comment` that names the PR that fixed it";
 	} else if (w[1] === "api" && ghApiWrites(w)) {
 		const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
+		// the endpoint without its query string or fragment: `issues/5?x=/a` is still issue 5
+		const issue = /\/issues\/[^/]+\/?$/.test((ops[0] ?? "").replace(/[?#].*$/s, ""));
 		if (ops[0] === "graphql" && w.some((a) => /\bcloseIssue\b/.test(a))) act = "a GraphQL closeIssue mutation";
-		else if (/\/issues\/[^/]+\/?$/.test(ops[0] ?? "") && w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a)))
+		else if (issue && w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a)))
 			act = "an issue close through `gh api`";
 		// a body from a file or stdin can't be read here, so it may close the issue
-		else if (/\/issues\/[^/]+\/?$/.test(ops[0] ?? "") && w.some((a) => /^--input(=|$)/.test(a)))
+		else if (issue && w.some((a) => /^--input(=|$)/.test(a)))
 			act = "an issue update through `gh api --input`, which may close it";
 	}
 	if (!act) return undefined;

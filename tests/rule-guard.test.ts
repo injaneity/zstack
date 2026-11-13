@@ -499,6 +499,9 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 		`gh api graphql -f query='mutation { closeIssue(input: {issueId: "X"}) { clientMutationId } }'`,
 		"gh api -X PATCH repos/trycua/cua/issues/5 --input payload.json",
 		"gh api repos/trycua/cua/issues/5 --input=- -X PATCH",
+		"gh api -X PATCH 'repos/trycua/cua/issues/5?x=/a' --input payload.json",
+		"gh api -X PATCH 'repos/trycua/cua/issues/5#/a' -f state=closed",
+		"gh api -X PATCH '/repos/trycua/cua/issues/5/?a=b' -f state=closed",
 		'ssh vm "gh issue close 6853 -R trycua/cua"',
 		"GH_REPO=trycua/cua gh issue close 6853",
 	]) no(c);
