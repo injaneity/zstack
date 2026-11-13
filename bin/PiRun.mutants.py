@@ -23,9 +23,15 @@ M = [
     ("continuation-never-drained", "the drain never resumes a 429'd run",
      [("/\\ WF_vars(Resume) ", "")], "a temporal property"),
     ("pause-wakes", "a 429 sends a failed wake",
-     [("/\\ live' = FALSE /\\ why' = \"limit\"\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes>>",
-       "/\\ live' = FALSE /\\ why' = \"limit\" /\\ wake' = \"failed\"\n"
-       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes>>")], "PauseIsSilent"),
+     [("/\\ why' = \"limit\" /\\ limits' = limits + 1\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes, spent>>",
+       "/\\ why' = \"limit\" /\\ limits' = limits + 1 /\\ wake' = \"failed\"\n"
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes, spent>>")], "PauseIsSilent"),
+    ("resume-uncapped", "an upstream limit resumes a run on every drain, past config/policy.toml resume.cap (before the cap)",
+     [("/\\ state = \"running\" /\\ live /\\ limits < ResumeCap", "/\\ state = \"running\" /\\ live /\\ limits <= ResumeCap")],
+     "ResumesCapped"),
+    ("spent-limit-silent", "a run out of resumes ends with no failed wake",
+     [("/\\ ended' = TRUE /\\ wake' = \"failed\" /\\ spent' = TRUE", "/\\ ended' = TRUE /\\ wake' = \"none\" /\\ spent' = TRUE")],
+     "SpentLimitFails"),
     ("ci-fix-uncapped", "a red PR reopens its thread past config/policy.toml ci.fix_attempts",
      [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state = \"collected\" /\\ fixes < FixAttempts + 1")], "FixesCapped"),
     ("ci-reopen-before-collect", "a red PR reopens a thread whose result the pickup has not taken",

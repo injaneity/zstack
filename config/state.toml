@@ -39,7 +39,7 @@ host = "each"
 format = "json"
 writer = "bin/pi-run"
 readers = ["bin/hourly"]
-schema = "{state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, ci, ci_now} (bin/pi-run docstring, bin/PiRun.tla)"
+schema = "{state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes, limit_resumes, ci, ci_now} (bin/pi-run docstring, bin/PiRun.tla)"
 
 
 [file.run-log]

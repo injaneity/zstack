@@ -31,6 +31,12 @@ hand = 5
 [ci]
 fix_attempts = 3
 
+# How many times one run id is resumed after pi stops on an upstream 429 or an incomplete upstream response (bin/pi-run
+# LIMIT), counted over the id's whole life. The next such stop ends the run failed and sends the failed wake, so a run
+# whose upstream always fails reaches the chat instead of resuming on every drain (the resume-cap follow-up to #85, 12 Nov).
+[resume]
+cap = 3
+
 # The patent hold at publish time (hosts/vm/patent_push.py, cua's pre-push hook; Hard rules, Patent hold; Zane 27 Oct
 # 14:12 SGT, t747s4293, corrected t748u). A change whose diff touches one of `held_words` is never pushed to
 # `public_repo`; it goes to `private_repo`. A word counts when no letter or digit comes before it, in any case, so

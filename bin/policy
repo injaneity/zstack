@@ -71,6 +71,7 @@ SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
     "slots": {"auto": (pos_int, "a positive integer"), "hand": (pos_int, "a positive integer")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
+    "resume": {"cap": (pos_int, "a positive integer")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
