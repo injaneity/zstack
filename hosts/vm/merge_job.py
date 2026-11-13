@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -34,6 +35,7 @@ GATE_CHECK = POLICY["merge"]["gate_check"]
 NOT_RERUN = set(POLICY["merge"]["never_rerun"])
 TIERS = POLICY["merge"]["tiers"]
 PREAPPROVE_TIERS = set(POLICY["merge"]["preapprove_tiers"])
+FLOOR_GB = POLICY["hourly"]["floor_gb"]
 WATCH_LIMIT = 500
 WATCH_OVERLAP_S = 6 * 3600
 MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5
@@ -181,7 +183,7 @@ def blockers(pr, paused):
     return R
 
 
-URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed")
+URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed", "disk")
 ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}
 SESSION_CODES = {"no-tier", "conflict"}
 
@@ -219,13 +221,17 @@ OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE,
             f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
 ONE_PR = f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
 MORE = (f"query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ "
-        f"pullRequest(number: $n) {{ files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
+        f"pullRequest(number: $n) {{ headRefOid files(first: 100, after: $files) @include(if: $f) {{ {PAGE} nodes {{ path }} }} "
         f"commits(last: 1) @include(if: $c) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100, after: $checks) {{ {PAGE} "
         f"nodes {{ __typename {CHECKS} }} }} }} }} }} }} }} }} }}")
 
 
 def contexts_of(node):
     return (((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}).get("statusCheckRollup") or {}
+
+
+class HeadMoved(RuntimeError):
+    pass
 
 
 def read_rest(node):
@@ -237,6 +243,8 @@ def read_rest(node):
                         *(["-f", f"files={files['pageInfo']['endCursor']}"] if f else []),
                         *(["-f", f"checks={checks['pageInfo']['endCursor']}"] if c else []),
                         "-f", f"query={MORE}"])["data"]["repository"]["pullRequest"]
+        if page["headRefOid"] != node["headRefOid"]:
+            raise HeadMoved(f"cua#{node['number']}: head moved from {node['headRefOid'][:9]} to {page['headRefOid'][:9]} while paging")
         if f:
             files["nodes"] += page["files"]["nodes"]
             files["pageInfo"] = page["files"]["pageInfo"]
@@ -247,10 +255,19 @@ def read_rest(node):
     return node
 
 
-def read_pr(node):
-    node = read_rest(node)
+def miscounted(node):
     contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
-    if len(contexts["nodes"]) > contexts["totalCount"]:
+    return [f"{len(x['nodes'])} of {x['totalCount']} {name}" for name, x in
+            (("files", node["files"]), ("checks", contexts), ("labels", node["labels"])) if len(x["nodes"]) != x["totalCount"]]
+
+
+def read_pr(node):
+    try:
+        node = read_rest(node)
+        changed = bool(miscounted(node))
+    except HeadMoved:
+        changed = True
+    if changed:
         node = read_rest(gh_json(["api", "graphql", "-F", f"n={node['number']}", "-f", f"query={ONE_PR}"])["data"]["repository"]["pullRequest"])
     return from_graphql(node)
 
@@ -259,8 +276,7 @@ def from_graphql(node):
     files = node["files"]
     contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
     labels = node["labels"]
-    if files["totalCount"] != len(files["nodes"]) or contexts["totalCount"] != len(contexts["nodes"]) or \
-            labels["totalCount"] != len(labels["nodes"]):
+    if miscounted(node):
         raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
                            f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
                            f"{len(labels['nodes'])} of {labels['totalCount']} labels")
@@ -347,6 +363,10 @@ def sha():
     return subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
 
 
+def free_gb():
+    return shutil.disk_usage(ROOT).free // 2**30
+
+
 def parity_problem():
     try:
         r = subprocess.run([f"{PKG}/hosts/check-parity"], env={**ENV, "ONIGIRI_ROOT": ROOT}, capture_output=True, text=True, timeout=300)
@@ -362,7 +382,7 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}
-        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed")}
+        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed", "disk")}
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -399,6 +419,18 @@ class Job:
             self.s["woken"][key] = now()
             return True
         return False
+
+    def disk(self):
+        try:
+            free = free_gb()
+        except OSError as e:
+            return self.event("error", "disk", f"{type(e).__name__}: {str(e)[:150]}")
+        if free >= FLOOR_GB:
+            if self.s["disk"].pop("since", None):
+                self.event("disk-ok", "host", f"{free}G free, back at the {FLOOR_GB}G floor")
+            return
+        since = self.s["disk"].setdefault("since", now())
+        self.wake("disk", "host", since, f"{free}G free on {ROOT}, under the {FLOOR_GB}G floor: prune finished sessions' build output")
 
     def holds(self):
         try:
@@ -575,6 +607,7 @@ class Job:
             self.errors += 1
             self.event("error", "parity", drift)
             self.wake("parity", "host", now()[:13], drift)
+        self.disk()
         holds = self.holds()
         for name, fn in (("merge", lambda: self.merges(holds)), ("merge-watch", self.merge_watch)):
             try:

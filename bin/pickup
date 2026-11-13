@@ -322,7 +322,7 @@ def report(hosts, waits, lines, errors):
             chat.append([f"disk:{name}", f"host {name}: {f.get('free_gb')}G free, under {hourly.FLOOR_GB}G: prune it"])
         for sid, r in f.get("runs", {}).items():
             if r.get("idle_min", 0) >= hourly.HUNG_MIN:
-                chat.append([f"hung:{name}:{sid}", f"{sid} on {name}: running, no log or session write for {r['idle_min']}m"])
+                chat.append([f"hung:{name}:{sid}", f"{sid} on {name}: running, no progress for {r['idle_min']}m"])
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
     if mh in hosts and "error" not in hosts[mh]:
         st, line = hourly.merge_health(hosts[mh].get("merge_last"))

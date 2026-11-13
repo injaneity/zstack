@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -111,6 +112,18 @@ class Step(unittest.TestCase):
             with self.assertRaises(pr.Refused):
                 pr.step(run, "collect", alive)
 
+    def test_a_stopped_run_ends_with_no_wake_whether_it_exits_or_is_lost(self):
+        why = "2026-11-12T03:11:58Z replaced by pickup-timer-onhost.v2"
+        out = pr.step(self.R("running"), "exit", pid=10, rc=143, cap=3, stopped=why)
+        self.assertEqual((out["state"], out["rc"], out["wake"], out["stopped"]), ("exited", 143, None, why))
+        self.assertIsNone(pr.step(out, "collect")["wake"])
+        out = pr.step(self.R("running", wake_finish=True), "exit", pid=10, rc=1, resume_at="t", cap=3, stopped=why)
+        self.assertEqual((out["state"], out["wake"]), ("exited", None))
+        out = pr.step(self.R("running"), "collect", alive=False, stopped=why)
+        self.assertEqual((out["state"], out["wake"], out["stopped"]), ("collected", None, why))
+        reopened = pr.step(out, "ci", pr="7", head="h", why="w", now="n", cap=3)
+        self.assertNotIn("stopped", reopened)
+
 
 class CiStep(unittest.TestCase):
     R = Step.R
@@ -185,13 +198,16 @@ class Model(unittest.TestCase):
                      for wf in (False, True) for dr in (False, True)]
             moves += [("pi-run queue <id>", "queue", dict(since="1", role="coding"), False)]
             moves += [(collect + (" [sends the failed wake]" if key[0] == "lost" else ""), "collect", {}, False)]
+            if key[0] == "lost":
+                moves += [(collect + " [stopped: no wake]", "collect", dict(stopped="t why"), False)]
             moves += [("its PR is red after the rerun, at a head it pushed [fix attempts left]", "ci",
                        dict(pr="7", head=f"h{len(seen)}", why="ci-gate", now="1", cap=1), False)]
             if key[0] == "running":
                 limit = "resumes left, frees its slot" if key[2] < 1 else "resume.cap spent, sends the failed wake"
                 moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3, cap=1), False),
                           (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0, cap=1), False),
-                          (f"pi stops on an upstream 429 [{limit}]", "exit", dict(pid=run["pid"], rc=1, resume_at="5", cap=1), False)]
+                          (f"pi stops on an upstream 429 [{limit}]", "exit", dict(pid=run["pid"], rc=1, resume_at="5", cap=1), False),
+                          ("pi exits after pi-run stop <id> [no wake]", "exit", dict(pid=run["pid"], rc=143, cap=1, stopped="t why"), False)]
                 edges.add((key[0], "lost", "KILL or OOM"))
                 todo.append((run, False))
             for lbl, event, fields, alive_after in moves:
@@ -205,7 +221,34 @@ class Model(unittest.TestCase):
         joined = {}
         for a, b, lbl in edges:
             joined.setdefault((a, b), set()).add(lbl)
-        self.assertEqual({(a, b, " or ".join(sorted(ls))) for (a, b), ls in joined.items()}, chart())
+        drawn = {(a, b): lbl for a, b, lbl in chart()}
+        self.assertEqual(set(joined), set(drawn))
+        for edge, labels in joined.items():
+            self.assertIn(drawn[edge], {" or ".join(p) for p in itertools.permutations(sorted(labels))}, edge)
+
+
+def tomllib_load(path):
+    return pr.policy().read(str(path))
+
+
+class OneConfigPerProcess(unittest.TestCase):
+    def test_a_package_moved_mid_process_leaves_its_policy_as_first_read(self):
+        with tempfile.TemporaryDirectory() as t:
+            pkg = Path(t)
+            for sub in ("bin", "config"):
+                (pkg / sub).mkdir()
+            for f in ("bin/pi-run", "bin/policy", "config/policy.toml"):
+                (pkg / f).write_bytes((PKG / f).read_bytes())
+            shutil.copytree(PKG / "vendor", pkg / "vendor")
+            ld = importlib.machinery.SourceFileLoader("pi_run_moved", str(pkg / "bin" / "pi-run"))
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(ld.name, ld))
+            ld.exec_module(mod)
+            (pkg / "config/policy.toml").write_text((PKG / "config/policy.toml").read_text() + "\n[newer]\nx = 1\n")
+            (pkg / "bin/policy").write_text("raise SystemExit('a newer bin/policy was loaded')\n")
+            want = tomllib_load(PKG / "config/policy.toml")
+            self.assertEqual((mod.conf("slots"), mod.conf("resume", "cap"), mod.conf("run", "idle_min")),
+                             (want["slots"], want["resume"]["cap"], want["run"]["idle_min"]))
+            self.assertEqual(mod.conf(), want)
 
 
 class Launcher(unittest.TestCase):
@@ -400,6 +443,31 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
         self.assertIn("wake: failed", self.log("term"))
 
+    def test_pi_run_stop_ends_the_run_with_no_wake(self):
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        self.start("v1", hang=True, brief="w.md")
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        r = self.pi_run("stop", "v1", "replaced", "by", "v1.v2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = self.finished("v1")
+        self.assertEqual((run["rc"], run["wake"]), (143, None))
+        self.assertTrue(run["stopped"].endswith(" replaced by v1.v2"))
+        self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
+        self.assertNotIn("wake: ", self.log("v1"))
+        self.assertEqual(self.pi_run("collect", "v1").stdout, "v1 attempt=1 rc=143\n")
+        self.assertIsNone(self.run_json("v1")["wake"])
+        self.assertEqual(self.pi_run("stop", "v1", "again").returncode, 3)
+
+    def test_a_stopped_run_whose_supervisor_was_killed_collects_with_no_wake(self):
+        self.start("gone2", hang=True)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        (self.t / "root" / "review" / "gone2" / "stopped").write_text("t killed by hand\n")
+        os.killpg(self.run_json("gone2")["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "gone2 lost attempt=1 rc=None\n"))
+        r = self.pi_run("collect", "gone2")
+        self.assertEqual((r.stdout, [x for x in r.stderr.splitlines() if x.startswith("{")]), ("gone2 attempt=1 lost\n", []))
+        self.assertIsNone(self.run_json("gone2")["wake"])
+
     def test_no_pi_starts_nothing_and_a_pi_gone_after_the_check_is_a_failed_exit_not_a_loss(self):
         r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH=f"{self.t}/py:/usr/bin:/bin")
         self.assertEqual(r.returncode, 4, r.stderr)
@@ -411,6 +479,95 @@ class Launcher(unittest.TestCase):
         self.assertEqual(run["rc"], 127)
         self.assertIn("cannot start pi", self.log("nopi"))
         self.assertIn("wake: failed", self.log("nopi"))
+
+    def idle_package(self):
+        pkg = self.t / "pkg"
+        for sub in ("bin", "config", "hosts/vm"):
+            (pkg / sub).mkdir(parents=True, exist_ok=True)
+        for f in ("bin/pi-run", "bin/hourly", "bin/policy", "config/rules.toml", "config/state.toml", "hosts/vm/wake.py"):
+            (pkg / f).write_bytes((PKG / f).read_bytes())
+            (pkg / f).chmod(0o755)
+        shipped = (PKG / "config/policy.toml").read_text()
+        self.assertEqual(len(re.findall(r"(?m)^idle_min = \d+$", shipped)), 1)
+        (pkg / "config/policy.toml").write_text(re.sub(r"(?m)^idle_min = \d+$", "idle_min = 1", shipped))
+        shutil.copytree(PKG / "vendor", pkg / "vendor")
+        return pkg
+
+    def test_a_run_with_no_progress_is_stopped_at_the_idle_limit_and_exits_failed(self):
+        pkg = self.idle_package()
+        (self.t / "rc").write_text("0")
+        (self.t / "hang").touch()
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "stuck", "coding", str(self.t / "brief.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("stuck") or {}).get("state") == "exited", 120), self.run_json("stuck"))
+        run = self.run_json("stuck")
+        self.assertEqual((run["rc"], run["wake"]), (143, "failed"))
+        self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
+        self.assertIn("pi-run: no progress for 1 min, past run.idle_min in config/policy.toml: stopping pi", self.log("stuck"))
+        self.assertIn("stopped after 1 min with no progress (run.idle_min)", self.log("stuck"))
+
+    def test_an_idle_stop_is_a_failure_even_when_pi_exits_0_on_term(self):
+        pkg = self.idle_package()
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace("trap 'echo TERM > \"$T/got-sig\"; exit 143' TERM",
+                                                           "trap 'echo TERM > \"$T/got-sig\"; exit 0' TERM"))
+        (self.t / "rc").write_text("0")
+        (self.t / "hang").touch()
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "stuck0", "coding", str(self.t / "w.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("stuck0") or {}).get("state") == "exited", 120), self.run_json("stuck0"))
+        self.assertEqual((self.run_json("stuck0")["rc"], self.run_json("stuck0")["wake"]), (143, "failed"))
+
+    def test_a_slow_run_that_keeps_writing_a_log_is_not_stopped(self):
+        pkg = self.idle_package()
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace('while [ -e "$T/hang" ]; do sleep 0.05; done',
+                                                           'for i in $(seq 1 18); do echo "$i" >> bench/progress.log; sleep 5; done'
+                                                           ).replace('echo $$ > "$T/pi-pid"', 'echo $$ > "$T/pi-pid"; mkdir -p bench'))
+        (self.t / "rc").write_text("0")
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "slow", "coding", str(self.t / "brief.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("slow") or {}).get("state") == "exited", 150), self.run_json("slow"))
+        self.assertEqual(self.run_json("slow")["rc"], 0)
+        self.assertNotIn("no progress", self.log("slow"))
+
+    def test_progress_ignores_cache_warming_and_counts_a_tool_call_inside_its_declared_timeout(self):
+        d = self.t / "root" / "review" / "w"
+        d.mkdir(parents=True)
+        sess = self.t / ".pi" / "agent" / "sessions" / ("--" + str(d).strip("/").replace("/", "-") + "--")
+        sess.mkdir(parents=True)
+        f = sess / "2026-11-13T09-00-00-000Z_w.jsonl"
+        call = lambda ts, **a: {"type": "message", "timestamp": ts, "message": {"role": "assistant", "content": [   # noqa: E731
+            {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "x", **a}}]}}
+        warm = {"type": "usage", "kind": "cache_warm", "timestamp": "2026-11-13T09:50:00.000Z"}
+        t0 = pr.calendar.timegm((2026, 11, 13, 9, 0, 0))
+        env = {"PI_CODING_AGENT_DIR": str(self.t / ".pi" / "agent")}
+        cases = [([call("2026-11-13T09:00:00.000Z"), warm], t0),
+                 ([call("2026-11-13T09:00:00.000Z", timeout=3600), warm], t0 + 3600),
+                 ([call("2026-11-13T09:00:00.000Z", timeout=3600),
+                   {"type": "message", "timestamp": "2026-11-13T09:10:00.000Z", "message": {"role": "toolResult", "toolCallId": "c1"}}], t0 + 600)]
+        old = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(old)))
+        os.environ.update(env)
+        for entries, want in cases:
+            with self.subTest(entries=entries):
+                f.write_text("".join(json.dumps(e) + "\n" for e in entries))
+                self.assertEqual(pr.session_progress(str(f)), want)
+                self.assertEqual(pr.session_files(str(d), "w"), [str(f)])
+        big = call("2026-11-13T09:00:00.000Z", timeout=3600)
+        big["message"]["content"][0]["arguments"]["command"] = "x" * 600000
+        f.write_text(json.dumps(big) + "\n" + "".join(json.dumps(warm) + "\n" for _ in range(3)))
+        self.assertEqual(pr.session_progress(str(f)), t0 + 3600)
+        sub = self.t / ".pi" / "agent" / "sessions" / "subagents"
+        sub.mkdir()
+        for name in ("2026-11-13T09-40-00-000Z_w-verifier-AbC123.jsonl", "2026-11-13T09-40-00-000Z_w-designer-2-AbC123.jsonl",
+                     "2026-11-13T09-40-00-000Z_w-x-verifier-AbC123.jsonl"):
+            (sub / name).write_text(json.dumps({"type": "message", "timestamp": "2026-11-13T09:40:00.000Z", "message": {"role": "user"}}) + "\n")
+        self.assertEqual(sorted(os.path.basename(p) for p in pr.session_files(str(d), "w")),
+                         ["2026-11-13T09-00-00-000Z_w.jsonl", "2026-11-13T09-40-00-000Z_w-designer-2-AbC123.jsonl",
+                          "2026-11-13T09-40-00-000Z_w-verifier-AbC123.jsonl"])
 
     def test_merge_allowed_comes_only_from_the_brief(self):
         (self.t / "m.md").write_text("task\nmerge: allowed\n")

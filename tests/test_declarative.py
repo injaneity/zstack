@@ -40,7 +40,7 @@ def restated(text, pol):
     h, s, p = pol["hourly"], pol["slots"], pol["pickup"]
     numbers = {
         "hourly.floor_gb": rf"\b{h['floor_gb']} ?G(B|iB)?\b",
-        "hourly.hung_min": rf"\b({h['hung_min']} ?min(ute)?s?|{h['hung_min'] / 60:g} ?h(ours?)?)\b",
+        "run.idle_min": rf"\b({pol['run']['idle_min']} ?min(ute)?s?|{pol['run']['idle_min'] / 60:g} ?h(ours?)?)\b",
         "hourly.merge_stale_min": rf"\b{h['merge_stale_min']} ?min(ute)?s?\b",
         "hourly.batch_hour": rf"\b0?{h['batch_hour']}:00 SGT\b",
         "hourly.file_cap": rf"\bat most {h['file_cap']}\b",
@@ -78,6 +78,12 @@ class Rules(unittest.TestCase):
             for rid in re.findall(r"^\{\{rule ([a-z-]+)\}\}$", (PKG / f).read_text(), re.M):
                 self.assertIn(rid, ids, f)
 
+    def test_the_12_nov_retro_lines_are_rules_word_for_word(self):
+        md = policy.render(RULES)
+        for line in ("When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool.",
+                     "Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed."):
+            self.assertIn(line[:-1], md)
+
     def test_render_of_named_rules_is_one_bullet_each_in_order(self):
         self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",
@@ -96,7 +102,8 @@ class Rules(unittest.TestCase):
                                    ("salvage-fixes", "`Fixes #<issue>`", "`Closes #<issue>`", "`Fixes #<issue>`"),
                                    ("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
                                    ("patent-scope", "Keyvault", "Vault", "keyvault"),
-                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human")):
+                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human"),
+                                   ("lume-prune", "older than 24h", "older than 48h", "older than 24h")):
             with self.subTest(rid=rid), self.assertRaisesRegex(policy.PolicyError, re.escape(why)):
                 policy.validate_rules(bad(rid, old, new), POLICY)
         dup = json.loads(json.dumps(RULES))
@@ -111,7 +118,7 @@ class NoRestatedValues(unittest.TestCase):
         self.assertEqual(found, [], "name the config/policy.toml key instead of its value")
 
     def test_the_check_catches_what_the_playbook_said_before(self):
-        old = {"it has at least 20G free": "hourly.floor_gb", "no log or session write for 3h": "hourly.hung_min",
+        old = {"it has at least 20G free": "hourly.floor_gb", "no progress for 2.5h": "run.idle_min",
                "(none in the last 55 minutes": "hourly.merge_stale_min", "The first pass after 08:00 SGT": "hourly.batch_hour",
                "at most 10 a pass": "hourly.file_cap", "lume VMs older than 24h": "hourly.lume_prune_age_h",
                "we should have 3 slots for autopickup and up to 5 hand started work": "slots.auto",

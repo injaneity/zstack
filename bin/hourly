@@ -39,7 +39,8 @@ pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
 _policy = pr.conf()
-FLOOR_GB, HUNG_MIN, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "hung_min", "batch_hour"))
+FLOOR_GB, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "batch_hour"))
+HUNG_MIN = _policy["run"]["idle_min"]
 MERGE_STALE_MIN = _policy["hourly"]["merge_stale_min"]
 REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]
 LAST_RUN = re.compile(r"(\S+) zstack (?:[0-9a-f]{40}|unknown) (ok|\d+ error\(s\))( paused)?")
@@ -85,11 +86,8 @@ def on(host, args, stdin=None, env=None):
     return run([*shlex.split(peers()[host]), line], input=stdin)
 
 
-def activity_min(d):
-    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
-    sess = os.path.join(agent, "sessions", "--" + d.strip("/").replace("/", "-") + "--")
-    paths = [os.path.join(d, "run.log")] + [os.path.join(sess, f) for f in (os.listdir(sess) if os.path.isdir(sess) else [])]
-    return int((time.time() - max([os.path.getmtime(p) for p in paths if os.path.exists(p)] or [0])) // 60)
+def activity_min(d, sid):
+    return max(0, int((time.time() - pr.last_progress(d, sid)) // 60))
 
 
 NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")
@@ -111,7 +109,7 @@ def facts(full=True):
         f.update(state=state, pool=pr.read_json(os.path.join(d, "run.json"))["pool"],
                  nums=sorted({int(n) for n in NUM.findall(brief)}))
         if state == "running" and full:
-            f["idle_min"] = activity_min(d)
+            f["idle_min"] = activity_min(d, sid)
         runs[sid] = f
     if not full:
         return {"runs": runs}

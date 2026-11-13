@@ -17,7 +17,7 @@ stateDiagram-v2
   s0 --> s2: pi-run #60;id> #60;role> #60;brief>, or the hourly drain
   s1 --> s2: pi-run #60;id> #60;role> #60;brief>, or the hourly drain
   s2 --> s4: pi exits rc != 0 or pi stops on an upstream 429 [resume.cap spent, sends the failed wake]
-  s2 --> s5: pi exits rc 0 [no wake: finish]
+  s2 --> s5: pi exits rc 0 [no wake: finish] or pi exits after pi-run stop #60;id> [no wake]
   s2 --> s6: pi stops on an upstream 429 [resumes left, frees its slot]
   s2 --> s7: KILL or OOM
   s2 --> s3: pi exits rc 0 [brief has wake: finish]
@@ -25,6 +25,6 @@ stateDiagram-v2
   s4 --> s8: pi-run collect #60;id>
   s5 --> s8: pi-run collect #60;id>
   s6 --> s2: hourly drain, after resume_at [same session]
-  s7 --> s8: pi-run collect #60;id> [sends the failed wake]
+  s7 --> s8: pi-run collect #60;id> [sends the failed wake] or pi-run collect #60;id> [stopped: no wake]
   s8 --> s9: its PR is red after the rerun, at a head it pushed [fix attempts left]
   s9 --> s2: hourly drain, after resume_at [same session]

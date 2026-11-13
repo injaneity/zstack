@@ -89,7 +89,7 @@ class Policy(unittest.TestCase):
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
             ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
-            ('since = "2026-11-13"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
+            ('since = "2026-07-22"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
             ('[issues]\nrepo = "trycua/cua"', '[issues]\nrepo = "cua"', "issues.repo must be owner/name"),
         ]
         for old, new, why in cases:

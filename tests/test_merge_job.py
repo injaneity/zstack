@@ -240,10 +240,10 @@ class Stage(unittest.TestCase):
         d = Path(td.name)
         (d / "tick").mkdir()
         (d / "hold-prs.txt").write_text(HOLDS)
-        self.drift, self.unknown, self.sleeps = None, {}, []
+        self.drift, self.unknown, self.sleeps, self.free = None, {}, [], 99
         p = patch.multiple(mj, ROOT=str(d), EVENTS=str(d / "events.log"), HOLDS_FILE=str(d / "hold-prs.txt"),
                            STATE=str(d / "tick/state.json"), PAUSED=str(d / "tick/PAUSED"), LAST=str(d / "tick/last-run"),
-                           gh_json=self.gh, sh=self.sh, parity_problem=lambda: self.drift)
+                           gh_json=self.gh, sh=self.sh, parity_problem=lambda: self.drift, free_gb=lambda: self.free)
         p.start()
         self.addCleanup(p.stop)
         z = patch.object(mj.time, "sleep", self.sleeps.append)
@@ -299,7 +299,7 @@ class Stage(unittest.TestCase):
                 return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": ev}}}}}
             node = self.node(n, kv.get("files"), kv.get("checks"))
             if "@include" in query:
-                node = {k: node[k] for k in (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
+                node = {k: node[k] for k in ["headRefOid"] + (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
             return {"data": {"repository": {"pullRequest": node}}}
         if args[:2] == ["pr", "list"]:
             self.lists.append(args)
@@ -545,6 +545,26 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
+    def test_free_disk_under_the_floor_wakes_once_per_episode_and_keeps_merging(self):
+        self.assertEqual(mj.FLOOR_GB, 20)
+        self.add(6350)
+        self.free = 18
+        with patch.object(mj, "now", lambda: "2026-11-12T14:00:00+08:00"):
+            self.run_()
+        self.free = 15
+        with patch.object(mj, "now", lambda: "2026-11-12T15:00:00+08:00"):
+            self.run_()
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("disk", "host")])
+        self.assertIn("18G free", self.woken()[0]["reason"])
+        self.assertIn("6350", {c[3] for c in self.of(["gh", "pr", "merge"])})
+        self.free = 20
+        self.run_()
+        self.assertTrue(any(x.startswith("disk-ok host 20G free") for x in self.events()))
+        self.free = 19
+        with patch.object(mj, "now", lambda: "2026-11-13T09:00:00+08:00"):
+            self.run_()
+        self.assertEqual([b["kind"] for b in self.woken()], ["disk", "disk"])
+
     def test_one_search_reads_every_pr_and_only_one_with_more_than_a_page_reads_again(self):
         self.add(6350)
         self.add(6351, rollup=[cr(f"lane {i}") for i in range(230)] + [cr("ci-gate")], files=[f"f{i}.rs" for i in range(120)])
@@ -617,7 +637,46 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.reads.count(6364), 4)
         self.assertIn("error cua#6364 merge: RuntimeError: cua#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
 
-    def test_fewer_checks_than_the_count_is_never_read_again(self):
+    def test_a_pr_with_117_checks_reads_all_117_and_decides_red(self):
+        self.add(6366, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate", conclusion="FAILURE")])
+        with patch.object(mj, "gh_json", self.gh):
+            p = mj.read_pr(self.node(6366))
+        self.assertEqual(len(p["statusCheckRollup"]), 117)
+        self.run_()
+        self.assertEqual(self.reads.count(6366), 4)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual(len(self.of(["gh", "run", "rerun"])), 1)
+
+    def test_a_push_while_paging_reads_the_new_head_again_once_and_decides_on_it(self):
+        self.add(6367, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate")])
+        real, pushed = self.gh, []
+
+        def gh(args):
+            if "@include" in args[-1] and not pushed:
+                pushed.append(1)
+                self.prs[6367].update(headRefOid=H2, statusCheckRollup=[cr(f"lane {i}") for i in range(93)] + [cr("ci-gate")])
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.reads.count(6367), 3)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual([(c[3], c[-1]) for c in self.of(["gh", "pr", "merge"])], [("6367", H2)])
+
+    def test_a_head_still_moving_after_the_one_reread_is_an_error_never_a_merge(self):
+        self.add(6368, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
+        real, heads = self.gh, iter([H2, "c" * 40, "d" * 40])
+
+        def gh(args):
+            if "@include" in args[-1]:
+                self.prs[6368]["headRefOid"] = next(heads)
+            return real(args)
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertEqual(self.reads.count(6368), 4)
+        self.assertIn(f"error cua#6368 merge: HeadMoved: cua#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
+
+    def test_fewer_checks_than_the_count_reads_again_once_and_merges_on_a_whole_read(self):
         self.add(6365)
         real = self.gh
 
@@ -629,8 +688,43 @@ class Stage(unittest.TestCase):
             return out
         with patch.object(mj, "gh_json", gh):
             self.run_()
-        self.assertEqual(self.reads.count(6365), 1)
-        self.assertIn("error cua#6365 merge: RuntimeError: cua#6365: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+        self.assertEqual(self.reads.count(6365), 2)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6365"])
+
+    def test_a_count_short_on_the_one_reread_too_is_an_error_never_a_merge(self):
+        self.add(6369)
+        real = self.gh
+
+        def gh(args):
+            out = real(args)
+            for n in (out["data"]["search"]["nodes"] if "search(" in args[-1] else [out["data"]["repository"]["pullRequest"]]):
+                n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = 3
+            return out
+        with patch.object(mj, "gh_json", gh):
+            self.run_()
+        self.assertEqual(self.reads.count(6369), 2)
+        self.assertEqual(self.of(["gh", "pr", "merge"]), [])
+        self.assertIn("error cua#6369 merge: RuntimeError: cua#6369: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+
+    def test_a_file_or_label_count_off_reads_again_once(self):
+        for n, key in ((6370, "files"), (6371, "labels")):
+            self.add(n)
+            real, once = self.gh, []
+
+            def gh(args, key=key, n=n, once=once, real=real):
+                out = real(args)
+                if "search(" in args[-1] and not once:
+                    once.append(1)
+                    for x in out["data"]["search"]["nodes"]:
+                        if x["number"] == n:
+                            x[key]["totalCount"] += 1
+                return out
+            with patch.object(mj, "gh_json", gh):
+                self.run_()
+            self.assertEqual(self.reads.count(n), 2, key)
+        self.assertFalse([x for x in self.events() if x.startswith("error")])
+        self.assertEqual(sorted({c[3] for c in self.of(["gh", "pr", "merge"])} & {"6370", "6371"}), ["6370", "6371"])
 
     def test_a_queued_pr_whose_gate_cannot_be_read_in_full_leaves_the_queue(self):
         self.queue = True

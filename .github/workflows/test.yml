@@ -71,6 +71,8 @@ jobs:
         run: node --test tests/rule-guard.test.ts
       - name: subagent children get their role prompt and no session rules
         run: node --test tests/subagent-prompt.test.ts
+      - name: a bash call with no timeout is bounded by run.idle_min
+        run: node --test tests/tool-guard.test.ts
       - name: model config resolves
         run: tests/models.sh
       - name: pi-run fast-forwards the package to origin/main or refuses to start

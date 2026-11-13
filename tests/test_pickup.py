@@ -202,7 +202,7 @@ class Pickup(unittest.TestCase):
              "body": "Salvaged from https://github.com/trycua/cua/pull/603", "closingIssuesReferences": []},
             {"number": 704, "state": "MERGED", "mergedAt": "2026-11-14T09:00:00Z", "body": "Salvaged from #604",
              "closingIssuesReferences": ref(16)},
-            {"number": 705, "state": "MERGED", "mergedAt": "2026-11-01T00:00:00Z", "body": "Salvaged from #605",
+            {"number": 705, "state": "MERGED", "mergedAt": "2026-07-01T00:00:00Z", "body": "Salvaged from #605",
              "closingIssuesReferences": []},
             {"number": 706, "state": "CLOSED", "mergedAt": None, "body": "Salvaged from #606", "closingIssuesReferences": []},
             {"number": 707, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #9999", "closingIssuesReferences": []}]))

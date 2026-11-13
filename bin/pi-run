@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import calendar
 import fcntl
 import json
 import os
@@ -13,10 +14,12 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
+         "| pi-run stop <id> <why...> "
          "| pi-run list [<state>...]\nexit 0 done, 2 usage, 3 refused by the run's state (bin/PiRun.mmd), 4 setup failed; "
          "PI_RUN_DRY=1 checks a start and changes nothing")
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
                    r"|You have hit your ChatGPT usage limit.*)")
+STOPPED, STOP_GRACE = "stopped", 30
 RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
           "Carry on with the task from where you stopped.")
 CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
@@ -26,29 +29,32 @@ CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, aft
              "yourself. If only Zane can decide it, say why under questions: and stop.")
 
 
-_POLICY = []
+def _load_policy():
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    try:
+        return mod, mod.load()
+    except mod.PolicyError as e:
+        return mod, e
+
+
+_POLICY, _CONFIG = _load_policy()
 
 
 def policy():
-    if not _POLICY:
-        import importlib.machinery
-        import importlib.util
-        loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(mod)
-        _POLICY.append(mod)
-    return _POLICY[0]
+    return _POLICY
 
 
 POOLS = ("auto", "hand", "quick")
 
 
 def conf(*keys):
-    pol = policy()
-    try:
-        v = pol.load()
-    except pol.PolicyError as e:
-        die(2, str(e))
+    if isinstance(_CONFIG, Exception):
+        die(2, str(_CONFIG))
+    v = _CONFIG
     for k in keys:
         v = v[k]
     return v
@@ -107,9 +113,11 @@ def step(run, event, alive=False, **f):
             raise Refused(f"already reopened for cua#{f['pr']} at {f['head']}")
         if len(heads) >= f["cap"]:
             raise Refused(f"fix attempts spent for cua#{f['pr']}: {len(heads)} of {f['cap']} ({', '.join(heads)})")
-        return {**run, "state": "queued", "rc": None, "wake": None, "resume_at": f["now"],
+        return {**{k: v for k, v in run.items() if k != "stopped"}, "state": "queued", "rc": None, "wake": None, "resume_at": f["now"],
                 "ci": {**(run.get("ci") or {}), f["pr"]: heads + [f["head"]]},
                 "ci_now": {"pr": f["pr"], "head": f["head"], "why": f["why"], "n": len(heads) + 1, "cap": f["cap"]}}
+    if event == "exit" and s == "running" and run["pid"] == f["pid"] and f.get("stopped"):
+        return {**run, "state": "exited", "rc": f["rc"], "wake": None, "stopped": f["stopped"]}
     if event == "exit" and s == "running" and run["pid"] == f["pid"]:
         n = run.get("limit_resumes", 0)
         if f["rc"] and f.get("resume_at") and n < f["cap"]:
@@ -117,6 +125,8 @@ def step(run, event, alive=False, **f):
         wake = "failed" if f["rc"] else "done" if run.get("wake_finish") else None
         return {**run, "state": "exited", "rc": f["rc"], "wake": wake}
     if event == "collect" and s in ("exited", "lost"):
+        if s == "lost" and f.get("stopped"):
+            return {**run, "state": "collected", "wake": None, "stopped": f["stopped"]}
         return {**run, "state": "collected", "wake": "failed" if s == "lost" else run.get("wake")}
     raise Refused({
         ("start", "running"): f"already running (pid {run and run['pid']})",
@@ -233,7 +243,93 @@ def limit_until(last, rc, got):
     return utc(time.time() + 60 * int(m.group(1)) if m else None)
 
 
-def supervise(d, sid, cmd, env, cap):
+def _entries_tail(path, size=262144):
+    try:
+        total = os.path.getsize(path)
+        with open(path, "rb") as f:
+            while True:
+                f.seek(max(0, total - size))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+                if size < total:
+                    lines = lines[1:]
+                out = []
+                for line in lines:
+                    try:
+                        out.append(json.loads(line))
+                    except ValueError:
+                        pass
+                if size >= total or any((e.get("message") or {}).get("role") == "assistant" for e in out):
+                    return out
+                size *= 2
+    except OSError:
+        return []
+
+
+def _stamp(entry):
+    try:
+        return calendar.timegm(time.strptime(entry["timestamp"][:19], "%Y-%m-%dT%H:%M:%S"))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def session_progress(path):
+    entries = [e for e in _entries_tail(path) if e.get("type") != "usage" and _stamp(e)]
+    if not entries:
+        return 0
+    last, done = _stamp(entries[-1]), set()
+    for e in reversed(entries):
+        m = e.get("message") or {}
+        if m.get("role") == "toolResult":
+            done.add(m.get("toolCallId"))
+            continue
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            ends = [_stamp(e) + x["arguments"]["timeout"] for x in m["content"]
+                    if x.get("type") == "toolCall" and x.get("id") not in done
+                    and isinstance((x.get("arguments") or {}).get("timeout"), (int, float))]
+            return max([last] + ends)
+        break
+    return last
+
+
+def session_files(d, sid):
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    sessions, out = os.path.join(agent, "sessions"), []
+    for p in {d, os.path.realpath(d)}:
+        s = os.path.join(sessions, "--" + p.strip("/").replace("/", "-") + "--")
+        out += [os.path.join(s, f) for f in (os.listdir(s) if os.path.isdir(s) else []) if f.endswith(".jsonl")]
+    child = re.compile(r"[^_]+_" + re.escape(sid) + r"-[a-z]+(-\d+)?-\w+\.jsonl")
+    sub = os.path.join(sessions, "subagents")
+    out += [os.path.join(sub, f) for f in (os.listdir(sub) if os.path.isdir(sub) else []) if child.fullmatch(f)]
+    return out
+
+
+def files_progress(d, since):
+    newest = 0
+    for root, dirs, files in os.walk(d):
+        dirs[:] = [x for x in dirs if not (root == d and x.startswith("wt")) and x not in (".git", "target", "node_modules")]
+        for x in files:
+            try:
+                newest = max(newest, os.lstat(os.path.join(root, x)).st_mtime)
+            except OSError:
+                continue
+            if newest > since:
+                return newest
+    return newest
+
+
+def last_progress(d, sid, since=float("inf")):
+    try:
+        t = os.path.getmtime(os.path.join(d, "run.log"))
+    except OSError:
+        t = 0
+    for p in session_files(d, sid):
+        if t > since:
+            return t
+        t = max(t, session_progress(p))
+    return t if t > since else max(t, files_progress(d, since))
+
+
+def supervise(d, sid, cmd, env, cap, idle):
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
@@ -260,14 +356,30 @@ def supervise(d, sid, cmd, env, cap):
             rc = 127
         if got and proc:
             proc.send_signal(got[0])
+    stalled = 0
+    while rc is None and proc is not None:
+        try:
+            rc = proc.wait(timeout=min(60, max(1, idle // 10)))
+        except subprocess.TimeoutExpired:
+            quiet = time.time() - last_progress(d, sid, since=time.time() - idle)
+            if quiet >= idle and not stalled:
+                stalled = int(quiet // 60)
+                print(f"pi-run: no progress for {stalled} min, past run.idle_min in config/policy.toml: stopping pi", flush=True)
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    rc = proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
     if rc is None:
-        rc = 128 + got[0] if proc is None else proc.wait()
+        rc = 128 + got[0]
     killed, rc = rc < 0, 128 - rc if rc < 0 else rc
+    if stalled:
+        killed, rc = True, rc or 128 + signal.SIGTERM
     with Run(d) as r:
         last = last_line(d, r.run["attempt"])
         until = limit_until(last, rc, got or killed)
-        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap)
-        why = f"{sid} exited rc={rc}"
+        done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap, stopped=stop_mark(d))
+        why = f"{sid} exited rc={rc}" + (f": stopped after {stalled} min with no progress (run.idle_min)" if stalled else "")
         if done["state"] == "queued":
             print(f"pi-run: back in the queue after an upstream limit ({done['limit_resumes']} of {cap} resumes); "
                   f"the hourly drain resumes it after {done['resume_at']}", flush=True)
@@ -329,7 +441,7 @@ def launch(sid, role, brief, extra):
         provider, model = pol.model_for(role)
     except pol.PolicyError as e:
         die(2, str(e))
-    cap = conf("resume", "cap")
+    cap, idle = conf("resume", "cap"), conf("run", "idle_min") * 60
     check(d, sid, run, **f)
     try:
         ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
@@ -369,7 +481,7 @@ def launch(sid, role, brief, extra):
             os.close(r.fd)
             gate is None or os.close(gate)
             try:
-                supervise(d, sid, cmd, env, cap)
+                supervise(d, sid, cmd, env, cap, idle)
             finally:
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
@@ -427,10 +539,10 @@ def collect(sid):
     with Run(d) as r:
         lost = r.run["state"] == "running" and not alive(r.run)
         try:
-            done = step(r.run, "collect", not lost)
+            done = step(r.run, "collect", not lost, stopped=stop_mark(d))
         except Refused as e:
             die(3, f"{sid}: {e}")
-        if lost:
+        if lost and done.get("wake"):
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
         r.write(done)
@@ -537,6 +649,43 @@ def list_runs(states):
     return 0
 
 
+def stop_mark(d):
+    try:
+        with open(os.path.join(d, STOPPED), errors="replace") as f:
+            return f.read().strip() or "stopped"
+    except OSError:
+        return None
+
+
+def stop(sid, why):
+    _, root = host_env("list")
+    d = os.path.join(root, sid)
+    if not os.path.exists(os.path.join(d, "run.json")):
+        die(3, f"{sid}: no run")
+    with Run(d) as r:
+        if not alive(r.run):
+            die(3, f"{sid}: not running ({r.run['state']}); nothing to stop")
+        run = r.run
+        with open(os.path.join(d, STOPPED + ".tmp"), "w") as f:
+            f.write(f"{utc()} {why}\n")
+        os.replace(os.path.join(d, STOPPED + ".tmp"), os.path.join(d, STOPPED))
+    try:
+        os.kill(run["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    end = time.time() + STOP_GRACE
+    while alive(run) and time.time() < end:
+        time.sleep(0.2)
+    if alive(run):
+        try:
+            os.killpg(run["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    print(f"pi-run: stopped {sid} on purpose ({why}); its exit sends no wake")
+    return 0
+
+
+
 def ci(sid, pr_n, head, why):
     _, root = host_env("list")
     d = os.path.join(root, sid)
@@ -548,6 +697,10 @@ def ci(sid, pr_n, head, why):
             r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=cap))
         except Refused as e:
             die(3, f"{sid}: {e}")
+        try:
+            os.remove(os.path.join(d, STOPPED))
+        except FileNotFoundError:
+            pass
     n = r.run["ci_now"]
     print(f"{sid} queued for cua#{pr_n} at {head}: fix {n['n']} of {n['cap']}")
     return 0
@@ -581,7 +734,9 @@ def main(argv):
         return ci(argv[1], argv[2], argv[3], " ".join(argv[4:]))
     if argv[:1] == ["list"]:
         return list_runs(argv[1:])
-    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci"):
+    if len(argv) >= 3 and argv[0] == "stop" and ID.fullmatch(argv[1]):
+        return stop(argv[1], " ".join(argv[2:]))
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop"):
         return launch(argv[0], argv[1], argv[2], argv[3:])
     die(2, USAGE)
 
