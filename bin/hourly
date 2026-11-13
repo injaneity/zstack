@@ -46,11 +46,7 @@ _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
 SGT = ZoneInfo("Asia/Singapore")
-_pol = pr.policy()
-try:
-    _policy = _pol.load()   # a policy bin/policy rejects stops every command with its reason
-except _pol.PolicyError as e:
-    pr.die(2, f"hourly: {e}")
+_policy = pr.config()   # the process's one read of config/policy.toml; a policy bin/policy rejects stops every command
 # the peer floor and the batch hour: config/policy.toml [hourly] (playbooks/hourly.md steps 2, 3 and 9); the hung mark is
 # the supervisor's own idle limit, config/policy.toml [run]
 FLOOR_GB, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "batch_hour"))

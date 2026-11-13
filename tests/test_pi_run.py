@@ -220,6 +220,34 @@ class Model(unittest.TestCase):
         self.assertEqual({(a, b, " or ".join(sorted(ls))) for (a, b), ls in joined.items()}, chart())
 
 
+def tomllib_load(path):
+    return pr.policy().read(str(path))
+
+
+class OneConfigPerProcess(unittest.TestCase):
+    def test_a_package_moved_mid_process_leaves_its_policy_as_first_read(self):
+        """13 Nov 21:40 SGT: a pickup pass loaded bin/pi-run, another launch fast-forwarded the package to a policy.toml with
+        a new [run] table, and the pass's next caps() read it from disk and died on `unknown key run`. One process reads the
+        policy once, so its code and config always match."""
+        with tempfile.TemporaryDirectory() as t:
+            pkg = Path(t)
+            for sub in ("bin", "config"):
+                (pkg / sub).mkdir()
+            for f in ("bin/pi-run", "bin/policy", "config/policy.toml"):
+                (pkg / f).write_bytes((PKG / f).read_bytes())
+            shutil.copytree(PKG / "vendor", pkg / "vendor")
+            ld = importlib.machinery.SourceFileLoader("pi_run_moved", str(pkg / "bin" / "pi-run"))
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(ld.name, ld))
+            ld.exec_module(mod)
+            # the package moves before this process reads anything from its policy: a newer bin/policy and policy.toml
+            (pkg / "config/policy.toml").write_text((PKG / "config/policy.toml").read_text() + "\n[newer]\nx = 1\n")
+            (pkg / "bin/policy").write_text("raise SystemExit('a newer bin/policy was loaded')\n")
+            want = tomllib_load(PKG / "config/policy.toml")
+            self.assertEqual((mod.caps(), mod.resume_cap(), mod.idle_limit()),
+                             (want["slots"], want["resume"]["cap"], want["run"]["idle_min"] * 60))
+            self.assertEqual(mod.config(), mod.config())
+
+
 class Launcher(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()

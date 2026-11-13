@@ -84,31 +84,43 @@ CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, aft
              "yourself. If only Zane can decide it, say why under questions: and stop.")
 
 
-_POLICY = []
+def _load_policy():
+    """bin/policy as a module (the one reader of config/policy.toml), and config/policy.toml as it validates it: both read
+    when this file loads, so a process never pairs its code with a bin/policy or policy.toml that a later fast-forward of
+    the package wrote (the 13 Nov 21:40 SGT pickup pass: another launch moved the package mid-pass and the old caps()
+    read the new [run] table). The data, or the PolicyError that config() raises on first use."""
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    try:
+        return mod, mod.load()
+    except mod.PolicyError as e:
+        return mod, e
+
+
+_POLICY, _CONFIG = _load_policy()
 
 
 def policy():
-    """bin/policy, the one reader of config/policy.toml, as a module, loaded once so its PolicyError is one class."""
-    if not _POLICY:
-        import importlib.machinery
-        import importlib.util
-        loader = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
-        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(mod)
-        _POLICY.append(mod)
-    return _POLICY[0]
+    """bin/policy as a module, loaded once with this file so its PolicyError is one class."""
+    return _POLICY
+
+
+def config():
+    """config/policy.toml as this process read it when it loaded. A bad policy stops the command."""
+    if isinstance(_CONFIG, Exception):
+        die(2, str(_CONFIG))
+    return _CONFIG
 
 
 POOLS = ("auto", "hand", "quick")
 
 
 def caps():
-    """{"auto": n, "hand": n}: config/policy.toml [slots], the one copy of the pool caps. A bad policy stops the launch."""
-    pol = policy()
-    try:
-        return pol.load()["slots"]
-    except pol.PolicyError as e:
-        die(2, str(e))
+    """{"auto": n, "hand": n}: config/policy.toml [slots], the one copy of the pool caps."""
+    return config()["slots"]
 
 
 def pool_of(brief, role):
@@ -139,12 +151,8 @@ def utc(t=None):
 
 
 def resume_cap():
-    """config/policy.toml resume.cap: how many times one run id resumes after an upstream limit. A bad policy stops the launch."""
-    pol = policy()
-    try:
-        return pol.load()["resume"]["cap"]
-    except pol.PolicyError as e:
-        die(2, str(e))
+    """config/policy.toml resume.cap: how many times one run id resumes after an upstream limit."""
+    return config()["resume"]["cap"]
 
 
 def step(run, event, alive=False, **f):
@@ -299,12 +307,8 @@ def limit_until(last, rc, got):
 
 
 def idle_limit():
-    """config/policy.toml run.idle_min in seconds. A bad policy stops the launch."""
-    pol = policy()
-    try:
-        return pol.load()["run"]["idle_min"] * 60
-    except pol.PolicyError as e:
-        die(2, str(e))
+    """config/policy.toml run.idle_min in seconds."""
+    return config()["run"]["idle_min"] * 60
 
 
 def _entries_tail(path, size=262144):
@@ -792,11 +796,7 @@ def ci(sid, pr_n, head, why):
     d = os.path.join(root, sid)
     if not os.path.exists(os.path.join(d, "run.json")):
         die(3, f"{sid}: no run")
-    pol = policy()
-    try:
-        cap = pol.load()["ci"]["fix_attempts"]
-    except pol.PolicyError as e:
-        die(2, f"{sid}: {e}")
+    cap = config()["ci"]["fix_attempts"]
     with Run(d) as r:
         try:
             r.write(step(r.run, "ci", alive(r.run), pr=pr_n, head=head, why=why, now=utc(), cap=cap))
