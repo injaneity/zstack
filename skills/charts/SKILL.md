@@ -23,17 +23,17 @@ When the ask doesn't come with data, you find it. When it does, you still check 
 - Pull the numbers by downloading the published file or table where one exists, rather than reading them off a page or an image. Keep the raw download unchanged in the piece's directory and write the filtering as code, so the step can be rerun.
 - Record where each number came from: the URL, the retrieval date, the exact file, table or section, and the row or model id as the source writes it. Put this in a column of the data file or in `notes.md`.
 - Record the conditions each number was measured under, such as effort level, harness, scorer, plan or date. The next step needs them.
-- If the source lacks a number the finding needs, say so on the chart or drop that row. Never fill a gap from memory or a guess.
+- If the source lacks a number the finding needs, drop that row, or keep it marked as missing and say why in `notes.md` and the report. Never fill a gap from memory or a guess.
 
 ## 3. Make the comparison honest
 
 A chart can be accurate in every number and still mislead. These are the rules for model comparisons.
 
-- **One effort per model, and say which.** Plot medium or high, not max. Max usually buys a small gain over xhigh for a much higher cost and wall time, and nobody runs it day to day, so a max-vs-default chart exaggerates the gap. Pick one level and hold it across models. Where a model's top level is high (Gemini), high is the match, and the footnote says so. If you show the effort curve itself, show every level. Many aggregators publish only max for most benchmarks. Look for a table that has a row at one shared level for each model, and if none has, say on the chart that every bar is max.
+- **One effort per model, and say which.** Plot medium or high, not max. Max usually buys a small gain over xhigh for a much higher cost and wall time, and nobody runs it day to day, so a max-vs-default chart exaggerates the gap. Pick one level and hold it across models. Where a model's top level is high (Gemini), high is the match, and `notes.md` and the report say so. If you show the effort curve itself, show every level. Many aggregators publish only max for most benchmarks. Look for a table that has a row at one shared level for each model, and if none has, say in `notes.md` and the report that every bar is max.
 - **Cost is what people pay.** Use the subscription plan price where people use the model through a plan. Use API price only when the audience pays per token, and label it.
 - **Speed is time per task**, not tokens per second. Tokens per second ignores how many tokens a model spends, so it doesn't say how long the work takes.
-- **Same conditions.** Same benchmark version, scorer, harness and tool access for every bar. If one row comes from a different setup, drop it or mark it on the chart.
-- **Sample size and noise.** When two bars sit inside each other's error bars, say so or don't rank them.
+- **Same conditions.** Same benchmark version, scorer, harness and tool access for every bar. If one row comes from a different setup, drop it or name the difference in `notes.md` and the report.
+- **Sample size and noise.** When two bars sit inside each other's error bars, say so in `notes.md` and the report, or don't rank them.
 - **Units.** Read every number back against the source before rendering: billions vs trillions, percent vs percentage points, per task vs per run. A unit slip is the mistake people catch in the replies.
 - **Axes.** Bars start at zero. A line or scatter may zoom, with the axis labelled. Don't cut an axis to make a gap look bigger.
 
@@ -44,7 +44,7 @@ A chart can be accurate in every number and still mislead. These are the rules f
 - Don't write a title. Titles you generate read as filler, and the human writes the framing in the caption. A one-line axis or subtitle label that says what the number is ("ARC-AGI-2 score, High effort") is fine.
 - Label values on the bars or points so nobody has to read the grid. Sort bars by value unless order carries meaning (time, size).
 - Highlight the thing the finding is about, such as one model, with colour or weight, and keep everything else neutral.
-- A footnote carries the source, the date, the effort level and any caveat from step 3. It is part of the chart, not optional.
+- The image carries the data, the value labels and that one-line axis or subtitle label, and nothing else. No footnote, disclaimer or caveat text on it. The source, the date, the effort level, the sample size and any caveat from step 3 go in the piece's `notes.md` and the report that ships with the chart.
 - Size for where it goes. For a feed, square or 4:5, with text big enough to read on a phone.
 
 ## 5. Animate only when motion adds something
@@ -67,12 +67,12 @@ There is no chart tool to pick. You write a small program that draws the chart a
 - Keep the data from step 2 in its own file (CSV or JSON) next to the render script, so a reviewer can check numbers without reading code.
 - Any plotting library works: matplotlib, Vega-Lite, D3 with a headless browser, or SVG written by hand. For video, render frames and join them with ffmpeg, or use the library's animation writer.
 - Render, then open the output and look at it. Check that labels don't overlap, nothing is clipped, the numbers match the data file, and the first frame of a video is the finished chart (`ffmpeg -i out.mp4 -frames:v 1 first.png`).
-- Keep each piece in its own directory: the raw download, the data file, the render script, the output, and a `notes.md` with the one-sentence finding, the sources from step 2, and the caveats from step 3.
+- Keep each piece in its own directory: the raw download, the data file, the render script, the output, and a `notes.md` with the one-sentence finding, the sources and dates from step 2, and the effort level, sample size and caveats from step 3.
 
 ## 7. Work in batches
 
 - A prompt like "do a batch on this launch post" means many pieces (Adam's batches are about 20), each a different finding, not ten views of one table. Vary the shape: ranking, change over time, cost vs score, a correction of a misleading claim.
-- Ship each piece for review as soon as it renders. Don't hold the batch.
+- Ship each piece for review as soon as it renders, with its `notes.md` as the report. Don't hold the batch.
 - Draft a caption for each, then expect it to be rewritten. A drafted caption states the finding in a few plain words. It does not hedge or restate the chart.
 - One long-running thread for the batches keeps context on what has already been made, so the batches repeat less. Before starting a batch, list what earlier batches already covered.
 
