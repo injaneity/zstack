@@ -263,7 +263,8 @@ const CLOSE_WAY = "Close a trycua/cua issue by hand only when one of our merged 
 
 /** Why a gh command closes an issue in an `issues` repo other than as the issue-close rule allows, or undefined: `gh
  * issue close` needs `--comment` text naming a PR and no not-planned or duplicate reason; the REST and GraphQL closes
- * carry no comment, so they are refused. */
+ * carry no comment, so they are refused, as is a REST issue update whose body comes from `--input`. The guard can't tell
+ * that `#N` is a PR rather than an issue, or ours and merged: the session checks that. */
 function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	const w = c.words;
 	if ((issues && !issues.size) || w[0] !== "gh") return undefined;
@@ -290,6 +291,9 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 		if (ops[0] === "graphql" && w.some((a) => /\bcloseIssue\b/.test(a))) act = "a GraphQL closeIssue mutation";
 		else if (/\/issues\/[^/]+\/?$/.test(ops[0] ?? "") && w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a)))
 			act = "an issue close through `gh api`";
+		// a body from a file or stdin can't be read here, so it may close the issue
+		else if (/\/issues\/[^/]+\/?$/.test(ops[0] ?? "") && w.some((a) => /^--input(=|$)/.test(a)))
+			act = "an issue update through `gh api --input`, which may close it";
 	}
 	if (!act) return undefined;
 	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (bin/policy dump failed)`;

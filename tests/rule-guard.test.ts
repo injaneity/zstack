@@ -497,6 +497,8 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 		"gh api -X PATCH repos/trycua/cua/issues/6853 -f state=closed",
 		`gh api repos/trycua/cua/issues/6853 --input - <<< '{"state": "closed"}' -X PATCH`,
 		`gh api graphql -f query='mutation { closeIssue(input: {issueId: "X"}) { clientMutationId } }'`,
+		"gh api -X PATCH repos/trycua/cua/issues/5 --input payload.json",
+		"gh api repos/trycua/cua/issues/5 --input=- -X PATCH",
 		'ssh vm "gh issue close 6853 -R trycua/cua"',
 		"GH_REPO=trycua/cua gh issue close 6853",
 	]) no(c);
@@ -508,6 +510,7 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 	ok("gh issue close 12", "/scratch");
 	ok("gh api -X PATCH repos/injaneity/zstack/issues/12 -f state=closed");
 	ok("gh api -X PATCH repos/trycua/cua/issues/6853 -f title=x");
+	ok("gh api -X POST repos/trycua/cua/issues/6853/comments --input body.json");
 	no("gh issue close 12", "/tmp/x");
 	// an unreadable policy refuses every hand close; an empty one covers nothing
 	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
