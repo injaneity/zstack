@@ -273,7 +273,10 @@ PR_FIELDS = ("number state author { login } headRefOid isDraft title body mergea
              f"files(first: 100) {{ {PAGE} nodes {{ path }} }} "
              f"commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ {PAGE} "
              f"nodes {{ __typename {CHECKS} }} }} }} }} }} }}")
-OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE, first: 25, after: $after) { "
+# PRs per search page. Each carries up to 100 files and 100 checks, and a page that costs GitHub too long answers
+# HTTP 504: on 13 Nov, with 38 open PRs, 25 a page mostly timed out and 10 a page did not.
+SEARCH_PAGE = 10
+OPEN_PRS = ("query($q: String!, $after: String) { search(query: $q, type: ISSUE, first: %d, after: $after) { " % SEARCH_PAGE +
             f"pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}")
 ONE_PR = f"query($n: Int!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ pullRequest(number: $n) {{ {PR_FIELDS} }} }} }}"
 MORE = (f"query($n: Int!, $files: String, $checks: String, $f: Boolean!, $c: Boolean!) {{ repository(owner: \"{OWNER}\", name: \"{SHORT}\") {{ "
@@ -411,13 +414,18 @@ def sh(args, timeout=120):
 
 
 def gh_json(args):
+    """GitHub's side failing (a 5xx, a timeout, or an empty body, which gh reports as `unexpected end of JSON input`) is
+    tried three times. The error names every distinct failure, so a 504 is not hidden behind the last try's message."""
+    errs = []
     for attempt in range(3):
         rc, out, err = sh(["gh", *args])
-        if not rc or not re.search(r"HTTP 5\d\d|timeout|TLS|connection", err, re.I):
+        if rc and err.strip() and err.strip() not in errs:
+            errs.append(err.strip())
+        if not rc or not re.search(r"HTTP 5\d\d|timeout|TLS|connection|unexpected end of JSON input", err, re.I):
             break
         time.sleep(5 * (attempt + 1))
     if rc:
-        raise RuntimeError(f"gh {' '.join(args[:3])}: {err.strip()[:200]}")
+        raise RuntimeError(f"gh {' '.join(args[:3])}: {'; then '.join(e.removeprefix('gh: ') for e in errs)[:200]}")
     return json.loads(out) if out.strip() else None
 
 
@@ -525,7 +533,7 @@ class Job:
                 self.errors += 1
                 self.event("error", ident, f"queued merge: {type(e).__name__}: {str(e)[:150]}")
         nodes, after = [], None
-        while True:   # one search, a page per 50 PRs
+        while True:   # one search, SEARCH_PAGE PRs a page
             page = gh_json(["api", "graphql", "-f", f"q=repo:{REPO} is:pr is:open author:{ME}", "-f", f"query={OPEN_PRS}",
                             *(["-f", f"after={after}"] if after else [])])["data"]["search"]
             nodes += [x for x in page["nodes"] if x]
