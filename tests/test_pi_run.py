@@ -481,6 +481,82 @@ class Launcher(unittest.TestCase):
         self.assertIsNone(self.run_json("v1")["wake"])
         self.assertEqual(self.pi_run("stop", "v1", "again").returncode, 3)   # not running
 
+    def session(self, sid):
+        """The session file pi would keep for a run started in review/<sid> with --session-id <sid>, as its header says."""
+        d = self.t / ".pi" / "agent" / "sessions" / ("--" + str((self.t / "root" / "review" / sid).resolve()).strip("/").replace("/", "-") + "--")
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"2026-11-13T00-00-00-000Z_{sid}.jsonl"
+        f.write_text(json.dumps({"type": "session", "id": sid}) + "\n")
+        return f
+
+    def test_pi_run_rename_supersedes_a_running_run_with_no_wake_and_frees_its_id(self):
+        """12 Nov: raw-macos-build was renamed to .v1 by hand while running. It sent a failed wake, and the .v2 brief started
+        under the old id reopened v1's transcript. `pi-run rename` stops first and moves the session with the dir."""
+        env = {"PI_CODING_AGENT_DIR": str(self.t / ".pi" / "agent")}
+        (self.t / "w.md").write_text("task\nwake: finish\n")
+        self.start("b", hang=True, brief="w.md", **env)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        old = self.session("b")
+        r = self.pi_run("rename", "b", "b.v1", "replaced", "by", "a", "v2", "brief", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.t / "root" / "review" / "b").exists())
+        run = self.finished("b.v1")
+        self.assertEqual((run["rc"], run["wake"]), (143, None))
+        self.assertTrue(run["stopped"].endswith(" replaced by a v2 brief"))
+        self.assertNotIn("wake: ", self.log("b.v1"))
+        self.assertFalse(old.exists())
+        moved = list((self.t / ".pi" / "agent" / "sessions").glob("*b.v1--/*.jsonl"))
+        self.assertEqual([json.loads(m.read_text())["id"] for m in moved], ["b"])
+        self.assertEqual(self.pi_run("collect", "b.v1", **env).stdout, "b.v1 attempt=1 rc=143\n")
+        self.assertIsNone(self.run_json("b.v1")["wake"])
+        self.start("b", hang=False, **env)   # the id is free for the new brief, in a fresh session dir
+        self.assertEqual(self.finished("b")["attempt"], 1)
+        self.assertEqual(list((self.t / ".pi" / "agent" / "sessions").glob("*review-b--/*.jsonl")), [])
+
+    def test_pi_run_rename_marks_a_lost_run_so_its_collect_sends_no_wake(self):
+        self.start("lostb", hang=True)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        os.killpg(self.run_json("lostb")["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "lostb lost attempt=1 rc=None\n"))
+        r = self.pi_run("rename", "lostb", "lostb.v1", "superseded")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.pi_run("collect", "lostb.v1")
+        self.assertEqual((r.stdout, [x for x in r.stderr.splitlines() if x.startswith("{")]), ("lostb.v1 attempt=1 lost\n", []))
+        self.assertIsNone(self.run_json("lostb.v1")["wake"])
+
+    def test_a_rename_that_died_after_moving_the_sessions_finishes_when_run_again(self):
+        env = {"PI_CODING_AGENT_DIR": str(self.t / ".pi" / "agent")}
+        self.start("half", hang=True, **env)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        self.assertEqual(self.pi_run("stop", "half", "superseded", **env).returncode, 0)
+        self.finished("half")
+        old = self.session("half")   # the first try moved this session to half.v1's session dir, then died before the dir
+        dest = self.t / ".pi" / "agent" / "sessions" / ("--" + str((self.t / "root" / "review").resolve()).strip("/").replace("/", "-") + "-half.v1--")
+        dest.mkdir(parents=True)
+        old.rename(dest / old.name)
+        r = self.pi_run("rename", "half", "half.v1", "superseded", **env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.t / "root" / "review" / "half").exists())
+        self.assertIsNone(self.run_json("half.v1")["wake"])
+        self.assertEqual([p.name for p in dest.iterdir()], [old.name])
+        self.assertEqual(list(old.parent.iterdir()), [])
+
+    def test_pi_run_rename_refuses_a_taken_name_a_queued_run_and_no_run(self):
+        self.start("done1")
+        self.finished("done1")
+        (self.t / "root" / "review" / "taken").mkdir(parents=True)
+        self.assertEqual(self.pi_run("rename", "done1", "taken", "x").returncode, 3)
+        self.assertEqual(self.pi_run("rename", "nosuch", "nosuch.v1", "x").returncode, 3)
+        (self.t / "root" / "review" / "q").mkdir()
+        (self.t / "root" / "review" / "q" / "brief.md").write_text("task\n")
+        self.assertEqual(self.pi_run("queue", "q").returncode, 0)
+        self.assertEqual(self.pi_run("rename", "q", "q.v1", "x").returncode, 3)
+        self.assertTrue((self.t / "root" / "review" / "q" / "run.json").exists())
+        r = self.pi_run("rename", "done1", "done1.v1", "x")   # an exited run moves and keeps the wake it already sent
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.run_json("done1.v1")["state"], "exited")
+        self.assertFalse((self.t / "root" / "review" / "done1.v1" / "stopped").exists())
+
     def test_a_stopped_run_whose_supervisor_was_killed_collects_with_no_wake(self):
         self.start("gone2", hang=True)
         wait_for(lambda: (self.t / "pi-pid").exists())

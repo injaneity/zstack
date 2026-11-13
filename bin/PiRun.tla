@@ -90,8 +90,10 @@ Exit ==
   /\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>
 
 \* `pi-run stop <id> <why>`: writes review/<id>/stopped, then TERMs the supervisor, which forwards it to pi.
+\* `pi-run rename <id> <new-id> <why>` does the same, and writes the marker on a lost run too, before it moves the run
+\* out of <id> (its collect under the new name then sends no wake).
 Stop ==
-  /\ state = "running" /\ live /\ ~stopped /\ stopped' = TRUE
+  /\ state = "running" /\ ~stopped /\ stopped' = TRUE
   /\ UNCHANGED <<state, cont, live, ended, killed, collects, finish, wake, reopened, by, why, fixes, limits, spent, stuck>>
 
 \* pi blocks on something that never ends (a tool call with no timeout on a process that never exits): no progress,
@@ -151,6 +153,8 @@ AskedExitWakes == state = "exited" /\ finish /\ ~stopped => wake # "none"
 DefaultIsFailuresOnly == state = "exited" /\ ~finish => wake \in {"none", "failed"}
 \* A run stopped on purpose never wakes the chat: not at its exit, and not at the collect of a lost one.
 StopIsSilent == stopped => wake = "none"
+\* A lost run can still be marked stopped, so a run superseded after a KILL is collected with no wake (pi-run rename).
+LostIsStoppable == Lost /\ ~stopped => ENABLED Stop
 \* A 429 is never a failure: it sends no wake, leaves nothing to collect, and holds no slot.
 PauseIsSilent == cont => wake = "none" /\ ~ended /\ ~live
 \* Only the hourly drain reopens a session, and only a 429's continuation is reopened.
