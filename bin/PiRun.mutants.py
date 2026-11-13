@@ -13,8 +13,9 @@ M = [
      [("/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE", "/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = live")], "PauseIsSilent"),
     ("resume-skips-queue", "a direct start resumes a 429'd run (pi-run resume <id> before)",
      [("  /\\ state \\in {\"absent\", \"queued\"} /\\ ~cont\n", "  /\\ state \\in {\"absent\", \"queued\"}\n"),
-      ("/\\ state' = \"running\" /\\ live' = TRUE /\\ reopened' = FALSE\n  /\\ UNCHANGED <<cont, ",
-       "/\\ state' = \"running\" /\\ live' = TRUE /\\ reopened' = cont /\\ cont' = FALSE\n  /\\ UNCHANGED <<")], "ResumeGoesThroughTheQueue"),
+      ("/\\ state' = \"running\" /\\ live' = TRUE /\\ reopened' = FALSE /\\ stuck' = FALSE\n  /\\ UNCHANGED <<cont, ",
+       "/\\ state' = \"running\" /\\ live' = TRUE /\\ reopened' = cont /\\ cont' = FALSE /\\ stuck' = FALSE\n"
+       "  /\\ UNCHANGED <<")], "ResumeGoesThroughTheQueue"),
     ("lost-run-sends-no-wake", "a lost run's collect sends nothing (bin/pi-run collect before)",
      [("wake' = IF Lost THEN \"failed\" ELSE wake", "wake' = wake")], "LostWakesAtCollect"),
     ("retry-reuses-id", "a start from collected reopens the same session (step() before)",
@@ -23,11 +24,11 @@ M = [
     ("continuation-never-drained", "the drain never resumes a 429'd run",
      [("/\\ WF_vars(Resume) ", "")], "a temporal property"),
     ("pause-wakes", "a 429 sends a failed wake",
-     [("/\\ why' = \"limit\" /\\ limits' = limits + 1\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes, spent>>",
+     [("/\\ why' = \"limit\" /\\ limits' = limits + 1\n  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes, spent, stuck>>",
        "/\\ why' = \"limit\" /\\ limits' = limits + 1 /\\ wake' = \"failed\"\n"
-       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes, spent>>")], "PauseIsSilent"),
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes, spent, stuck>>")], "PauseIsSilent"),
     ("resume-uncapped", "an upstream limit resumes a run on every drain, past config/policy.toml resume.cap (before the cap)",
-     [("/\\ state = \"running\" /\\ live /\\ limits < ResumeCap", "/\\ state = \"running\" /\\ live /\\ limits <= ResumeCap")],
+     [("/\\ state = \"running\" /\\ live /\\ ~stuck /\\ limits < ResumeCap", "/\\ state = \"running\" /\\ live /\\ ~stuck /\\ limits <= ResumeCap")],
      "ResumesCapped"),
     ("spent-limit-silent", "a run out of resumes ends with no failed wake",
      [("/\\ ended' = TRUE /\\ wake' = \"failed\" /\\ spent' = TRUE", "/\\ ended' = TRUE /\\ wake' = \"none\" /\\ spent' = TRUE")],
@@ -37,6 +38,11 @@ M = [
     ("ci-reopen-before-collect", "a red PR reopens a thread whose result the pickup has not taken",
      [("/\\ state = \"collected\" /\\ fixes < FixAttempts", "/\\ state \\in {\"collected\", \"exited\"} /\\ fixes < FixAttempts")],
      "CiReopenAfterCollect"),
+    ("stuck-holds-slot", "the supervisor waits on pi for good, so a stuck pi holds its slot (cua-2879, 20 h on 13 Nov)",
+     [("/\\ WF_vars(IdleStop) ", "")], "a temporal property"),
+    ("idle-stop-silent", "the idle stop sends no wake, so a stopped run that asked for one ends silent",
+     [("/\\ ended' = TRUE /\\ wake' = \"failed\" /\\ stuck' = FALSE", "/\\ ended' = TRUE /\\ wake' = \"none\" /\\ stuck' = FALSE")],
+     "AskedExitWakes"),
 ]
 
 

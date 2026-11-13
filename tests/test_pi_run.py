@@ -429,6 +429,85 @@ class Launcher(unittest.TestCase):
         self.assertIn("cannot start pi", self.log("nopi"))
         self.assertIn("wake: failed", self.log("nopi"))
 
+    def idle_package(self):
+        """A copy of the package whose config/policy.toml run.idle_min is 1, the smallest limit, so the supervisor's idle
+        check fires in about a minute."""
+        pkg = self.t / "pkg"
+        for sub in ("bin", "config", "hosts/vm"):
+            (pkg / sub).mkdir(parents=True, exist_ok=True)
+        for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/rules.toml", "config/state.toml", "hosts/vm/wake.py"):
+            (pkg / f).write_bytes((PKG / f).read_bytes())
+            (pkg / f).chmod(0o755)
+        shipped = (PKG / "config/policy.toml").read_text()
+        self.assertEqual(len(re.findall(r"(?m)^idle_min = \d+$", shipped)), 1)
+        (pkg / "config/policy.toml").write_text(re.sub(r"(?m)^idle_min = \d+$", "idle_min = 1", shipped))
+        shutil.copytree(PKG / "vendor", pkg / "vendor")
+        return pkg
+
+    def test_a_run_with_no_progress_is_stopped_at_the_idle_limit_and_exits_failed(self):
+        """cua-2879 held an auto slot for 20 h (13 Nov): a pi that writes nothing anywhere is stopped once run.idle_min
+        passes, and the run exits failed with the failed wake, so the pickup collects it and the slot frees."""
+        pkg = self.idle_package()
+        (self.t / "rc").write_text("0")
+        (self.t / "hang").touch()
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "stuck", "coding", str(self.t / "brief.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("stuck") or {}).get("state") == "exited", 120), self.run_json("stuck"))
+        run = self.run_json("stuck")
+        self.assertEqual((run["rc"], run["wake"]), (143, "failed"))
+        self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
+        self.assertIn("pi-run: no progress for 1 min, past run.idle_min in config/policy.toml: stopping pi", self.log("stuck"))
+        self.assertIn("stopped after 1 min with no progress (run.idle_min)", self.log("stuck"))
+
+    def test_a_slow_run_that_keeps_writing_a_log_is_not_stopped(self):
+        """A bench or a lume run that takes longer than the limit but appends to a log under its review dir is progress."""
+        pkg = self.idle_package()
+        (self.t / "bin" / "pi").write_text(FAKE_PI.replace('while [ -e "$T/hang" ]; do sleep 0.05; done',
+                                                           'for i in $(seq 1 18); do echo "$i" >> bench/progress.log; sleep 5; done'
+                                                           ).replace('echo $$ > "$T/pi-pid"', 'echo $$ > "$T/pi-pid"; mkdir -p bench'))
+        (self.t / "rc").write_text("0")
+        r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "slow", "coding", str(self.t / "brief.md")],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(wait_for(lambda: (self.run_json("slow") or {}).get("state") == "exited", 150), self.run_json("slow"))
+        self.assertEqual(self.run_json("slow")["rc"], 0)
+        self.assertNotIn("no progress", self.log("slow"))
+
+    def test_progress_ignores_cache_warming_and_counts_a_tool_call_inside_its_declared_timeout(self):
+        """pi appends a cache_warm usage entry every few minutes while it waits, so the session file's mtime is no sign
+        of work; a bash call still inside the timeout it declared is waiting on purpose (a CI loop, a lume run)."""
+        d = self.t / "root" / "review" / "w"
+        d.mkdir(parents=True)
+        sess = self.t / ".pi" / "agent" / "sessions" / ("--" + str(d).strip("/").replace("/", "-") + "--")
+        sess.mkdir(parents=True)
+        f = sess / "2026-11-13T09-00-00-000Z_w.jsonl"
+        call = lambda ts, **a: {"type": "message", "timestamp": ts, "message": {"role": "assistant", "content": [   # noqa: E731
+            {"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "x", **a}}]}}
+        warm = {"type": "usage", "kind": "cache_warm", "timestamp": "2026-11-13T09:50:00.000Z"}
+        t0 = pr.calendar.timegm((2026, 11, 13, 9, 0, 0))
+        env = {"PI_CODING_AGENT_DIR": str(self.t / ".pi" / "agent")}
+        cases = [([call("2026-11-13T09:00:00.000Z"), warm], t0),
+                 ([call("2026-11-13T09:00:00.000Z", timeout=3600), warm], t0 + 3600),
+                 ([call("2026-11-13T09:00:00.000Z", timeout=3600),
+                   {"type": "message", "timestamp": "2026-11-13T09:10:00.000Z", "message": {"role": "toolResult", "toolCallId": "c1"}}], t0 + 600)]
+        old = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(old)))
+        os.environ.update(env)
+        for entries, want in cases:
+            with self.subTest(entries=entries):
+                f.write_text("".join(json.dumps(e) + "\n" for e in entries))
+                self.assertEqual(pr.session_progress(str(f)), want)
+                self.assertEqual(pr.session_files(str(d), "w"), [str(f)])
+        sub = self.t / ".pi" / "agent" / "sessions" / "subagents"
+        sub.mkdir()
+        for name in ("2026-11-13T09-40-00-000Z_w-verifier-AbC123.jsonl", "2026-11-13T09-40-00-000Z_w-designer-2-AbC123.jsonl",
+                     "2026-11-13T09-40-00-000Z_w-x-verifier-AbC123.jsonl"):
+            (sub / name).write_text(json.dumps({"type": "message", "timestamp": "2026-11-13T09:40:00.000Z", "message": {"role": "user"}}) + "\n")
+        self.assertEqual(sorted(os.path.basename(p) for p in pr.session_files(str(d), "w")),
+                         ["2026-11-13T09-00-00-000Z_w.jsonl", "2026-11-13T09-40-00-000Z_w-designer-2-AbC123.jsonl",
+                          "2026-11-13T09-40-00-000Z_w-verifier-AbC123.jsonl"])
+
     def test_merge_allowed_comes_only_from_the_brief(self):
         (self.t / "m.md").write_text("task\nmerge: allowed\n")
         (self.t / "near.md").write_text("task\nmerge: allowed later\n")

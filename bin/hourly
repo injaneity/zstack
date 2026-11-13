@@ -51,8 +51,10 @@ try:
     _policy = _pol.load()   # a policy bin/policy rejects stops every command with its reason
 except _pol.PolicyError as e:
     pr.die(2, f"hourly: {e}")
-# the peer floor, the hung mark and the batch hour: config/policy.toml [hourly] (playbooks/hourly.md steps 2, 3 and 9)
-FLOOR_GB, HUNG_MIN, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "hung_min", "batch_hour"))
+# the peer floor and the batch hour: config/policy.toml [hourly] (playbooks/hourly.md steps 2, 3 and 9); the hung mark is
+# the supervisor's own idle limit, config/policy.toml [run]
+FLOOR_GB, BATCH_HOUR = (_policy["hourly"][k] for k in ("floor_gb", "batch_hour"))
+HUNG_MIN = _policy["run"]["idle_min"]
 MERGE_STALE_MIN = _policy["hourly"]["merge_stale_min"]   # the merge job's cron interval plus its kill limit (docs/HOST.md)
 REPO, ME = _policy["merge"]["repo"], _policy["people"]["me"]   # the repo the merge job owns, and whose PRs are ours
 # merge_job.py's last-run: `<iso ts> zstack <sha> ok|<n> error(s)[ paused]`
@@ -104,12 +106,10 @@ def on(host, args, stdin=None, env=None):
     return run([*shlex.split(peers()[host]), line], input=stdin)
 
 
-def activity_min(d):
-    """Minutes since the run's log or its pi session last changed: a running run idle this long may be hung."""
-    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
-    sess = os.path.join(agent, "sessions", "--" + d.strip("/").replace("/", "-") + "--")
-    paths = [os.path.join(d, "run.log")] + [os.path.join(sess, f) for f in (os.listdir(sess) if os.path.isdir(sess) else [])]
-    return int((time.time() - max([os.path.getmtime(p) for p in paths if os.path.exists(p)] or [0])) // 60)
+def activity_min(d, sid):
+    """Minutes since the run last showed progress, as its supervisor counts it (bin/pi-run last_progress): past
+    run.idle_min a supervisor stops it, so a running run this idle has a supervisor too old to, or a stuck one."""
+    return max(0, int((time.time() - pr.last_progress(d, sid)) // 60))
 
 
 NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")   # a trycua/cua issue or PR a brief names
@@ -134,7 +134,7 @@ def facts(full=True):
         f.update(state=state, pool=pool(state, pr.read_json(os.path.join(d, "run.json")) or {}, brief),
                  nums=sorted({int(n) for n in NUM.findall(brief)}))
         if state == "running" and full:
-            f["idle_min"] = activity_min(d)
+            f["idle_min"] = activity_min(d, sid)
         runs[sid] = f
     if not full:
         return {"runs": runs, "pools": 1}
