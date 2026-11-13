@@ -1,8 +1,4 @@
 #!/bin/bash
-# Model-checks bin/PiRun.tla with TLC (every rule in bin/PiRun.cfg must hold), fails when bin/PiRun.mmd is not the
-# chart the model draws, and fails when any mutant in bin/PiRun.mutants.py passes TLC. tests/test_pi_run.py then holds bin/pi-run's step() to that chart, so the model, the chart
-# and the launcher cannot drift apart unnoticed.
-# usage: tests/pirun-model.sh   (TLA2TOOLS=<tla2tools.jar> and JAVA=<java> skip the statechart skill's own install)
 set -u
 src="$(cd "$(dirname "$0")/.." && pwd)"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

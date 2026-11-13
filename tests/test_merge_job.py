@@ -1,5 +1,3 @@
-"""Tests for hosts/vm/merge_job.py and hosts/vm/patent_push.py. No test reaches GitHub.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import contextlib
 import importlib.util
 import io
@@ -10,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -25,7 +22,7 @@ def load(name):
 
 
 mj = load("merge_job")
-wake = mj.wake   # the module merge_job imported; tests patch its KEY_FILE and urlopen
+wake = mj.wake
 pp = load("patent_push")
 
 H, H2 = "a" * 40, "b" * 40
@@ -65,7 +62,6 @@ def codes(p, holds=FIX, paused=None):
 
 
 class Gate(unittest.TestCase):
-    """Exactly three checks at the head: ci-gate SUCCESS, no hold row, deep/human preapproved at head."""
 
     def test_green_light_merges_and_nothing_else_is_read(self):
         self.assertEqual(verdict(pr()), ("merge", "green, ci-gate SUCCESS, risk light"))
@@ -80,7 +76,6 @@ class Gate(unittest.TestCase):
             self.assertEqual([(r.code, r.text) for r in got], [("ci", f"ci-gate {word}")], word)
         got = mj.gate(pr(statusCheckRollup=[cr("build")]), FIX)
         self.assertEqual([(r.code, r.text) for r in got], [("ci", "ci-gate missing")])
-        # a rerun supersedes the older ci-gate run
         late = [cr("ci-gate", conclusion="FAILURE"), cr("ci-gate", started="2026-10-25T02:00:00Z")]
         self.assertEqual(verdict(pr(statusCheckRollup=late))[0], "merge")
 
@@ -92,7 +87,6 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(pr(files=[win], statusCheckRollup=rollup))[0], "merge", rollup)
 
     def test_cla_never_blocks(self):
-        """CUA-3481: the CLA rule is gone."""
         for cla in (cr("cla", conclusion="FAILURE"), cr("cla", status="IN_PROGRESS", conclusion=None),
                     {"__typename": "StatusContext", "context": "cla", "state": "FAILURE"}):
             for path in ("libs/cua-spacesd/src/x.rs", "libs/cua-driver/src/x.rs"):
@@ -116,8 +110,6 @@ class Gate(unittest.TestCase):
         self.assertEqual(verdict(pr(files=["a/never.rs.bak", "a/my_never.rs"]))[0], "merge")
 
     def test_a_split_undone_row_holds_nothing_and_a_hold_row_stops_the_pr(self):
-        """split-undone is gone (Zane 10 Nov): the live file's impl_.rs row no longer holds, and a PR Zane wants stopped
-        gets a plain hold row."""
         p = pr(files=["libs/x/src/tools/impl_.rs"])
         self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk light"))
         held = mj.parse_holds(HOLDS + "hold | 5900 | no | Zane reviews this one\n")
@@ -133,13 +125,13 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(dict(p, headRefOid=H2), holds=pre),
                              ("wait", "zane", f"declared {want}: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})"))
             self.assertEqual(verdict(dict(p, number=5901), holds=pre)[:2], ("wait", "zane"))
-            self.assertEqual(verdict(dict(p, isDraft=True))[0], "wait")   # a deep draft is never readied
-        self.assertEqual(verdict(pr(labels=["risk:deep"]))[:2], ("wait", "zane"))    # the strictest of label and body wins
+            self.assertEqual(verdict(dict(p, isDraft=True))[0], "wait")
+        self.assertEqual(verdict(pr(labels=["risk:deep"]))[:2], ("wait", "zane"))
 
     def test_strictest_declared_tier(self):
         self.assertEqual(mj.declared_risk(["risk:light", "risk:deep"], ""), "deep")
         self.assertEqual(mj.declared_risk(["risk:light"], "risk: human\n"), "human")
-        self.assertIsNone(mj.declared_risk([], "x\nrisk: high\n"))   # not in TIERS
+        self.assertIsNone(mj.declared_risk([], "x\nrisk: high\n"))
         self.assertEqual(mj.declared_risk([], "risk: high\nrisk: light\n"), "light")
         self.assertIsNone(mj.declared_risk([], "the risk: deep is mid-line"))
 
@@ -156,16 +148,15 @@ class NextAction(unittest.TestCase):
         p = pr(statusCheckRollup=self.RED)
         self.assertEqual(verdict(p), ("rerun", "red once: ci-gate, rust"))
         self.assertEqual(verdict(p, rerun_head=H), ("wait", "session", "red after rerun: ci-gate, rust"))
-        self.assertEqual(verdict(p, rerun_head=H2)[0], "rerun")   # a new head resets the allowance
+        self.assertEqual(verdict(p, rerun_head=H2)[0], "rerun")
         for cla in (cr("cla", status="IN_PROGRESS", conclusion=None), cr("cla", conclusion="FAILURE", run="999")):
-            got = verdict(pr(statusCheckRollup=self.RED + [cla]))   # cla neither holds a rerun back nor gets one
+            got = verdict(pr(statusCheckRollup=self.RED + [cla]))
             self.assertEqual(got, ("rerun", "red once: ci-gate, rust"), cla)
             self.assertEqual(mj.check_state(self.RED + [cla])[2], {"777", "778"})
         status = pr(statusCheckRollup=[{"__typename": "StatusContext", "context": "ci-gate", "state": "FAILURE"}])
-        self.assertEqual(verdict(status)[:2], ("wait", "session"))             # nothing to rerun
+        self.assertEqual(verdict(status)[:2], ("wait", "session"))
 
     def test_a_red_deep_pr_with_no_preapproval_is_the_sessions_first(self):
-        """cua#7338 (11 Nov 12:17): red ci-gate and risk deep with no preapprove row waited who=zane and was never rerun."""
         p = pr(number=7338, body="risk: deep\n", statusCheckRollup=self.RED)
         self.assertEqual(verdict(p), ("rerun", "red once: ci-gate, rust"))
         self.assertEqual(verdict(p, rerun_head=H),
@@ -173,7 +164,7 @@ class NextAction(unittest.TestCase):
         self.assertEqual(verdict(dict(p, statusCheckRollup=[cr("ci-gate")])), ("wait", "zane", "declared deep: needs Zane (no preapprove row)"))
         pending = [cr("ci-gate", status="IN_PROGRESS", conclusion=None)]
         self.assertEqual(verdict(dict(p, statusCheckRollup=pending))[1], "zane")
-        for held in (dict(p, number=5675), dict(p, files=["never.rs"])):   # a hold row is Zane's stop, red or not
+        for held in (dict(p, number=5675), dict(p, files=["never.rs"])):
             self.assertEqual(verdict(held)[:2], ("wait", "zane"))
         self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
 
@@ -183,19 +174,14 @@ class NextAction(unittest.TestCase):
         self.assertEqual(verdict(pr(statusCheckRollup=[])), ("wait", "ci-gate missing"))
 
     def test_a_draft_is_never_readied_or_merged(self):
-        """Draft means not ready. Only a person, or the session that opened it, readies a draft."""
         held = "draft"
-        # cua#6970: draft, risk standard, "do not merge" in the body, CI not started, mergeability unknown
         p6970 = pr(number=6970, isDraft=True, mergeable="UNKNOWN", statusCheckRollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
                    body="**awaits Zane's decision; do not merge.**\nrisk: standard\n")
         self.assertEqual(verdict(p6970), ("wait", f"ci-gate PENDING; {held}; mergeable UNKNOWN"))
-        # cua#7050: a light draft shown as a sample ("propose this before merging"), no hold row, CI pending
         p7050 = pr(number=7050, isDraft=True, statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)],
                    body="Draft: a sample. Please do not merge until the audit is reviewed.\nrisk: light\n")
         self.assertEqual(verdict(p7050), ("wait", f"ci-gate PENDING; {held}"))
-        # and still not once its CI is green: nothing but the draft is left
         self.assertEqual(verdict(dict(p7050, statusCheckRollup=[cr("ci-gate")])), ("wait", held))
-        # cua#7035 pattern: a draft with no hold row whose body says light; a human tier waits on nobody too, not a wake
         for tier in ("light", "standard", "human"):
             self.assertEqual(len(verdict(pr(number=7035, isDraft=True, body=f"risk: {tier}\n"))), 2, tier)
         self.assertNotIn("ready", {verdict(pr(isDraft=True, statusCheckRollup=r))[0]
@@ -215,7 +201,6 @@ class Holds(unittest.TestCase):
         self.assertEqual(h["preapproved"], {5650: H, 5690: H2})
 
     def test_a_row_that_names_no_pr_is_not_read_and_cannot_hold_every_pr(self):
-        """8 Nov 14:17: one bad row the job had no use for made the file unreadable, and every PR counted as held."""
         for row in ("review-only | f-trycua | no | teammate", "skip-author | app/cua-agents | no | bot", "review-only | f-trycua | maybe",
                     "exception | impl_.rs | yes | #5686 follow-up"):
             self.assertEqual(mj.parse_holds(row), {"hold": set(), "paths": [], "preapproved": {}}, row)
@@ -238,18 +223,14 @@ class Holds(unittest.TestCase):
 
 class GhJson(unittest.TestCase):
     def test_a_github_timeout_is_retried_and_the_error_keeps_the_504(self):
-        """gh's first try answers `HTTP 504`, and a retry of the same call can answer `unexpected end of JSON input` with
-        an empty body. Both are GitHub's side, so both are retried, and the error the job logs keeps the 504."""
         errs = iter(["gh: HTTP 504\n", "unexpected end of JSON input\n", "unexpected end of JSON input\n"])
         with patch.object(mj, "sh", lambda a, timeout=120: (1, "", next(errs))), patch.object(mj.time, "sleep", lambda s: None):
             with self.assertRaisesRegex(RuntimeError, r"gh api graphql -f: HTTP 504; then unexpected end of JSON input"):
                 mj.gh_json(["api", "graphql", "-f", "q=x", "-f", "query=y"])
-        self.assertRaises(StopIteration, next, errs)   # all three tries ran
+        self.assertRaises(StopIteration, next, errs)
 
 
 class Stage(unittest.TestCase):
-    """Job.run() over a fake GitHub (gh_json and sh mocked) on a temp ONIGIRI_ROOT. Each run is a fresh Job, as cron
-    runs it, so the once-per-head allowances must survive in state.json between runs."""
     GREEN = [cr("validate"), cr("ci-gate")]
     RED = [cr("ci-gate", conclusion="FAILURE", run="778"), cr("rust", conclusion="FAILURE", run="777")]
 
@@ -273,7 +254,7 @@ class Stage(unittest.TestCase):
         self.addCleanup(k.stop)
         self.d, self.prs, self.calls, self.merged, self.queue = d, {}, [], [], False
         self.lists, self.reads, self.queue_events = [], [], {}
-        self.entries = {}   # PR number -> its mergeQueueEntry while GitHub's queue holds it
+        self.entries = {}
 
     def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE", author="injaneity"):
         self.prs[n] = {"number": n, "author": author, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
@@ -281,10 +262,9 @@ class Stage(unittest.TestCase):
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
 
     def node(self, n, files=None, checks=None):
-        """PR n as GitHub's GraphQL returns it, 100 files and 100 checks a page (files/checks: the page's cursor, or None)."""
         p = self.prs[n]
         mergeable = p["mergeable"]
-        if self.unknown.get(n):   # GitHub has not computed it yet: UNKNOWN for this many reads
+        if self.unknown.get(n):
             self.unknown[n] -= 1
             mergeable = "UNKNOWN"
         self.reads.append(n)
@@ -305,7 +285,7 @@ class Stage(unittest.TestCase):
         if args[:2] == ["api", "graphql"]:
             kv = dict(a.split("=", 1) for a in args[2:] if "=" in a)
             query = kv.pop("query")
-            if "search(" in query:   # GitHub's search: `first` PRs a page, the cursor is the index of the next one
+            if "search(" in query:
                 size, at = int(re.search(r"search\([^)]*first: (\d+)", query).group(1)), int(kv.get("after", 0))
                 mine = [n for n, p in self.prs.items() if p["state"] == "OPEN" and p["author"] == "injaneity"]
                 return {"data": {"search": {"nodes": [self.node(n) for n in mine[at:at + size]],
@@ -313,12 +293,12 @@ class Stage(unittest.TestCase):
             n = int(kv["n"])
             if "mergeQueueEntry" in query:
                 return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
-            if "AddedToMergeQueueEvent" in query:   # the queue's events: the job's entry merged, unless a test says otherwise
+            if "AddedToMergeQueueEvent" in query:
                 ev = self.queue_events.get(n, [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
                                                {"__typename": "RemovedFromMergeQueueEvent", "reason": "merged"}])
                 return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": ev}}}}}
             node = self.node(n, kv.get("files"), kv.get("checks"))
-            if "@include" in query:   # MORE: only the connections asked for
+            if "@include" in query:
                 node = {k: node[k] for k in ["headRefOid"] + (["files"] if kv["f"] == "true" else []) + (["commits"] if kv["c"] == "true" else [])}
             return {"data": {"repository": {"pullRequest": node}}}
         if args[:2] == ["pr", "list"]:
@@ -327,7 +307,7 @@ class Stage(unittest.TestCase):
         if args[:2] == ["pr", "view"]:
             n = int(args[2])
             out = {k: self.prs[n][k] for k in args[-1].split(",")}
-            if "mergeable" in out and self.unknown.get(n):   # GitHub has not computed it yet: UNKNOWN for this many reads
+            if "mergeable" in out and self.unknown.get(n):
                 self.unknown[n] -= 1
                 out["mergeable"] = "UNKNOWN"
             return out
@@ -356,8 +336,6 @@ class Stage(unittest.TestCase):
         return [x.split(" ", 1)[1] for x in p.read_text().splitlines()] if p.exists() else []
 
     def woken(self):
-        """The urgent wakes this job raised: their `urgent <id> <kind>: <reason>` events. The job writes nothing in its root
-        but events.log and tick/ (no buffer.jsonl)."""
         self.assertEqual(sorted(os.listdir(self.d)), sorted({"hold-prs.txt", "tick"} | ({"events.log"} if self.events() else set())))
         out = []
         for x in self.events():
@@ -369,11 +347,10 @@ class Stage(unittest.TestCase):
         return [c for c in self.calls if c[:3] == cmd]
 
     def test_an_outside_pr_merges_only_with_a_preapprove_row_at_its_head(self):
-        """cua#5178 (12 Nov): Zane preapproved an outside PR at its head, but the search reads only PRs by ME, so it sat."""
         self.add(5178, body="risk: human\n", author="Andrew9603")
-        self.add(5179, author="Andrew9603")   # an outside PR with no row is never read
+        self.add(5179, author="Andrew9603")
         self.add(5417, head=H2)
-        self.prs[5417]["state"] = "CLOSED"   # a stale row for a closed PR is read and skipped
+        self.prs[5417]["state"] = "CLOSED"
         (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n"
                                              f"preapprove | #5417 | no | {H2} | Zane, test\n")
         self.run_()
@@ -388,7 +365,6 @@ class Stage(unittest.TestCase):
         self.assertIn("who=zane", self.events()[-1])
 
     def test_an_outside_light_pr_at_a_new_head_waits(self):
-        """A preapprove row pins an outside PR's head whatever its tier: a push past it never merges on green alone."""
         self.add(5178, head=H2, author="Andrew9603")
         (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
         self.run_()
@@ -401,7 +377,7 @@ class Stage(unittest.TestCase):
         self.queue = True
         self.run_()
         self.assertIn(5178, self.entries)
-        for holds in (HOLDS, "hodl | 1 | no | typo\n"):   # the row retired, or the file unreadable
+        for holds in (HOLDS, "hodl | 1 | no | typo\n"):
             self.entries[5178] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
             st = json.loads((self.d / "tick/state.json").read_text())
             st["queued"]["cua#5178"] = {"head": H, "why": "green"}
@@ -420,12 +396,11 @@ class Stage(unittest.TestCase):
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
     def test_a_queued_merge_is_logged_merged_once_only_when_github_says_merged(self):
-        """cua#7082: gh pr merge exits 0 when the merge queue only took it, and the job logged `merged` three runs running."""
         self.queue = True
         self.add(7082)
         for _ in range(3):
             self.run_()
-        self.assertEqual(len(self.of(["gh", "pr", "merge"])), 3)   # asked again each run, logged once at this head
+        self.assertEqual(len(self.of(["gh", "pr", "merge"])), 3)
         self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7082"]])
         self.prs[7082].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
         self.run_()
@@ -437,7 +412,7 @@ class Stage(unittest.TestCase):
     def test_a_run_that_died_before_saving_state_does_not_log_merged_twice(self):
         self.add(7083)
         self.run_()
-        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"cua#7083": {"head": H, "why": "green"}}}))   # the lost save
+        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"cua#7083": {"head": H, "why": "green"}}}))
         self.run_()
         self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7083"], ["merged", "cua#7083"]])
 
@@ -459,7 +434,6 @@ class Stage(unittest.TestCase):
         return [c[4] for c in self.of(["gh", "api", "graphql"])]
 
     def test_the_jobs_queue_entry_that_gets_a_hold_row_is_dequeued_once(self):
-        """A hold row added while the job's entry waits in GitHub's merge queue takes it out (the model's no-dequeue mutant)."""
         self.queue = True
         self.add(7200)
         self.add(7201)
@@ -468,11 +442,11 @@ class Stage(unittest.TestCase):
         (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7200 | no | Zane stops it\n")
         self.run_()
         self.run_()
-        self.assertEqual(self.dequeues(), ["id=PR_7200"])   # one call, and none for the green 7201
+        self.assertEqual(self.dequeues(), ["id=PR_7200"])
         self.assertEqual(set(self.entries), {7201})
         self.assertIn("merge-dequeued cua#7200 at aaaaaaaaa: hold: #7200 has a hold row in the holds file", self.events())
         self.assertNotIn("cua#7200", json.loads((self.d / "tick/state.json").read_text())["queued"])
-        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7200", "7201", "7201", "7201"])   # 7200 not asked again
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7200", "7201", "7201", "7201"])
 
     def test_paused_or_unreadable_holds_dequeue_the_jobs_entry_and_a_dry_run_only_says_so(self):
         self.queue = True
@@ -485,7 +459,7 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertEqual(self.dequeues(), ["id=PR_7210"])
         (self.d / "tick/PAUSED").unlink()
-        self.run_()   # green again: queued again
+        self.run_()
         (self.d / "hold-prs.txt").write_text("hodl | 1 | no | typo\n")
         self.run_()
         self.assertEqual(self.dequeues(), ["id=PR_7210", "id=PR_7210"])
@@ -495,8 +469,8 @@ class Stage(unittest.TestCase):
         self.add(7220)
         self.add(7221)
         self.run_()
-        self.entries[7220]["enqueuer"] = {"login": "cua-agents[bot]"}   # cua#7039: an app queued it too
-        self.add(7221, head=H2)   # a push: GitHub drops the old entry with the old head
+        self.entries[7220]["enqueuer"] = {"login": "cua-agents[bot]"}
+        self.add(7221, head=H2)
         self.entries[7221] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
         (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7220 | no | x\nhold | 7221 | no | x\n")
         self.run_()
@@ -535,12 +509,11 @@ class Stage(unittest.TestCase):
                                                  "wait cua#6306 who=zane: touches never.rs (hands-off path, mode never; see the holds file)",
                                                  "wait cua#6309 who=zane: declared deep: needs Zane (no preapprove row)",
                                                  "wait cua#6312 draft"])
-        out = self.run_(dry=True)   # what bin/hourly prints under needs-Zane
+        out = self.run_(dry=True)
         self.assertIn(f"dry-run cua#6309 {H[:9]} wait who=zane: declared deep: needs Zane (no preapprove row)", out)
         self.assertIn(f"dry-run cua#6312 {H[:9]} wait: draft", out)
 
     def test_an_unknown_mergeability_is_read_again_in_the_same_run(self):
-        """28 of 87 merges waited one to four ticks on a mergeability GitHub computes on the first ask."""
         self.add(6330)
         self.unknown[6330] = 2
         self.run_()
@@ -554,7 +527,7 @@ class Stage(unittest.TestCase):
         self.unknown.update({6331: 99, 6332: 99})
         self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
-        self.assertEqual(len(self.sleeps), mj.MERGEABLE_REREADS)   # all for 6331: 6332 is red, 6333 has an answer
+        self.assertEqual(len(self.sleeps), mj.MERGEABLE_REREADS)
         self.assertIn("wait cua#6331 mergeable UNKNOWN", self.events())
 
     def test_a_host_that_is_not_merged_main_wakes_a_person_once_and_keeps_merging(self):
@@ -573,15 +546,14 @@ class Stage(unittest.TestCase):
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
     def test_free_disk_under_the_floor_wakes_once_per_episode_and_keeps_merging(self):
-        """12 Nov: the VM sat at 15 to 18G, under the 20G floor, from about 14:00 and nothing woke anyone."""
-        self.assertEqual(mj.FLOOR_GB, 20)   # config/policy.toml [hourly] floor_gb
+        self.assertEqual(mj.FLOOR_GB, 20)
         self.add(6350)
         self.free = 18
         with patch.object(mj, "now", lambda: "2026-11-12T14:00:00+08:00"):
             self.run_()
         self.free = 15
         with patch.object(mj, "now", lambda: "2026-11-12T15:00:00+08:00"):
-            self.run_()   # still the same episode: no second wake
+            self.run_()
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("disk", "host")])
         self.assertIn("18G free", self.woken()[0]["reason"])
         self.assertIn("6350", {c[3] for c in self.of(["gh", "pr", "merge"])})
@@ -590,32 +562,29 @@ class Stage(unittest.TestCase):
         self.assertTrue(any(x.startswith("disk-ok host 20G free") for x in self.events()))
         self.free = 19
         with patch.object(mj, "now", lambda: "2026-11-13T09:00:00+08:00"):
-            self.run_()   # a new episode wakes again
+            self.run_()
         self.assertEqual([b["kind"] for b in self.woken()], ["disk", "disk"])
 
     def test_one_search_reads_every_pr_and_only_one_with_more_than_a_page_reads_again(self):
-        """Before: one `pr list` plus one `pr view` per PR. Now: one search, and a follow-up only past 100 files or checks."""
         self.add(6350)
         self.add(6351, rollup=[cr(f"lane {i}") for i in range(230)] + [cr("ci-gate")], files=[f"f{i}.rs" for i in range(120)])
-        self.add(6352, rollup=[cr(f"lane {i}") for i in range(99)] + [cr("ci-gate", conclusion="FAILURE")])   # 100: one page
+        self.add(6352, rollup=[cr(f"lane {i}") for i in range(99)] + [cr("ci-gate", conclusion="FAILURE")])
         seen = []
         real = self.gh
         with patch.object(mj, "gh_json", lambda a: seen.append(a) or real(a)):
             self.run_(dry=True)
-        reads = [a for a in seen if a[:2] != ["pr", "list"]]   # merge-watch's list is not the PR read
+        reads = [a for a in seen if a[:2] != ["pr", "list"]]
         self.assertEqual(sum("search(" in a[-1] for a in reads), 1)
         self.assertEqual([dict(x.split("=", 1) for x in a[2:-1] if "=" in x)["n"] for a in reads if "@include" in a[-1]], ["6351", "6351"])
         self.assertFalse([a for a in reads if a[:2] == ["pr", "view"]])
-        self.assertEqual({c[3] for c in self.of(["gh", "pr", "merge"])}, set())   # dry
+        self.assertEqual({c[3] for c in self.of(["gh", "pr", "merge"])}, set())
         job = mj.Job(dry=True)
         with patch.object(mj, "gh_json", real):
             p = mj.from_graphql(mj.read_rest(self.node(6351)))
         self.assertEqual((len(p["statusCheckRollup"]), len(p["files"])), (231, 120))
-        self.assertEqual(job.evaluate(p, FIX)[0], [])   # green: every one of the 231 checks was read, ci-gate last
+        self.assertEqual(job.evaluate(p, FIX)[0], [])
 
     def test_the_search_pages_ten_prs_at_a_time_from_no_cursor(self):
-        """13 Nov: with 38 open PRs, 25 a page (each with 100 files and 100 checks) ran past GitHub's timeout, so
-        the search answered HTTP 504 and the merge step read no PR at all. Ten a page: the exact calls, first with no cursor."""
         for n in range(6400, 6423):
             self.add(n)
         seen = []
@@ -640,60 +609,56 @@ class Stage(unittest.TestCase):
             mj.from_graphql(n)
 
     def test_a_check_added_while_paging_reads_the_pr_again_once_and_merges(self):
-        """cua#7345 on 11 Nov: `read 103 of 100 checks` cost it a tick. GitHub added checks between the first page and MORE."""
         self.add(6363, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
         real, grown = self.gh, []
 
         def gh(args):
-            if "@include" in args[-1] and not grown:   # the first MORE page: three checks land first
+            if "@include" in args[-1] and not grown:
                 grown.append(1)
                 self.prs[6363]["statusCheckRollup"][:0] = [cr(f"late {i}") for i in range(3)]
             return real(args)
         with patch.object(mj, "gh_json", gh):
             self.run_()
         self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6363"])
-        self.assertEqual(self.reads.count(6363), 4)   # search, MORE, the one re-read, its MORE
+        self.assertEqual(self.reads.count(6363), 4)
         self.assertFalse([x for x in self.events() if x.startswith("error")])
 
     def test_a_check_count_still_off_after_the_one_reread_is_an_error_never_a_merge(self):
         self.add(6364, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
         real = self.gh
 
-        def gh(args):   # every MORE page finds three more checks
+        def gh(args):
             if "@include" in args[-1]:
                 self.prs[6364]["statusCheckRollup"][:0] = [cr(f"late {len(self.reads)} {i}") for i in range(3)]
             return real(args)
         with patch.object(mj, "gh_json", gh):
             self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
-        self.assertEqual(self.reads.count(6364), 4)   # read again once, not in a loop
+        self.assertEqual(self.reads.count(6364), 4)
         self.assertIn("error cua#6364 merge: RuntimeError: cua#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
 
     def test_a_pr_with_117_checks_reads_all_117_and_decides_red(self):
-        """cua#7527's 117 checks: two pages, every check read, and a red ci-gate is a rerun, not an error."""
         self.add(6366, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate", conclusion="FAILURE")])
         with patch.object(mj, "gh_json", self.gh):
             p = mj.read_pr(self.node(6366))
         self.assertEqual(len(p["statusCheckRollup"]), 117)
         self.run_()
-        self.assertEqual(self.reads.count(6366), 4)   # this test's read and its MORE, then the run's search and MORE
+        self.assertEqual(self.reads.count(6366), 4)
         self.assertFalse([x for x in self.events() if x.startswith("error")])
         self.assertEqual(len(self.of(["gh", "run", "rerun"])), 1)
 
     def test_a_push_while_paging_reads_the_new_head_again_once_and_decides_on_it(self):
-        """cua#7527 on 13 Nov: a push 20s before the pass, and MORE paged the new head's checks past the old head's cursor:
-        `read 11 of 11 files, 100 of 117 checks`. The PR is read again at its new head and decided there."""
         self.add(6367, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate")])
         real, pushed = self.gh, []
 
         def gh(args):
-            if "@include" in args[-1] and not pushed:   # the push lands between the search and the first MORE page
+            if "@include" in args[-1] and not pushed:
                 pushed.append(1)
                 self.prs[6367].update(headRefOid=H2, statusCheckRollup=[cr(f"lane {i}") for i in range(93)] + [cr("ci-gate")])
             return real(args)
         with patch.object(mj, "gh_json", gh):
             self.run_()
-        self.assertEqual(self.reads.count(6367), 3)   # search, MORE at the new head, the one re-read (one page)
+        self.assertEqual(self.reads.count(6367), 3)
         self.assertFalse([x for x in self.events() if x.startswith("error")])
         self.assertEqual([(c[3], c[-1]) for c in self.of(["gh", "pr", "merge"])], [("6367", H2)])
 
@@ -701,19 +666,17 @@ class Stage(unittest.TestCase):
         self.add(6368, rollup=[cr(f"lane {i}") for i in range(149)] + [cr("ci-gate")])
         real, heads = self.gh, iter([H2, "c" * 40, "d" * 40])
 
-        def gh(args):   # every MORE page finds a new head
+        def gh(args):
             if "@include" in args[-1]:
                 self.prs[6368]["headRefOid"] = next(heads)
             return real(args)
         with patch.object(mj, "gh_json", gh):
             self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
-        self.assertEqual(self.reads.count(6368), 4)   # search, MORE, the one re-read, its MORE: read again once, not in a loop
+        self.assertEqual(self.reads.count(6368), 4)
         self.assertIn(f"error cua#6368 merge: HeadMoved: cua#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
 
     def test_fewer_checks_than_the_count_reads_again_once_and_merges_on_a_whole_read(self):
-        """12 Nov retro: `read N of M checks` errors in both directions. A check dropped between the count and the list
-        is read again once, like one added."""
         self.add(6365)
         real = self.gh
 
@@ -725,7 +688,7 @@ class Stage(unittest.TestCase):
             return out
         with patch.object(mj, "gh_json", gh):
             self.run_()
-        self.assertEqual(self.reads.count(6365), 2)   # the search, then the one re-read
+        self.assertEqual(self.reads.count(6365), 2)
         self.assertFalse([x for x in self.events() if x.startswith("error")])
         self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6365"])
 
@@ -733,14 +696,14 @@ class Stage(unittest.TestCase):
         self.add(6369)
         real = self.gh
 
-        def gh(args):   # every read says one check more than it lists
+        def gh(args):
             out = real(args)
             for n in (out["data"]["search"]["nodes"] if "search(" in args[-1] else [out["data"]["repository"]["pullRequest"]]):
                 n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = 3
             return out
         with patch.object(mj, "gh_json", gh):
             self.run_()
-        self.assertEqual(self.reads.count(6369), 2)   # read again once, not in a loop
+        self.assertEqual(self.reads.count(6369), 2)
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
         self.assertIn("error cua#6369 merge: RuntimeError: cua#6369: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
 
@@ -774,7 +737,6 @@ class Stage(unittest.TestCase):
         self.assertIn("error cua#6362 merge: RuntimeError: cua#6362: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
 
     def test_a_pr_with_more_labels_than_one_page_is_an_error_never_a_merge(self):
-        """A risk:deep label past the first page must not let a `risk: light` body merge without its preapproval."""
         self.add(6361)
         self.prs[6361]["labels"] = [f"area-{i}" for i in range(100)] + ["risk:deep"]
         self.run_()
@@ -814,13 +776,12 @@ class Stage(unittest.TestCase):
         self.assertIn(f"dry-run cua#6312 {H[:9]} wait: draft", out)
 
     def test_drafts_stay_drafts_across_runs(self):
-        """cua#6970, cua#7050 and cua#7035/7037/7039 were readied by one run and merged by a later one."""
         self.add(6970, draft=True, mergeable="UNKNOWN", rollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
                  body="do not merge.\nrisk: standard\n")
         self.add(7050, draft=True, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
         self.add(7035, draft=True)
         self.run_()
-        for n in (6970, 7050):   # CI finishes green between runs
+        for n in (6970, 7050):
             self.prs[n].update(mergeable="MERGEABLE", statusCheckRollup=list(self.GREEN))
         self.prs[7035]["body"] = "risk: human\n"
         self.run_()
@@ -831,7 +792,7 @@ class Stage(unittest.TestCase):
                          ["cua#6970", "cua#6970", "cua#7035", "cua#7035", "cua#7050", "cua#7050"])
 
     def test_one_prs_failure_does_not_skip_the_rest(self):
-        self.add(6323, rollup=[cr(f"lane {i}") for i in range(150)] + [cr("ci-gate")])   # past one page: a second read
+        self.add(6323, rollup=[cr(f"lane {i}") for i in range(150)] + [cr("ci-gate")])
         self.add(6324)
         real = self.gh
 
@@ -855,7 +816,7 @@ class Stage(unittest.TestCase):
                     for kind in mj.URGENT:
                         job.wake(kind, "cua#1", H, "why")
                     self.prs[1]["state"] = "CLOSED"
-                    self.assertTrue(job.wake("merge-failed", "cua#1", H2, "closed meanwhile"))   # handled: nothing to send
+                    self.assertTrue(job.wake("merge-failed", "cua#1", H2, "closed meanwhile"))
                     with self.assertRaises(AssertionError):
                         job.wake("merge-blocked", "cua#1", H, "not a wake any more")
                 job.run()
@@ -863,11 +824,11 @@ class Stage(unittest.TestCase):
         self.assertFalse((self.d / "buffer.jsonl").exists())
 
     def test_a_wake_that_failed_or_was_paused_is_sent_on_a_later_pass_then_never_again(self):
-        self.add(1, draft=True)   # stays open, so the closed-PR guard does not drop the wake
+        self.add(1, draft=True)
         got = iter(["webhook failed: OSError", "webhook sent (200)"])
         with patch.object(mj, "post_webhook", lambda *a: next(got)) as _, contextlib.redirect_stdout(io.StringIO()):
             (self.d / "tick/PAUSED").write_text("manual\n")
-            for _ in range(4):   # paused, then failed, then sent, then nothing
+            for _ in range(4):
                 job = mj.Job(dry=False)
                 job.wake("merge-failed", "cua#1", H, "why")
                 job.run()
@@ -882,28 +843,16 @@ class Stage(unittest.TestCase):
         got = iter(["webhook failed: HTTP 502", "webhook sent (200)"])
         with patch.object(mj, "post_webhook", lambda *a: next(got)):
             self.run_()
-            st = json.loads((self.d / "tick/state.json").read_text())   # unsent: the window stays at the merge, and it is not seen
+            st = json.loads((self.d / "tick/state.json").read_text())
             self.assertEqual((st["merges"]["since"], st["merges"]["seen"]), ("2026-11-05T09:00:00+08:00", {}))
             self.run_()
             self.run_()
         self.assertEqual([x for x in self.events() if x.startswith("urgent cua#10 ") and "unexpected-merge:" not in x],
                          ["urgent cua#10 webhook failed: HTTP 502", "urgent cua#10 webhook sent (200)"])
-        self.assertGreater(json.loads((self.d / "tick/state.json").read_text())["merges"]["since"], "2026-11-06")   # sent: it moves on
-
-    def test_the_old_buffers_urgent_keys_carry_over_and_the_rest_is_dropped(self):
-        key = f"unexpected-merge|cua#10|{'c' * 40}"
-        (self.d / "tick/state.json").write_text(json.dumps({"buffered": {key: "t", f"merge-blocked|cua#9|{H}": "t"},
-                                                            "merges": {"since": "2026-11-05T00:00:00+08:00"}}))
-        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
-                        "title": "t", "mergeCommit": {"oid": "c" * 40}}]
-        self.run_()
-        self.assertEqual(self.woken(), [])   # woken already under the buffer
-        st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertNotIn("buffered", st)
-        self.assertEqual(list(st["woken"]), [key])
+        self.assertGreater(json.loads((self.d / "tick/state.json").read_text())["merges"]["since"], "2026-11-06")
 
     def test_merge_watch_seeds_then_alerts_once_for_a_merge_it_did_not_make(self):
-        self.run_()                                       # first run: sets since, reads nothing
+        self.run_()
         st = json.loads((self.d / "tick/state.json").read_text())
         self.assertIn("since", st["merges"])
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
@@ -914,7 +863,6 @@ class Stage(unittest.TestCase):
         self.merged = [m(10, "injaneity"), m(11, "injaneity"), m(12, "zane"), m(13, "app/cua-agents"), m(14, "injaneity", head=H2)]
         self.run_()
         self.run_()
-        # every merger but the job wakes: a hand merge, a teammate, an app (cua#7037), and the job's PR at a head it never queued
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", f"cua#{n}") for n in (10, 12, 13, 14)])
         self.assertIn("merged by app/cua-agents", self.woken()[2]["reason"])
         self.assertIn("not by the tick", self.woken()[0]["reason"])
@@ -924,21 +872,19 @@ class Stage(unittest.TestCase):
         self.assertFalse(any("cua#11 " in x for x in ev))
         self.assertIn(["pr", "list", "-R", "trycua/cua", "--state", "merged", "--author", "injaneity"], [c[:8] for c in self.lists])
         st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertGreater(st["merges"]["since"], "2026-11-05T00:00:00+08:00")   # the window moved up
-        self.assertEqual(st["merges"]["seen"], {})                                # and forgot what fell out of it
+        self.assertGreater(st["merges"]["since"], "2026-11-05T00:00:00+08:00")
+        self.assertEqual(st["merges"]["seen"], {})
         self.assertEqual(st["landed"], {})
 
     def test_a_merge_the_job_queued_is_not_unexpected_whether_or_not_it_has_logged_it_yet(self):
-        """cua#7180: queued by the job at c18608a73 and merged by the queue. The job's own heads come from state.json."""
         self.queue = True
         self.add(7180)
-        self.run_()                                       # queued; merge-watch seeds since
+        self.run_()
         st = json.loads((self.d / "tick/state.json").read_text())
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
         self.merged = [{"number": 7180, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
-        # GitHub merged it after landed() read it OPEN this pass: still queued in state.json, so not unexpected
         self.run_()
         self.prs[7180].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
         self.run_()
@@ -948,22 +894,21 @@ class Stage(unittest.TestCase):
     def test_a_head_pushed_after_the_job_queued_it_and_merged_by_someone_else_wakes(self):
         self.queue = True
         self.add(7230)
-        self.run_()                                       # the job queues it at H
+        self.run_()
         st = json.loads((self.d / "tick/state.json").read_text())
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
-        self.prs[7230].update(headRefOid=H2, state="MERGED", mergedAt="2026-11-05T01:00:00Z")   # a push, then a hand merge
+        self.prs[7230].update(headRefOid=H2, state="MERGED", mergedAt="2026-11-05T01:00:00Z")
         self.merged = [{"number": 7230, "headRefOid": H2, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7230")])
         self.assertNotIn("7230", json.loads((self.d / "tick/state.json").read_text())["landed"])
-        ev = self.events()   # `merged` means the job's own entry merged (MergedEventMeansMerged): not logged for another head
+        ev = self.events()
         self.assertFalse([x for x in ev if x.startswith("merged cua#7230")], ev)
         self.assertIn(f"merge-dropped cua#7230 merged at {H2[:9]} through injaneity queue entry, the job queued {H[:9]}: not the job's merge", ev)
 
     def test_another_actors_entry_at_the_job_s_own_head_is_not_the_job_s_merge(self):
-        """GitHub dropped the job's entry and app/cua-agents queued the same head (#7037, #7039): its merge wakes."""
         self.queue = True
         self.add(7231)
         self.run_()
@@ -988,7 +933,7 @@ class Stage(unittest.TestCase):
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
         self.queue_events[7232] = [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
-                                   {"__typename": "RemovedFromMergeQueueEvent", "reason": "checks_timed_out"}]   # then a hand merge
+                                   {"__typename": "RemovedFromMergeQueueEvent", "reason": "checks_timed_out"}]
         self.prs[7232].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
         self.merged = [{"number": 7232, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
@@ -998,55 +943,11 @@ class Stage(unittest.TestCase):
     def test_queue_merged_by_reads_the_entry_that_merged(self):
         add = lambda who: {"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": who}}   # noqa: E731
         gone = lambda why: {"__typename": "RemovedFromMergeQueueEvent", "reason": why}   # noqa: E731
-        # trycua/cua#7039 on 9-10 Nov: cua-agents queued, timed out, the job queued, merged
         self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("checks_timed_out"), add("injaneity"), gone("merged")]), "injaneity")
-        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("merged")]), "cua-agents[bot]")   # #7037
-        self.assertIsNone(mj.queue_merged_by([add("injaneity"), gone("checks_timed_out")]))   # then merged outside the queue
+        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("merged")]), "cua-agents[bot]")
+        self.assertIsNone(mj.queue_merged_by([add("injaneity"), gone("checks_timed_out")]))
         self.assertIsNone(mj.queue_merged_by([]))
-        self.assertIsNone(mj.queue_merged_by([add("injaneity")]))   # an entry still waiting merged nothing: a merge outside it
-
-    def test_the_first_run_seeds_the_allow_list_from_events_log(self):
-        at = lambda h: (datetime.now(mj.SGT) - timedelta(hours=h)).isoformat(timespec="seconds")   # noqa: E731  inside the window
-        with open(self.d / "events.log", "w") as e:
-            e.write(f"{at(2)} merged cua#7180 squash at c18608a73: green, ci-gate SUCCESS, risk light\n"
-                    f"{at(2)} merge-queued cua#7181 squash at d18608a73: green\n"
-                    f"{at(1)} merge-noted cua#7001 merged by f-trycua\n")
-        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T00:00:00+08:00"}}))
-        self.merged = [{"number": n, "headRefOid": h + "e3f46f3d2d62599d9ddef1e844810e2", "mergedBy": {"login": "injaneity"},
-                        "mergedAt": "2026-11-10T04:40:00Z", "title": "t", "mergeCommit": {"oid": "c" * 40}}
-                       for n, h in ((7180, "c18608a73"), (7181, "d18608a73"))]   # 7181: queued, then the run died before its state save
-        self.run_()
-        self.assertEqual(self.woken(), [])
-        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["landed"]["7180"]["head"], "c18608a73")
-
-    def test_a_seeded_merge_does_not_wake_while_it_is_still_in_the_window(self):
-        """cua#7145: the job queued it at 12:32:07 and GitHub merged it at 12:35:44. The seed stamps the queue time, so the
-        18:32 run pruned it while its merge was still inside the next window, and the 18:47 run woke on it."""
-        head = "872f49fb0bc3" + "0" * 28
-        (self.d / "events.log").write_text(f"2026-11-10T12:32:07+08:00 merged cua#7145 squash at {head[:9]}: green, risk deep\n")
-        (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-10T12:00:00+08:00"}}))
-        self.merged = [{"number": 7145, "headRefOid": head, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-10T04:35:44Z",
-                        "title": "t", "mergeCommit": {"oid": "e730ff4cb65e" + "0" * 28}}]
-        tick = datetime(2026, 11, 10, 12, 47, 31, tzinfo=mj.SGT)
-        while tick <= datetime(2026, 11, 10, 19, 2, 31, tzinfo=mj.SGT):   # every 15-minute tick until the merge is out of the window
-            with patch.object(mj.time, "time", return_value=tick.timestamp()), \
-                    patch.object(mj, "now", return_value=tick.isoformat(timespec="seconds")):
-                self.run_()
-            self.assertEqual(self.woken(), [], tick)
-            tick += timedelta(minutes=15)
-        st = json.loads((self.d / "tick/state.json").read_text())
-        self.assertGreater(st["merges"]["since"], "2026-11-10T12:35:44+08:00")   # the merge has left the window
-        self.assertEqual(st["landed"], {})                                         # and so has its entry
-
-    def test_the_seed_takes_the_queued_head_over_a_later_merged_line(self):
-        """Queued at A, pushed to B and merged by hand, and the run died before saving: the merged line names B."""
-        ev = [f"2026-11-10T12:00:00+08:00 merge-queued cua#7240 squash at {H[:9]}: green",
-              f"2026-11-10T12:30:00+08:00 merged cua#7240 squash at {H2[:9]}, mergedAt x: green",
-              f"2026-10-26T12:36:34+08:00 merged cua#5775 squash at {H[:9]}: green, verify PASS"]   # before #42: merged only
-        self.assertEqual(mj.seed_landed(ev), {"7240": {"head": H[:9], "at": "2026-11-10T12:00:00+08:00"},
-                                              "5775": {"head": H[:9], "at": "2026-10-26T12:36:34+08:00"}})
-        self.assertEqual(mj.merge_audit([{"number": 7240, "headRefOid": H2, "mergedBy": {"login": "injaneity"}}],
-                                        {int(k): v["head"] for k, v in mj.seed_landed(ev).items()}, {}), [(7240, "injaneity")])
+        self.assertIsNone(mj.queue_merged_by([add("injaneity")]))
 
     def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
         since = "2026-11-05T00:00:00+08:00"
@@ -1076,7 +977,6 @@ class Stage(unittest.TestCase):
 
 
 class RunOnMain(unittest.TestCase):
-    """Cron runs the checkout as it is, so a bare run moves it to origin/main first and restarts on the new code."""
 
     def test_a_bare_run_updates_the_package_then_restarts_once(self):
         with patch.object(mj.subprocess, "run", return_value=Mock(returncode=0)) as run, patch.object(mj.os, "execve") as ex, \
@@ -1087,7 +987,7 @@ class RunOnMain(unittest.TestCase):
             self.assertEqual(ex.call_args[0][1][1:], [str(VM / "merge_job.py")])
             self.assertEqual(ex.call_args[0][2]["ZSTACK_ENSURED"], "1")
             run.reset_mock(), ex.reset_mock()
-            env["ZSTACK_ENSURED"] = "1"   # the restarted run: no second update, and the mark does not reach its children
+            env["ZSTACK_ENSURED"] = "1"
             mj.run_on_main()
             run.assert_not_called(), ex.assert_not_called()
             self.assertNotIn("ZSTACK_ENSURED", os.environ)
@@ -1102,7 +1002,6 @@ class RunOnMain(unittest.TestCase):
 
 class CronEnv(unittest.TestCase):
     def test_gh_is_found_under_crons_bare_path(self):
-        """cron runs the job with PATH=/usr/bin:/bin; gh is usually in /usr/local/bin."""
         r = subprocess.run([sys.executable, "-I", "-c", "import importlib.util as u, sys; s = u.spec_from_file_location('m', sys.argv[1]); "
                             "m = u.module_from_spec(s); s.loader.exec_module(m); print(m.ENV['PATH'])", str(VM / "merge_job.py")],
                            env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}, capture_output=True, text=True, check=True)
@@ -1140,7 +1039,7 @@ class Webhook(unittest.TestCase):
                 self.assertEqual(got, "webhook sent (200)")
                 seen.update(calls=0, down=True)
                 self.assertEqual(mj.post_webhook("unexpected-merge", "cua#10", "why"), "webhook failed: OSError")
-            self.assertEqual((seen["calls"], seen["timeout"]), (1, 8))   # one try per urgent item, as before the shared sender
+            self.assertEqual((seen["calls"], seen["timeout"]), (1, 8))
             self.assertEqual(seen["auth"], "Bearer sekrit")
             self.assertEqual((seen["body"]["kind"], seen["body"]["pr"]), ("unexpected-merge", 10))
             with patch.object(wake, "KEY_FILE", f"{d}/none"):
@@ -1210,9 +1109,8 @@ class Cli(unittest.TestCase):
 
 
 class PatentPush(unittest.TestCase):
-    """patent_push.py, cua's pre-push hook: pairing, Teleport and Keyvault never go to public trycua/cua."""
 
-    def setUp(self):   # a held push wakes Zane: every hook these tests run prints its wake instead of POSTing it
+    def setUp(self):
         p = patch.dict(os.environ, {"ONIGIRI_WAKE_DRY": "1"})
         p.start()
         self.addCleanup(p.stop)
@@ -1248,7 +1146,7 @@ class PatentPush(unittest.TestCase):
         g("remote", "add", "origin", pub, cwd=work)
         g("push", "-q", "origin", "main", cwd=work)
         g("fetch", "-q", "origin", cwd=work)
-        hook = Path(work, ".git/hooks/pre-push")   # the real hook code, with staging access mocked off
+        hook = Path(work, ".git/hooks/pre-push")
         hook.write_text(f"#!{sys.executable}\nimport importlib.util, sys\n"
                         f"s = importlib.util.spec_from_file_location('pp', {str(VM / 'patent_push.py')!r})\n"
                         "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp)\n"
@@ -1277,12 +1175,11 @@ class PatentPush(unittest.TestCase):
             self.assertIn('"kind": "blocked"', r.stdout + r.stderr)
             self.assertFalse(os.path.exists(f"{root}/buffer.jsonl"))
             g = subprocess.run(["git", "push", "origin", "onigiri/x"], cwd=f"{tmp}/work", capture_output=True, text=True)
-            self.assertNotEqual(g.returncode, 0)   # the same head again: still held, and no second wake
+            self.assertNotEqual(g.returncode, 0)
             self.assertNotIn('"kind": "blocked"', g.stdout + g.stderr)
             self.assertEqual(len(mj.read(f"{root}/events.log").splitlines()), 1)
 
     def test_a_public_push_from_a_run_records_its_head_in_that_runs_dir_only(self):
-        """The thread that pushed a PR's head owns its CI: bin/hourly finds it through review/<id>/pushed."""
         with tempfile.TemporaryDirectory() as root:
             os.makedirs(f"{root}/review/r1")
             pub, stg = "https://github.com/trycua/cua.git", "https://github.com/trycua/cua-staging"
@@ -1294,10 +1191,10 @@ class PatentPush(unittest.TestCase):
                             os.environ.pop("PI_SESSION_ID", None)
                         self.assertEqual(pp.main(["origin", url], line("a" * 40), root=root, out=io.StringIO()), 0)
             with patch.object(pp, "diff_hits", return_value=["src/pairing.rs"]), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
-                pp.main(["origin", pub], line("b" * 40), staging_ok=lambda: False, root=root, out=io.StringIO())   # held: not pushed
+                pp.main(["origin", pub], line("b" * 40), staging_ok=lambda: False, root=root, out=io.StringIO())
             held = lambda sha, cwd=None: ["src/pairing.rs"] if sha == "d" * 40 else []   # noqa: E731
             with patch.object(pp, "diff_hits", side_effect=held), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
-                two = line("c" * 40, f"refs/heads/y {'d' * 40} refs/heads/y {'0' * 40}\n")   # the second ref refuses the whole push
+                two = line("c" * 40, f"refs/heads/y {'d' * 40} refs/heads/y {'0' * 40}\n")
                 self.assertEqual(pp.main(["origin", pub], two, staging_ok=lambda: False, root=root, out=io.StringIO()), 1)
             rows = [x.split() for x in Path(f"{root}/review/r1/pushed").read_text().splitlines()]
             self.assertEqual([x[:2] for x in rows], [["a" * 40, "fix/x"]])
@@ -1309,22 +1206,20 @@ class PatentPush(unittest.TestCase):
             with patch.object(pp.wake, "post", side_effect=["webhook failed: OSError", "webhook sent (200)"]) as post:
                 self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
                 self.assertTrue(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
-                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))   # sent: never again for this head
+                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
             self.assertEqual(post.call_count, 2)
             self.assertEqual([x.split(" ", 7)[6] for x in mj.read(f"{root}/events.log").splitlines()], ["failed:", "sent"])
 
     def test_the_installed_hook_is_a_symlink_and_logs_beside_the_clone(self):
-        """Both hosts install hosts/vm/pre-push as a symlink. With no $ONIGIRI_ROOT (a push from any shell) the hold is
-        logged in the directory the clone is in, also for a push from one of its worktrees."""
         with tempfile.TemporaryDirectory() as tmp:
             g, pub, work, _ = self.repo(tmp)
             hook = Path(work, ".git/hooks/pre-push")
             hook.unlink()
             hook.symlink_to(VM / "pre-push")
             Path(tmp, "bin").mkdir()
-            Path(tmp, "bin/gh").write_text("#!/bin/sh\nexit 1\n")   # no staging access, and no network
+            Path(tmp, "bin/gh").write_text("#!/bin/sh\nexit 1\n")
             Path(tmp, "bin/gh").chmod(0o755)
-            Path(tmp, "bin/python3").symlink_to(sys.executable)   # 3.11 or newer for config/policy.toml
+            Path(tmp, "bin/python3").symlink_to(sys.executable)
             env = {"PATH": f"{tmp}/bin:/usr/bin:/bin", "HOME": tmp, "GH_CONFIG_DIR": f"{tmp}/gh", "ONIGIRI_WAKE_DRY": "1"}
             g("worktree", "add", "-qb", "onigiri/w", f"{tmp}/wt", cwd=work)
             Path(tmp, "wt/pairing.rs").write_text("fn pair() {}\n")
@@ -1343,7 +1238,6 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def commits(self, tmp, branch, steps):
-        """Commit each step (a dict of path -> text, None deletes, ("mv", a, b) renames), then push branch."""
         g, pub, work, root = self.repo(tmp)
         g("checkout", "-qb", branch, cwd=work)
         for i, step in enumerate(steps):
@@ -1362,14 +1256,14 @@ class PatentPush(unittest.TestCase):
         return r, g("ls-remote", pub, f"refs/heads/{branch}")
 
     def test_a_held_commit_reverted_later_in_the_push_is_still_held(self):
-        with tempfile.TemporaryDirectory() as tmp:   # net diff is empty; the first commit still publishes the line
+        with tempfile.TemporaryDirectory() as tmp:
             r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// keyvault probe\n"}, {"a.rs": None}])
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
 
     def test_a_held_file_renamed_away_is_held(self):
-        with tempfile.TemporaryDirectory() as tmp:   # net diff adds only src/link.rs; history has pairing.rs
+        with tempfile.TemporaryDirectory() as tmp:
             r, remote = self.commits(tmp, "onigiri/mv", [{"src/pairing.rs": "fn x() {}\n"}, ("mv", "src/pairing.rs", "src/link.rs")])
             self.assertNotEqual(r.returncode, 0)
             self.assertEqual(remote, "")
@@ -1383,18 +1277,18 @@ class PatentPush(unittest.TestCase):
     def test_a_combined_diff_counts_only_the_merges_own_lines(self):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
               " +// teleport from main\n++// resolved\n")
-        self.assertEqual(pp.held_hits([], cc), [])   # column 2 only: the line came from a parent, not the merge
+        self.assertEqual(pp.held_hits([], cc), [])
         self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// keyvault in the resolution")))
         self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- teleport removed\n"))
 
     def test_merging_main_that_already_has_held_work_is_pushed(self):
-        with tempfile.TemporaryDirectory() as tmp:   # main's own pairing.rs arrives by merge; the branch adds none
+        with tempfile.TemporaryDirectory() as tmp:
             g, pub, work, root = self.repo(tmp)
             g("checkout", "-qb", "onigiri/m", cwd=work)
             Path(work, "mine.rs").write_text("fn mine() {}\n")
             g("add", ".", cwd=work)
             g("commit", "-qm", "mine", cwd=work)
-            up = f"{tmp}/upstream"   # someone else's clone, without the hook, lands held work on main
+            up = f"{tmp}/upstream"
             g("clone", "-q", "-b", "main", pub, up)
             for k, v in (("user.name", "u"), ("user.email", "u@u"), ("commit.gpgsign", "false")):
                 g("config", k, v, cwd=up)

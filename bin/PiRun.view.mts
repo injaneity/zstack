@@ -1,4 +1,3 @@
-// The chart's words for bin/PiRun.tla: the state a reader sees in `pi-run list`, and the wake an exit sent.
 export const title = "pi-run: one run of an id";
 export const state = (v: any) => {
 	if (v.state === "running" && !v.live) return "lost";

@@ -1,6 +1,3 @@
-"""Mutation check for bin/PiRun.tla: each mutant puts back one behaviour bin/pi-run must not have, and must make TLC fail
-on bin/PiRun.cfg. A mutant that still passes means the model cannot see that bug.
-usage: python3 -I bin/PiRun.mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
 import subprocess
@@ -8,7 +5,6 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
-    # name, the bug, [(old, new)], the rule that must catch it
     ("paused-holds-slot", "a 429'd run keeps its slot (bin/hourly slots() counted paused as running before)",
      [("/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = FALSE", "/\\ state' = \"queued\" /\\ cont' = TRUE /\\ live' = live")], "PauseIsSilent"),
     ("resume-skips-queue", "a direct start resumes a 429'd run (pi-run resume <id> before)",

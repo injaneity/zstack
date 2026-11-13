@@ -10,8 +10,6 @@ permissions:
 
 jobs:
   oldest-python:
-    # The mini's /usr/bin/python3 is 3.9 and cron or a bare shell runs it: the 12 Nov 14:36 SGT hourly pickup died there on
-    # `import tomllib`. Every python script and the suite run under that interpreter, so a 3.11-only import fails here.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -60,10 +58,12 @@ jobs:
         run: bin/policy check && bin/policy rules > /dev/null
       - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: zstack code carries no comments
+        run: python3 tests/comments.py check
       - name: lint the VM host scripts
         run: |
           pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly bin/pickup bin/check-host bin/hold-row bin/policy bin/PiRun.mutants.py model
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/mini/sync-from-vm.sh hosts/mini/vm tests/sync-from-vm.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief bin/queue bin/model-for tests/ensure-package-main.sh tests/pirun-model.sh tests/zstack-model.sh tests/models.sh hosts/mini/install-pickup.sh tests/pickup-model.sh
+          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/mini/sync-from-vm.sh hosts/mini/vm tests/sync-from-vm.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief tests/ensure-package-main.sh tests/pirun-model.sh tests/zstack-model.sh tests/models.sh hosts/mini/install-pickup.sh tests/pickup-model.sh tests/hourly-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -98,7 +98,6 @@ jobs:
         run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pickup-model.sh
       - name: the merge gate is three checks, and verification is not one of them
         run: |
-          # Zane, 10 Nov: merging needs only ci-gate green, no hold row, and a preapproval for deep/human
           if bin/policy rules | cat - skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/SKILL.md |
               grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif'; then
             echo "a line above makes verification a merge condition"; exit 1
@@ -123,10 +122,6 @@ jobs:
           exit $fail
       - name: every skill and playbook the docs name exists
         run: |
-          # A skill reference is /skill:x, ../x/SKILL.md, skills/x/, or a lowercase **x** / **`x`**.
-          # A target repo's .cursor/skills/x/ or .pi/skills/x/ is that repo's skill, not ours, so it is skipped.
-          # Lowercase bold in these docs is reserved for skill and agent names, so a stray one fails here.
-          # The skills vendored verbatim from pstack and trycua/cua (docs/PROVENANCE.md) use bold as emphasis, so only their links are checked.
           verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/|cua/)'
           agents=$(sed -n 's/^name: *//p' agents/*.md)
           fail=0
@@ -135,7 +130,6 @@ jobs:
             [[ $ref == .cursor/* || $ref == .pi/* ]] && continue
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
-            # skills/cua/ is a group directory: it holds skills, not a SKILL.md of its own.
             [ "$name" = cua ] && [ -d skills/cua ] && continue
             [ -f "skills/$name/SKILL.md" ] || [ -f "skills/cua/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
           done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)

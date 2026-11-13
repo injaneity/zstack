@@ -1,6 +1,3 @@
-"""Tests for bin/pickup, the scheduled pickup pass (model/Pickup.tla). They run the real script against a temp root, a fake
-`pi`, a fake `gh` (GitHub's issues and PRs from JSON files), a fake peer and a fake wake that records each call.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import fcntl
 import json
 import os
@@ -28,7 +25,6 @@ case "$*" in
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
 """
-# records each wake's argv, one JSON line each; $T/wake-fails makes the POST fail
 FAKE_WAKE = """#!/usr/bin/env python3
 import json, os, sys
 open(os.path.join(os.environ["T"], "wakes"), "a").write(json.dumps(sys.argv[1:]) + "\\n")
@@ -49,7 +45,6 @@ def review(n, created, login="CMGS", bot=False):
 
 
 def live():
-    """A running run.json's pid and start: this test process, which is alive while the test runs."""
     ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())], capture_output=True, text=True,
                         env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"})
     return {"pid": os.getpid(), "start": ps.stdout.strip()}
@@ -65,7 +60,7 @@ class Pickup(unittest.TestCase):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
         self.github(issues=[], reviews=[], open_=[])
-        self.pkg = t / "pkg"   # the package, with parity stubbed ok: a test checkout is not main
+        self.pkg = t / "pkg"
         for sub in ("bin", "hosts", "config", "vendor", "skills/onigiri-mode"):
             shutil.copytree(PKG / sub, self.pkg / sub, ignore=shutil.ignore_patterns("playbooks"))
         (self.pkg / "hosts" / "check-parity").write_text("#!/bin/bash\necho ok\n")
@@ -93,8 +88,6 @@ class Pickup(unittest.TestCase):
                 (self.t / f"{name}.json").write_text(json.dumps(v))
 
     def peer(self, waits=(), holds="", runs=None, ids=(), at_main=False):
-        """The merge host as a fake peer: its facts (runs, ids, the holds file) and the merge job's --dry-run lines. It is
-        not at main unless asked, so it is never the launch host (playbooks/hourly.md step 3) and launches stay here."""
         last = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} zstack {'a' * 40} ok"
         facts = {"sha": "s", "at_main": at_main, "parity": [], "free_gb": 25, "runs": runs or {}, "ids": list(ids),
                  "pushed": {}, "merge_last": last, "holds": holds}
@@ -145,25 +138,23 @@ class Pickup(unittest.TestCase):
                     + [issue(9, "2026-10-09T00:00:00Z", labels=["urgent"])])
         out = self.pickup()
         launched = [r[1] for r in self.rows("launch")]
-        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2"])   # the auto pool is 3 (config/policy.toml [slots])
+        self.assertEqual(launched, ["cua-9", "cua-1", "cua-2"])
         self.assertIn("7 candidates (0 taken before), auto free 3", out)
         brief = (self.root / "review" / "cua-9" / "brief.md").read_text()
         for line in ("source: auto", "https://github.com/trycua/cua/issues/9", "wake: finish"):
             self.assertIn(line, brief)
         self.assertTrue(all(self.state(s) == "running" for s in launched))
-        self.assertEqual(self.wakes(), [])   # launches alone are not output for the chat
-        out = self.pickup()   # all three still run: no slot, and no candidate launched again
+        self.assertEqual(self.wakes(), [])
+        out = self.pickup()
         self.assertIn("4 candidates (3 taken before), auto free 0", out)
         self.assertEqual(len(self.rows("launch")), 3)
         (self.t / "hang").unlink()
         for s in launched:
             self.assertTrue(self.wait(s, "exited"), s)
-        self.pickup()   # collects the three, then takes the next three
+        self.pickup()
         self.assertEqual([r[1] for r in self.rows("launch")][3:], ["cua-3", "cua-4", "cua-5"])
 
     def test_a_brief_no_pickup_wrote_takes_its_id_and_a_died_pass_brief_launches_as_written(self):
-        """An older launcher's brief (a Linear-era CUA-4 is review/cua-4, no run.json) is never launched for GitHub issue
-        #4; a pickup's own brief left by a pass that died after new-brief (source: auto, no run.json) launches."""
         (self.t / "hang").touch()
         for sid, text in (("cua-4", "Task: Unstick trycua/cua#6561 at head fc0b2895. Linear CUA-4.\n"),
                           ("cua-5", "# cua-5 (coding)\nrole: coding\nsource: auto\ntrycua/cua#5: issue 5\n")):
@@ -187,16 +178,16 @@ class Pickup(unittest.TestCase):
         (self.t / "hang").touch()
         holds = "hold | 302 | no | note\nskip-author | app/cua-agents | no | bots\nreview-only | f-trycua | no | teammate\n"
         self.peer(waits=["cua#303 3030000aa wait who=zane: declared deep: needs Zane (no preapprove row)"], holds=holds,
-                  runs={"busy": {"state": "running", "auto": False, "nums": [104]}})
-        self.github(issues=[issue(101, "2026-10-01T00:00:00Z", labels=["hold"]),           # held: a hold label
-                            issue(102, "2026-10-02T00:00:00Z", linked=[900]),             # pr: an open PR fixes it
-                            issue(103, "2026-10-03T00:00:00Z", linked=[901]),             # its linked PR closed: pickable
-                            issue(104, "2026-10-04T00:00:00Z"),                           # overlap: a live run names it
-                            issue(105, "2026-10-05T00:00:00Z", labels=["Linux"])],        # host: the VM can't launch
-                    reviews=[review(301, "2026-10-06T00:00:00Z", login="cua-bot[bot]", bot=True),   # held: a bot
-                             review(302, "2026-10-07T00:00:00Z"),                          # held: a hold row
-                             review(303, "2026-10-08T00:00:00Z"),                          # zane: the merge job waits on him
-                             review(304, "2026-10-09T00:00:00Z", login="f-trycua")],       # a teammate's first review
+                  runs={"busy": {"state": "running", "pool": "hand", "nums": [104]}})
+        self.github(issues=[issue(101, "2026-10-01T00:00:00Z", labels=["hold"]),
+                            issue(102, "2026-10-02T00:00:00Z", linked=[900]),
+                            issue(103, "2026-10-03T00:00:00Z", linked=[901]),
+                            issue(104, "2026-10-04T00:00:00Z"),
+                            issue(105, "2026-10-05T00:00:00Z", labels=["Linux"])],
+                    reviews=[review(301, "2026-10-06T00:00:00Z", login="cua-bot[bot]", bot=True),
+                             review(302, "2026-10-07T00:00:00Z"),
+                             review(303, "2026-10-08T00:00:00Z"),
+                             review(304, "2026-10-09T00:00:00Z", login="f-trycua")],
                     open_=[{"number": 900, "isDraft": False}])
         self.pickup()
         self.assertEqual(self.rows("skip"), [
@@ -213,10 +204,6 @@ class Pickup(unittest.TestCase):
         self.assertIn("`drafts:`", brief)
 
     def test_salvage_links_the_pass_lists_for_the_chat(self):
-        """Zane, 13 Nov 15:31 SGT: a salvage PR carries `Fixes #N` for its source issue, and an issue is closed by hand only
-        with a comment naming the merged PR of ours that fixed it. The pass names what is left: an open salvage missing
-        the line, and, for a salvage merged since [issues] since, an issue it left open (even numbers are open here) or a
-        source PR still open. Older merges, closed issues and held sources are not listed."""
         self.peer(holds="hold | 604 | no | note\n")
         ref = lambda *ns: [{"number": n} for n in ns]   # noqa: E731
         (self.t / "salvages.json").write_text(json.dumps([
@@ -245,9 +232,9 @@ class Pickup(unittest.TestCase):
             "- salvage cua#701 of cua#601 lacks `Fixes #10`, `Fixes #11` in its body: add it",
             "- cua#14 is still open: our merged salvage cua#703 fixed it but lacked `Fixes #14`; close it with a comment naming cua#703",
             "- cua#603 is still open after its salvage cua#703 merged: close it with a comment naming cua#703 (playbooks/hourly.md step 7)"]))
-        self.assertNotIn("error:", report)   # a source GitHub can't show (#9999) is unchecked, not an error
+        self.assertNotIn("error:", report)
         self.pickup()
-        self.assertEqual(len(self.wakes()), 1)   # the same items wake once
+        self.assertEqual(len(self.wakes()), 1)
 
     def test_a_review_brief_asks_a_salvage_for_its_fixes_lines(self):
         self.github(reviews=[review(310, "2026-10-06T00:00:00Z", login="CMGS")])
@@ -263,7 +250,7 @@ class Pickup(unittest.TestCase):
         out = self.pickup(ONIGIRI_PEERS=f"vm={bad}")
         self.assertIn("auto free 0; no picks: vm", out)
         self.assertEqual(self.rows("launch"), [])
-        self.assertEqual(len(self.wakes()), 1)   # an unreachable host is a needs-Zane item: the chat hears of it once
+        self.assertEqual(len(self.wakes()), 1)
         self.assertIn("host vm unreachable", self.wakes()[0][1])
         self.pickup(ONIGIRI_PEERS=f"vm={bad}")
         self.assertEqual(len(self.wakes()), 1)
@@ -284,7 +271,7 @@ class Pickup(unittest.TestCase):
                                      "questions:\n- may I close #7000?\n")
         (self.t / "wake-fails").touch()
         self.pickup()
-        self.assertEqual(self.state("chat-job"), "collected")   # collected once, its result kept in the outbox
+        self.assertEqual(self.state("chat-job"), "collected")
         self.assertEqual(len(self.wakes()), 1)
         (self.t / "wake-fails").unlink()
         self.pickup()
@@ -299,7 +286,7 @@ class Pickup(unittest.TestCase):
         self.assertIn("chat:\n- chat-job follow-up to file: file the flake\n", report)
         self.assertIn("outside-contributor drafts:\n- none\n", report)
         self.pickup()
-        self.assertEqual(len(self.wakes()), 2)   # delivered: nothing new
+        self.assertEqual(len(self.wakes()), 2)
 
     def test_a_run_whose_report_cannot_be_read_is_not_collected_and_loses_no_result(self):
         d = self.root / "review" / "chat-job"
@@ -308,7 +295,7 @@ class Pickup(unittest.TestCase):
         self.assertEqual(subprocess.run([str(self.bin / "pi-run"), "chat-job", "coding", str(d / "brief.md")], env=self.env,
                                         capture_output=True).returncode, 0)
         self.assertTrue(self.wait("chat-job", "exited"))
-        (d / "run.log").unlink()   # bin/hourly report has nothing to read: exit 2
+        (d / "run.log").unlink()
         out = self.pickup()
         self.assertEqual(self.state("chat-job"), "exited")
         self.assertIn("no picks: report chat-job on local:", out)
@@ -349,11 +336,11 @@ class Pickup(unittest.TestCase):
         self.assertIn("failed: the pass hit its 3s deadline and was killed", out)
         self.assertEqual([w[0] for w in self.wakes()], ["failed"])
         (self.t / "gh-sleep").unlink()
-        self.pickup()   # the lock is free and the next pass runs whole
+        self.pickup()
         self.assertEqual([r[1] for r in self.rows("launch")], ["cua-10"])
 
     def test_dry_prints_the_plan_and_changes_nothing(self):
-        d = self.root / "review" / "chat-job"   # an exited run: the plan's wake carries its result, and it stays exited
+        d = self.root / "review" / "chat-job"
         d.mkdir()
         (d / "brief.md").write_text("task\nrole: coding\nsource: chat\n")
         self.assertEqual(subprocess.run([str(self.bin / "pi-run"), "chat-job", "coding", str(d / "brief.md")], env=self.env,
@@ -367,13 +354,13 @@ class Pickup(unittest.TestCase):
         self.assertIn("would launch vm cua-10: issue https://github.com/trycua/cua/issues/10", out)
         self.assertIn("would collect local chat-job: rc=0, prs 1", out)
         self.assertIn("would send done: pickup needs-Zane 1; dumpling results 1 (1 new)", out)
-        self.assertEqual(sorted(str(p) for p in self.root.rglob("*")), before)   # not one file made, removed or renamed
+        self.assertEqual(sorted(str(p) for p in self.root.rglob("*")), before)
         self.assertEqual(self.state("chat-job"), "exited")
         self.assertEqual(self.wakes(), [])
 
     def test_the_peer_at_main_with_disk_free_is_the_launch_host_and_a_linux_item_goes_there(self):
         self.peer(at_main=True)
-        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")   # this host is the mini, which macOS items need
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z", labels=["Linux"]), issue(11, "2026-10-02T00:00:00Z", labels=["macOS"])])
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertIn("would launch vm cua-10:", out)
@@ -386,22 +373,22 @@ class Pickup(unittest.TestCase):
         pause.write_text("# bench on the vm\nvm until mini bench\n")
         self.peer(at_main=True)
         (self.root / "review" / "bench").mkdir()
-        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "running", "attempt": 1, "rc": None, **live()}))
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "running", "attempt": 1, "rc": None, "pool": "hand", **live()}))
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
-        self.assertIn("would launch mini cua-10:", out)   # the peer is paused: an unlabelled item launches here
-        self.assertIn("skip cua-11: host", out)   # and a Linux one, which only the peer can do, waits
+        self.assertIn("would launch mini cua-10:", out)
+        self.assertIn("skip cua-11: host", out)
         (self.root / "review" / "bench" / "report.md").write_text("bench done\n")
-        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "exited", "attempt": 1, "pid": None, "rc": 0}))
+        (self.root / "review" / "bench" / "run.json").write_text(json.dumps({"state": "exited", "attempt": 1, "pid": None, "rc": 0, "pool": "hand"}))
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
-        self.assertIn("would launch vm cua-10:", out)   # the run ended: the pause lifted by itself
+        self.assertIn("would launch vm cua-10:", out)
         self.assertIn("would launch vm cua-11:", out)
-        pause.write_text("vm\n")   # a pause with no run to wait on holds until the row is removed
+        pause.write_text("vm\n")
         self.assertIn("would launch mini cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
-        pause.write_text("vm until mini\n")   # a row it cannot read holds the pause
+        pause.write_text("vm until mini\n")
         self.assertIn("would launch mini cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
-        pause.write_text("other-host\n")   # a pause on another host leaves this one alone
+        pause.write_text("other-host\n")
         self.assertIn("would launch vm cua-10:", self.pickup("--dry", ONIGIRI_HOST="mini"))
-        pause.write_text("vm\nmini\n")   # both paused: nothing is picked, each item skipped for its host
+        pause.write_text("vm\nmini\n")
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertNotIn("would launch", out)
         self.assertIn("skip cua-10: host", out)
@@ -417,9 +404,9 @@ class Pickup(unittest.TestCase):
         r = subprocess.run([str(self.pkg / "hosts" / "mini" / "install-pickup.sh"), "print"], capture_output=True, text=True,
                            env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("<key>StartInterval</key><integer>1800</integer>", r.stdout)   # config/policy.toml [pickup] interval_s
+        self.assertIn("<key>StartInterval</key><integer>1800</integer>", r.stdout)
         self.assertIn(f"<string>{self.pkg}/bin/pickup</string>", r.stdout)
-        for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):   # never a supervisor or a respawn
+        for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):
             self.assertNotIn(banned, r.stdout)
         if shutil.which("plutil"):
             (self.t / "p.plist").write_text(r.stdout)

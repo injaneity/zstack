@@ -1,8 +1,3 @@
-// tool-guard: adds three wall-clock rules to every session's system prompt, subagent children included. They are
-// prompt rules, not blocks. It also gives a bash call that declares no timeout config/policy.toml run.idle_min, less
-// the supervisor's one-minute check, as its timeout: a call blocked on a process that never ends then returns to the
-// session with an error the model can act on, a minute before pi-run's supervisor would stop the whole run for showing
-// no progress.
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +11,6 @@ export const GUIDELINES = [
 
 const POLICY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/policy");
 
-/** run.idle_min in seconds less the supervisor's one-minute check, through bin/policy (the one parser), or undefined when it cannot be read. */
 export function idleSeconds(get: () => string = () => execFileSync("python3", ["-I", POLICY, "get", "run.idle_min"],
 	{ encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] })): number | undefined {
 	try {
@@ -27,7 +21,6 @@ export function idleSeconds(get: () => string = () => execFileSync("python3", ["
 	}
 }
 
-/** Give a bash call's input the idle limit as its timeout when it declares none. */
 export function boundBash(input: { timeout?: unknown }, seconds: number | undefined): void {
 	if (seconds && (typeof input.timeout !== "number" || !(input.timeout > 0))) input.timeout = seconds;
 }

@@ -1,6 +1,3 @@
-"""Tests for bin/policy, the one reader of config/policy.toml, and for the readers that refuse a policy it rejects.
-Each bad file is the shipped one with one edit, run from a throwaway copy of the package's bin/ and config/.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import json
 import os
 import shutil
@@ -13,7 +10,7 @@ from pathlib import Path
 PKG = Path(__file__).resolve().parent.parent
 try:
     import tomllib
-except ModuleNotFoundError:   # python3 3.9 and 3.10, as bin/policy
+except ModuleNotFoundError:
     sys.path.insert(0, str(PKG / "vendor"))
     import tomli as tomllib
 SHIPPED = (PKG / "config" / "policy.toml").read_text()
@@ -24,11 +21,11 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", "bin/model-for", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
+        for f in ("bin/policy", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
                   "config/rules.toml", "config/state.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
-        shutil.copytree(PKG / "vendor", self.pkg / "vendor")   # bin/policy's tomllib before python3 3.11
+        shutil.copytree(PKG / "vendor", self.pkg / "vendor")
         self.env = {**os.environ, "ONIGIRI_HOST": "", "ONIGIRI_ROOT": str(Path(td.name) / "root"),
                     "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}"}
 
@@ -40,7 +37,7 @@ class Policy(unittest.TestCase):
 
     def test_the_shipped_file_is_valid_and_get_reads_it(self):
         self.assertEqual(self.run_("check").returncode, 0)
-        self.assertEqual(self.run_("get", "slots.auto").stdout, "3\n")   # Zane, 12 Nov 12:47 SGT
+        self.assertEqual(self.run_("get", "slots.auto").stdout, "3\n")
         self.assertEqual(self.run_("get", "slots.hand").stdout, "5\n")
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
         self.assertEqual(self.run_("get", "resume.cap").stdout, "3\n")
@@ -53,7 +50,6 @@ class Policy(unittest.TestCase):
         self.assertEqual((r.returncode, r.stderr), (1, "policy: no key slots.nope\n"))
 
     def test_every_bad_edit_is_refused_with_its_reason(self):
-        """One edit each: what it breaks, and the reason bin/policy must give. None is ever read as a default."""
         cases = [
             ("hand = 5", "hand = 0", "slots.hand must be a positive integer, not 0"),
             ("hand = 5", 'hand = "5"', "slots.hand must be a positive integer, not '5'"),
@@ -111,9 +107,8 @@ class Policy(unittest.TestCase):
         self.assertIn("cannot read", r.stderr)
 
     def test_readers_refuse_a_policy_bin_policy_rejects(self):
-        """model-for (so every launch), pi-run ci and the hourly pass stop with bin/policy's reason instead of a default."""
         self.write(SHIPPED.replace("fix_attempts = 3", "fix_attempts = -1"))
-        for prog, args in (("bin/model-for", ["coding"]), ("bin/hourly", ["log", "h", "a", "i", "r"])):
+        for prog, args in (("bin/policy", ["seat", "coding"]), ("bin/hourly", ["log", "h", "a", "i", "r"])):
             with self.subTest(prog=prog):
                 r = self.run_(*args, prog=prog)
                 self.assertNotEqual(r.returncode, 0, r.stdout)
@@ -128,7 +123,6 @@ class Policy(unittest.TestCase):
         self.assertEqual(json.loads((run / "run.json").read_text())["state"], "collected")
 
     def test_the_merge_job_runs_no_gate_without_its_policy(self):
-        """A merge gate whose rules cannot be read merges nothing: the job exits before any gh call, naming why."""
         (self.pkg / "hosts" / "vm").mkdir(parents=True)
         for f in ("merge_job.py", "wake.py"):
             shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
@@ -143,7 +137,6 @@ class Policy(unittest.TestCase):
         self.assertFalse((self.pkg / "bin" / "gh.log").exists())
 
     def test_hold_row_writes_nothing_without_the_merge_gates_policy(self):
-        """bin/hold-row checks every write with the merge job's parser, so a policy that stops the job stops the write."""
         (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
         for f in ("merge_job.py", "wake.py"):
             shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
@@ -156,10 +149,9 @@ class Policy(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("merge_job: missing merge.gate_check", r.stderr)
         self.assertEqual((root / "hold-prs.txt").read_text(), "hold | 1 | no | x\n")
-        self.assertEqual(sorted(p.name for p in root.iterdir()), ["hold-prs.txt"])   # no backup or temp file either
+        self.assertEqual(sorted(p.name for p in root.iterdir()), ["hold-prs.txt"])
 
     def test_a_push_is_refused_without_the_patent_policy(self):
-        """cua's pre-push hook with no readable [patent] refuses every push, so a held change can never go out unread."""
         (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
         for f in ("patent_push.py", "wake.py", "pre-push"):
             shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
@@ -171,7 +163,6 @@ class Policy(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
 
     def test_a_push_under_a_python_without_tomllib_still_reads_the_patent_policy(self):
-        """bin/policy falls back to vendor/tomli, so the hook still holds a pairing push on the mini's /usr/bin/python3."""
         (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
         for f in ("patent_push.py", "wake.py"):
             shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
@@ -188,10 +179,9 @@ class Policy(unittest.TestCase):
         r = self.run_("--offline", prog="bin/check-host")
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("FAIL  policy: schema must be 1, not True", r.stdout)
-        self.assertIn("gh: ", r.stdout)   # the checks after it still ran
+        self.assertIn("gh: ", r.stdout)
 
     def test_the_old_json_configs_are_gone(self):
-        """One source of truth: the three JSON files the policy replaced are not shipped next to it."""
         for f in ("models.json", "slots.json", "ci.json"):
             self.assertFalse((PKG / "config" / f).exists(), f)
 

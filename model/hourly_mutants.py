@@ -1,23 +1,15 @@
-"""Mutation check for model/Hourly.tla: each mutant puts back one way the hourly pickup went wrong, and must make TLC fail
-on HourlySmall.cfg (Hourly.cfg's rules at smaller caps) with the rule it names. The first three are zstack main
-4e08648, before the pickup fix (#68); shared-total and auto-cap-5 are the caps before the slot split. A mutant that
-still passes, or fails on another rule, means the model cannot see that bug.
-usage: python3 -I model/hourly_mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# The chat declining every Todo in one row of its own (pickup.log, 12 Nov 02:38 SGT: "backlog is unstick/review items
-# already filed; no auto pick"), which step 5 allowed at main because it never said its rules were the only ones.
 DECLINES = ("PickDone ==", "Declines == pc = \"pick\" /\\ free > 0 /\\ todo # {} /\\ pc' = \"end\" /\\ rows' = rows \\cup {<<\"todo\", \"filed\">>}\n"
             "  /\\ UNCHANGED <<World, dirty, free>>\nPickDone ==")
 DECLINES_NEXT = ("PassSteps == PassStarts", "PassSteps == Declines \\/ PassStarts")
 NO_FREE_IN_ACTS = ("Acts == ended \\/ SeenStalled \\/ qhand + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})",
                    "Acts == ended \\/ SeenStalled \\/ qhand + qauto > 0 \\/ blind")
 M = [
-    # name, the bug, [(old, new)], the rule that must catch it
     ("main-4e08648-silent-skip", "acts had no free auto slot, so an unchanged pass skipped with Todos to pick (before #68)",
      [NO_FREE_IN_ACTS], "NoSilentPassWhenCouldPick"),
     ("main-4e08648-group-decline", "step 5 named no closed set of rules, so the chat declined the list in one row (before #68)",
@@ -52,17 +44,15 @@ M = [
        "DrainDone == pc = \"drain\" /\\ ~CanDrainHand /\\ ~CanDrainAuto(FALSE) /\\ pc' = \"pick\" /\\ free' = CodeFree")],
      "AutoCap"),
     ("shared-total", "the 7-total cap before the slot split: a hand launch waits while auto and quick runs fill a total",
-     [("HandWaits(unknown) == unknown \\/ HandN >= Hand",
-       "HandWaits(unknown) == unknown \\/ HandN >= Hand \\/ HandN + auto + peer + quick >= Hand + 1")],
+     [("HandWaits(unknown) == unknown \\/ hand >= Hand",
+       "HandWaits(unknown) == unknown \\/ hand >= Hand \\/ hand + auto + peer + quick >= Hand + 1")],
      "QuickNotCounted"),
     ("auto-cap-5", "the 5-auto cap before the slot split",
      [("CodeFree == Sub(Auto, SeenAuto)", "CodeFree == Sub(Auto + 1, SeenAuto)"),
       ("todo \\subseteq Issues /\\ free \\in 0..Auto", "todo \\subseteq Issues /\\ free \\in 0..Auto + 1")], "AutoCap"),
-    ("untagged-not-counted", "a running run with no pool tag counted in no pool",
-     [("HandN == hand + legacy", "HandN == hand")], "HandCap"),
     ("vm-counts-itself", "a hand launch on the VM counts only what it can see",
      [("HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~HandWaits(onVm \\/ blind)",
-       "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ HandN >= Hand))")],
+       "HandStarts(onVm) == pc # \"drain\"\n  /\\ \\/ ~(blind \\/ (~onVm /\\ hand >= Hand))")],
      "HandCap"),
     ("pick-ignores-pause", "a pick goes to the peer at main with the floor free though it has an auto pause",
      [("/\\ free > 0 /\\ (there => ~blind /\\ ~pause)", "/\\ free > 0 /\\ (there => ~blind)")], "NoAutoOnPausedPeer"),

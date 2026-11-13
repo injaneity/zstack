@@ -1,4 +1,3 @@
-// The reader's words for Pickup.tla: one scheduled pickup pass, as pickup.log and the chat see it.
 export const title = "bin/pickup: one scheduled pass";
 export const state = (v: any) => {
 	const p = v.lock === "NoPass" ? null : v.lock;

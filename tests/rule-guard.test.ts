@@ -1,4 +1,3 @@
-// Tests for extensions/rule-guard/rules.ts. Run: node --test tests/rule-guard.test.ts
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -8,17 +7,12 @@ import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
 import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
 
-// the owned set as the extension loads it: config/policy.toml's merge.repo through the real bin/policy
 const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
-// and config/policy.toml's issues.repo, whose issues close by hand only with a comment naming the PR that fixed them
 const ISSUES = issuesOwned(DUMP);
-// a fake `git remote get-url origin`: any directory under /cua is a trycua/cua checkout
-// and /scratch is a directory outside any checkout
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
-// and a host whose real holds files are these; a hold-prs.txt anywhere else is a test root's own
 const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)) }; // no symlinks here
+const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)) };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
@@ -92,7 +86,6 @@ test("merging in a merge-job repo is blocked", () => {
 });
 
 test("approving a fork's workflow runs in a merge-job repo runs; a merge beside it stays blocked", () => {
-	// Zane, 12 Nov 11:45 SGT: sessions may approve outside-contributor (fork) workflow runs on trycua/cua so CI runs
 	for (const c of ["gh api -X POST repos/trycua/cua/actions/runs/9/approve", "gh api --method POST repos/trycua/cua/actions/runs/$RUN/approve",
 		"gh api -X POST repos/{owner}/{repo}/actions/runs/9/approve", "gh api -X POST /repos/trycua/cua/actions/runs/9/approve"]) {
 		allowed(c);
@@ -104,8 +97,6 @@ test("approving a fork's workflow runs in a merge-job repo runs; a merge beside 
 });
 
 test("CI reruns in a merge-job repo run, whatever the run's conclusion: the session decides them", () => {
-	// Zane, 11 Nov: reruns are decided without asking him; only real failures go to him, and the guard can't tell a
-	// runner's network failure from one the diff caused
 	for (const c of ["gh run rerun 9 -R trycua/cua --failed", "gh run rerun 9 -R trycua/cua", "gh run rerun --job 90 -R trycua/cua",
 		"gh run rerun 9 --job=90 -R trycua/cua", "gh run rerun $RUN -R trycua/cua", "gh run rerun 9 --failed",
 		"gh api -X POST repos/trycua/cua/actions/runs/9/rerun-failed-jobs", "gh api -X POST repos/trycua/cua/actions/jobs/90/rerun",
@@ -115,12 +106,10 @@ test("CI reruns in a merge-job repo run, whatever the run's conclusion: the sess
 		allowed(c, "/tmp/x");
 	}
 	assert.equal(checkBash("gh run rerun 9 --failed", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch"), undefined);
-	// a rerun never opens a merge, and an option value naming a rerun doesn't hide the merge endpoint
 	blocked("gh run rerun 9 -R trycua/cua && gh pr merge 1 -R trycua/cua");
 	blocked("gh api -X PUT -f x=repos/trycua/cua/actions/runs/9/rerun repos/trycua/cua/pulls/1/merge", "/scratch");
 	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
 	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inCua);
-	// a placeholder takes its part from the current repo, so {owner}/cua under trycua/other is trycua/cua
 	const otherEnv = { ...host, ghRepo: "trycua/other" };
 	for (const c of ["gh api -X PUT repos/{owner}/cua/pulls/1/merge", "gh api -X PUT repos/trycua/{repo}/pulls/1/merge"])
 		assert.match(checkBash(c, OWNED, c.includes("{repo}") ? { ...host, ghRepo: "other/cua" } : otherEnv, "/scratch") ?? "", /^blocked: /, c);
@@ -135,7 +124,7 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh pr checks 7031 -R trycua/cua", inCua);
 	allowed("gh api repos/trycua/cua/pulls/123/merge");
 	blocked("cd /zs/wt || gh pr merge 1", inCua);
-	blocked("cd /zs/wt && gh pr merge 33", inCua); // a cd can fail, so the starting checkout still counts
+	blocked("cd /zs/wt && gh pr merge 33", inCua);
 	blocked("GH_REPO=trycua/cua gh pr merge 1");
 	blocked("{ gh pr merge 1 -R trycua/cua; }");
 	blocked("{ cd /cua; gh pr merge 1; }");
@@ -148,20 +137,16 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
 	allowed("gh pr merge 33 -R injaneity/zstack", inCua);
 	allowed("gh pr merge 1", "/scratch");
-	// an inherited GH_REPO names the repo in any directory, a checkout or not
 	assert.match(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch") ?? "", /^blocked: /);
 	assert.equal(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "injaneity/zstack" }, "/scratch"), undefined);
-	// clearing the inherited GH_REPO sends gh back to the checkout
 	const zsEnv = { ...host, ghRepo: "injaneity/zstack" };
 	assert.equal(checkBash("gh pr merge 1", OWNED, zsEnv, inCua), undefined);
 	for (const c of ["GH_REPO= gh pr merge 1", "env -u GH_REPO gh pr merge 1", "env --unset=GH_REPO gh pr merge 1", "env -i gh pr merge 1"])
 		assert.match(checkBash(c, OWNED, zsEnv, inCua) ?? "", /^blocked: /, c);
-	// a local shell inherits the prefix it was started with
 	assert.match(checkBash("GH_REPO=trycua/cua bash -c 'gh pr merge 1'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
 	assert.match(checkBash("env -u GH_REPO sh -c 'gh pr ready 1'", OWNED, zsEnv, inCua) ?? "", /^blocked: /);
 	blocked("gh pr merge 1 -R trycua/cua --subject --help");
 	blocked("gh pr merge 1 -R trycua/cua --body --disable-auto");
-	// the session's GH_REPO does not reach a remote shell, whose directory is unknown
 	assert.match(checkBash("ssh server 'gh pr merge 123'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
 	allowed("gh pr merge 1 -R trycua/cua --squash --help");
 	allowed("gh pr merge 1 -R trycua/cua --squash --disable-auto");
@@ -199,10 +184,8 @@ test("a brief that allows merging lets the session ready its draft, and nothing 
 	no(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	no(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	no("git push -f origin HEAD:main");
-	// only the launcher's exact flag counts; anything else is the default, blocked
 	assert.equal(readyAllowed("1"), true);
 	for (const v of ["", "0", "true", "yes", " 1"]) assert.equal(readyAllowed(v), false, v);
-	// a flag on the command is not the session's: the guard reads the env it was loaded with
 	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R trycua/cua");
 	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inCua);
 	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R trycua/cua'");
@@ -232,16 +215,16 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("python3 - <<'EOF'\nx\nEOF\ngit push -f");
 	blocked("bash <<'EOF'\ngit push --force\nEOF");
 	blocked("~/onigiri-vm/vm <<'EOF'\necho x >> /srv/onigiri/hold-prs.txt\nEOF");
-	blocked("cat <<EOF\nx"+"\ngit push -f"); // no closing line: nothing is stripped
-	blocked("echo '<<EOF'\ngit push -f\nEOF"); // a quoted << is text, so the next line runs
-	blocked("cat <<EOF\n$(git push -f)\nEOF"); // an unquoted body's substitutions run
-	blocked("echo hi # <<EOF\ngit push --force\nEOF"); // a << in a comment is text
-	blocked("cat <<'EOF' | bash\ngit push -f\nEOF"); // piped into a shell, the body runs
-	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF"); // the delimiter is the whole word
-	blocked("cat <<EOF \\\n | bash\ngit push -f\nEOF"); // a continued line can pipe the body into a shell
-	blocked("echo \\<<EOF\ngit push -f\nEOF"); // an escaped < is no heredoc
+	blocked("cat <<EOF\nx"+"\ngit push -f");
+	blocked("echo '<<EOF'\ngit push -f\nEOF");
+	blocked("cat <<EOF\n$(git push -f)\nEOF");
+	blocked("echo hi # <<EOF\ngit push --force\nEOF");
+	blocked("cat <<'EOF' | bash\ngit push -f\nEOF");
+	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF");
+	blocked("cat <<EOF \\\n | bash\ngit push -f\nEOF");
+	blocked("echo \\<<EOF\ngit push -f\nEOF");
 	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R trycua/cua\nEOF");
-	allowed("cat <<'EOF'\n$(git push -f)\nEOF"); // a quoted delimiter keeps it text
+	allowed("cat <<'EOF'\n$(git push -f)\nEOF");
 });
 
 test("writes to the real holds file are blocked; reads run", () => {
@@ -283,13 +266,12 @@ test("writes to the real holds file are blocked; reads run", () => {
 		"cp /tmp/x/hold-prs.txt /srv/onigiri/",
 		"cp /tmp/x/hold-prs.txt /srv/onigiri//",
 		"rsync --remove-source-files hold-prs.txt /tmp/x",
-		"rm $ROOT/hold-prs.txt", // a path the guard can't resolve counts by its name
+		"rm $ROOT/hold-prs.txt",
 		"rm ~other/hold-prs.txt",
 		"rm /srv/{onigiri,x}/hold-prs.txt",
 		...(process.platform === "darwin" ? ["rm $ROOT/HOLD-PRS.TXT"] : []),
 	])
 		blocked(c, root);
-	// a remote host's paths can't be resolved here, so any hold-prs.txt there counts
 	blocked("ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'");
 	blocked("ssh host 'echo x > /tmp/t/hold-prs.txt'");
 	for (const c of [
@@ -309,7 +291,6 @@ test("writes to the real holds file are blocked; reads run", () => {
 		"cp /srv/onigiri/hold-prs.txt /tmp",
 	])
 		allowed(c, root);
-	// a test root or throwaway HOME makes, edits and removes its own hold-prs.txt
 	for (const c of [
 		"printf 'hold | 1 | all | x\\n' > /tmp/t/vm/hold-prs.txt",
 		"echo x >> hold-prs.txt",
@@ -323,36 +304,33 @@ test("writes to the real holds file are blocked; reads run", () => {
 		"pushd /tmp/home && touch hold-prs.txt",
 		"env -i rm hold-prs.txt",
 		"HOME=/tmp/h bash -c 'rm /tmp/h/onigiri/hold-prs.txt'",
-		"bash -c 'rm hold-prs.txt'", // a local shell starts in this directory
+		"bash -c 'rm hold-prs.txt'",
 		"sh -c 'cd /tmp/t && echo x > hold-prs.txt'",
 	])
 		allowed(c, "/zs/wt");
-	// the first cd may succeed, so the session's own directory still counts
 	assert.match(checkBash("cd /srv/onigiri || cd /tmp; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
 	assert.match(checkBash("bash -c 'rm hold-prs.txt'", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /srv/onigiri && bash -c 'echo x > hold-prs.txt'", OWNED, host, "/tmp") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp || true; cp /tmp/hold-prs.txt .", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
-	// a relative cd resolves from every directory the line might be in: here the first cd fails, so `sync` is /zs/sync
 	assert.match(checkBash("cd /tmp/x extra || cd sync; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/cua") ?? "", /^blocked: /);
-	// from outside the root, a directory the guard can't tell falls back to the name
 	for (const c of [
-		"cd /tmp/$TARGET && rm hold-prs.txt", // a cd the guard can't expand
+		"cd /tmp/$TARGET && rm hold-prs.txt",
 		"cd /srv/onig?ri && rm hold-prs.txt",
 		"cd /srv/{onigiri,x} && rm hold-prs.txt",
-		"cd /tmp/`printf x` && rm hold-prs.txt", // a substitution the tokenizer splits off the cd word
+		"cd /tmp/`printf x` && rm hold-prs.txt",
 		"cd /tmp/$(printf x) && rm hold-prs.txt",
 		'cd "/tmp/$(printf x)" && rm hold-prs.txt',
 		"cd $(printf /tmp)/x; rm hold-prs.txt",
 		"cd /tmp; cd /srv/x; cd -; rm hold-prs.txt",
 		"pushd /tmp && popd && rm hold-prs.txt",
-		"env -C /srv/onigiri rm hold-prs.txt", // a wrapper's directory
+		"env -C /srv/onigiri rm hold-prs.txt",
 		"env --chdir=/srv/onigiri rm hold-prs.txt",
 		"sudo -D /srv/onigiri rm hold-prs.txt",
 		"env -C /srv/onigiri bash -c 'rm hold-prs.txt'",
 		"ssh host 'rm hold-prs.txt'",
 		"cd ~/x && rm hold-prs.txt",
-		"CDPATH=/srv; cd onigiri && rm hold-prs.txt", // a relative cd may search CDPATH, so it is never told
+		"CDPATH=/srv; cd onigiri && rm hold-prs.txt",
 		"export CD''PATH=/srv && cd onigiri && rm hold-prs.txt",
 		"cd onigiri && rm hold-prs.txt",
 		"cd ./x && rm hold-prs.txt",
@@ -365,7 +343,7 @@ test("writes to the real holds file are blocked; reads run", () => {
 	assert.match(write("@/srv/onigiri/hold-prs.txt"), /^blocked: /);
 	assert.match(write("hold-prs.txt", "/srv/onigiri"), /^blocked: /);
 	assert.match(write("sync/hold-prs.txt", "/zs"), /^blocked: /);
-	assert.match(write("hold-prs.txt"), /^blocked: /); // no cwd: can't be told
+	assert.match(write("hold-prs.txt"), /^blocked: /);
 	assert.equal(write("/srv/onigiri/notes.md"), "");
 	assert.equal(write("hold-prs.txt.md"), "");
 	assert.equal(write("/tmp/t/hold-prs.txt"), "");
@@ -384,7 +362,6 @@ test("bin/hold-row is the sanctioned way to append a row relaying Zane's call; d
 		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row replace '${row}' '${row.replace("a".repeat(40), "b".repeat(40))}'"`,
 	])
 		allowed(c, "/srv/onigiri");
-	// the helper does not launder a redirection or an edit on the same line
 	blocked(`bin/hold-row add '${row}' > /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
 	blocked(`bin/hold-row add '${row}'; echo x >> /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
 	assert.match(checkBash("echo x >> /srv/onigiri/hold-prs.txt", OWNED, host) ?? "", /bin\/hold-row add/);
@@ -409,43 +386,37 @@ test("the real holds paths are this host's config, matched on the filesystem wit
 		const ok = (c: string, cwd = t) => assert.equal(checkBash(c, OWNED, real, cwd), undefined, c);
 		for (const c of [`echo x >> ${root}/hold-prs.txt`, `rm ${root}/hold-prs.txt`, `mv ${root}/hold-prs.txt /tmp/x`, `cp /tmp/x ${root}/hold-prs.txt`, `sed -i '' 1d ${root}/hold-prs.txt`])
 			no(c);
-		no("echo x > link/hold-prs.txt"); // through a symlinked directory
+		no("echo x > link/hold-prs.txt");
 		no("rm link/hold-prs.txt");
-		no("echo x > file-link"); // through a symlink to the file
-		no("rm hard-link"); // a hard link is the same file
-		// `..` after a symlink is the parent of its target, as the kernel walks it
+		no("echo x > file-link");
+		no("rm hard-link");
 		fs.mkdirSync(path.join(root, "sub"));
 		fs.symlinkSync(path.join(root, "sub"), path.join(t, "sublink"));
 		no("echo x > sublink/../hold-prs.txt");
 		no("cd sublink/.. && rm hold-prs.txt");
-		// bash's logical cd collapses `..` before following links, so `cd root/away/..` is root
 		fs.symlinkSync(other, path.join(root, "away"));
 		no(`cd ${root}/away/.. && rm hold-prs.txt`, other);
 		no(`cd -L ${root}/away/.. && rm hold-prs.txt`, other);
 		no(`mv -t /tmp ${t}/sublink/../hold-prs.txt`);
 		no("cp /tmp/x/hold-prs.txt sublink/..");
 		assert.match(checkWrite("sublink/../hold-prs.txt", real, t) ?? "", /^blocked: /);
-		ok("echo x > sublink/hold-prs.txt"); // root/sub/hold-prs.txt is not the holds file
+		ok("echo x > sublink/hold-prs.txt");
 		no("echo x > hold-prs.txt", root);
 		no("echo x > ../../root/./hold-prs.txt", other);
-		no("echo x > ~/root/hold-prs.txt"); // ~ is the home passed in, here the temp dir
+		no("echo x > ~/root/hold-prs.txt");
 		assert.match(checkWrite(path.join(t, "link", "hold-prs.txt"), real) ?? "", /^blocked: /);
-		// the configured file once removed still counts, so it can't be recreated either
 		fs.renameSync(path.join(root, "hold-prs.txt"), path.join(root, "gone"));
 		no("echo x > link/hold-prs.txt");
-		// a dangling link to it would create it
 		fs.symlinkSync(path.join(root, "hold-prs.txt"), path.join(t, "alias"));
 		fs.symlinkSync("../../link/hold-prs.txt", path.join(other, "rel-alias"));
 		no("echo x > alias");
 		no("echo x > rel-alias", other);
 		assert.match(checkWrite(path.join(t, "alias"), real) ?? "", /^blocked: /);
 		if (process.platform === "darwin") no(`echo x > ${root.toUpperCase()}/HOLD-PRS.TXT`);
-		// a symlink loop has no inode to compare, and the guard still answers
 		fs.symlinkSync(path.join(t, "loop"), path.join(t, "loop"));
 		ok("touch loop");
-		no("rm loop/hold-prs.txt"); // a path that can't be walked counts by its name
+		no("rm loop/hold-prs.txt");
 		ok("rm loop/notes.md");
-		// a throwaway HOME's own holds file is an ordinary file
 		for (const c of [`printf 'hold | 2 | all | y\\n' > ${other}/hold-prs.txt`, `echo x >> ${other}/hold-prs.txt`, `mv ${other}/hold-prs.txt ${other}/old`, `rm ${other}/hold-prs.txt`])
 			ok(c);
 		ok("touch hold-prs.txt && rm hold-prs.txt", other);
@@ -469,7 +440,6 @@ test("the owned repo is config/policy.toml's merge.repo, and an unreadable polic
 });
 
 test("closing a trycua/cua issue by hand needs a comment naming the PR that fixed it", () => {
-	// Zane, 13 Nov 15:31 SGT: allowed only when one of our merged PRs fixed it, with a comment naming that PR
 	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, false, ISSUES) ?? "", /^blocked: .*issue-close/, c);
 	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, false, ISSUES), undefined, c);
 	assert.deepEqual(ISSUES, new Set(["trycua/cua"]));
@@ -508,14 +478,12 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 	no("gh issue close 6853", inCua);
 	no("cd /cua/wt && gh issue close 6853");
 	no("gh issue close 6853", "/zs", { ...host, ghRepo: "trycua/cua" });
-	// another repo's issues are not covered, and a repo that can't be told is refused
 	ok("gh issue close 12 -R injaneity/zstack");
 	ok("gh issue close 12", "/scratch");
 	ok("gh api -X PATCH repos/injaneity/zstack/issues/12 -f state=closed");
 	ok("gh api -X PATCH repos/trycua/cua/issues/6853 -f title=x");
 	ok("gh api -X POST repos/trycua/cua/issues/6853/comments --input body.json");
 	no("gh issue close 12", "/tmp/x");
-	// an unreadable policy refuses every hand close; an empty one covers nothing
 	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
 	assert.equal(checkBash("gh issue close 6853 -R trycua/cua", OWNED, host, "/zs", false, new Set()), undefined);
 	assert.equal(issuesOwned(() => "{}"), null);

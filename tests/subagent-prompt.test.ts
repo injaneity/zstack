@@ -1,4 +1,3 @@
-// Tests for extensions/subagent/prompt.ts and the agents/*.md role prompts. Run: node --test tests/subagent-prompt.test.ts
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -6,7 +5,6 @@ import { test } from "node:test";
 import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../extensions/subagent/prompt.ts";
 
 const root = new URL("..", import.meta.url).pathname;
-// the agent body as agents.ts hands it over: everything after the closing frontmatter fence
 const body = (name: string) => fs.readFileSync(`${root}agents/${name}.md`, "utf-8").split(/^---$/m).slice(2).join("---");
 
 test("a child's prompt is its role prompt, the no-polling line and the framing line, in that order", () => {

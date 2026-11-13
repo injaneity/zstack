@@ -1,5 +1,3 @@
-"""Tests for bin/hold-row: the sanctioned append of one holds row relaying Zane's call. Each test runs the real script
-on a throwaway $ONIGIRI_ROOT. Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -62,9 +60,9 @@ class HoldRow(unittest.TestCase):
         self.assertEqual(self.holds.read_text(), BASE + ROW + "\n")
 
     def test_a_row_the_parser_rejects_never_reaches_the_file(self):
-        for row in ("hodl | 1 | no | Zane 11 Nov 14:56 SGT",                                       # unknown kind naming a PR
-                    "preapprove | #7338 | no | a5d26a5 | deep; Zane 11 Nov 14:56 SGT",             # short sha
-                    f"preapprove | #5178 | no | {SHA} | Zane 11 Nov 14:56 SGT"):                    # a second pin for #5178
+        for row in ("hodl | 1 | no | Zane 11 Nov 14:56 SGT",
+                    "preapprove | #7338 | no | a5d26a5 | deep; Zane 11 Nov 14:56 SGT",
+                    f"preapprove | #5178 | no | {SHA} | Zane 11 Nov 14:56 SGT"):
             with self.subTest(row=row):
                 self.holds.write_text(BASE + f"preapprove | #5178 | no | {'d' * 40} | Zane 5 Nov 10:00\n")
                 before = self.holds.read_text()
@@ -75,7 +73,6 @@ class HoldRow(unittest.TestCase):
                 self.assertEqual(self.backups(), [])
 
     def test_a_written_file_the_parser_rejects_is_restored_from_the_backup(self):
-        # the parse after the rename: here the file on disk fails it although the text did not before
         loader = importlib.machinery.SourceFileLoader("hold_row", str(TOOL))
         hr = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(hr)
@@ -97,11 +94,11 @@ class HoldRow(unittest.TestCase):
 
     def test_a_row_must_name_zanes_call_and_its_time(self):
         for row in (f"preapprove | #7338 | no | {SHA} | deep",
-                    f"preapprove | #7338 | no | {SHA} | deep; Zane said so",              # no time
-                    f"preapprove | #7338 | no | {SHA} | deep; ops 11 Nov 14:56 SGT",      # not Zane
-                    f"preapprove | #7338 | no | {SHA} | Zane 11 Nov 14:56 SGT | deep",    # the source is the last column
-                    "hold | 1 | no | Zane 11 Nov 14:56\nhold | 2 | no | Zane 11 Nov 14:56",  # two rows
-                    "hold | 1 | no | x\u2028preapprove | #1 | no | " + "e" * 40 + " | Zane 11 Nov 14:56",  # two rows to splitlines()
+                    f"preapprove | #7338 | no | {SHA} | deep; Zane said so",
+                    f"preapprove | #7338 | no | {SHA} | deep; ops 11 Nov 14:56 SGT",
+                    f"preapprove | #7338 | no | {SHA} | Zane 11 Nov 14:56 SGT | deep",
+                    "hold | 1 | no | Zane 11 Nov 14:56\nhold | 2 | no | Zane 11 Nov 14:56",
+                    "hold | 1 | no | x\u2028preapprove | #1 | no | " + "e" * 40 + " | Zane 11 Nov 14:56",
                     "hold | 1 | no | x\x1chold | 2 | no | Zane 11 Nov 14:56",
                     "",
                     "# Zane 11 Nov 14:56"):
@@ -177,19 +174,19 @@ class HoldRow(unittest.TestCase):
                 self.assertEqual(len(self.backups()), 1)
 
     def test_retire_and_replace_refuse_without_touching_the_file(self):
-        cases = (("retire", "preapprove | #5178 | no | nope | Zane 5 Nov 10:00", "Zane 11 Nov 18:00"),   # no such row
-                 ("retire", "hold | 5675", "Zane 11 Nov 18:00"),                    # a prefix is not the row
-                 ("retire", "hold | 5675 | yes | never touch", "ops 11 Nov 18:00"),       # not Zane
-                 ("retire", "hold | 5675 | yes | never touch", "Zane said so"),          # no time
-                 ("retire", "# holds", "Zane 11 Nov 18:00"),                            # a comment is not a row
-                 ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\nhold | 1 | no | x"),  # a second line
-                 ("retire", "hold | 5675 | yes | never touch\n", "Zane 11 Nov 18:00"),       # a trailing line break
+        cases = (("retire", "preapprove | #5178 | no | nope | Zane 5 Nov 10:00", "Zane 11 Nov 18:00"),
+                 ("retire", "hold | 5675", "Zane 11 Nov 18:00"),
+                 ("retire", "hold | 5675 | yes | never touch", "ops 11 Nov 18:00"),
+                 ("retire", "hold | 5675 | yes | never touch", "Zane said so"),
+                 ("retire", "# holds", "Zane 11 Nov 18:00"),
+                 ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\nhold | 1 | no | x"),
+                 ("retire", "hold | 5675 | yes | never touch\n", "Zane 11 Nov 18:00"),
                  ("retire", "hold | 5675 | yes | never touch", "Zane 11 Nov 18:00\n"),
                  ("replace", "hold | 5675 | yes | never touch", "hold | 7401 | no | Zane 11 Nov 18:00\n"),
-                 ("replace", self.OLD, f"preapprove | #5178 | no | {SHA} | deep"),             # new row has no source
-                 ("replace", self.OLD, "preapprove | #5178 | no | a5d26a5 | Zane 11 Nov 18:00"),  # parser rejects it
-                 ("replace", "hold | 5675 | yes | never touch", "hold | 7400 | no | x; Zane 11 Nov 18:00"),  # dup below
-                 ("retire", "hold | 7400 | no | dup", "Zane 11 Nov 18:00"))             # two equal lines
+                 ("replace", self.OLD, f"preapprove | #5178 | no | {SHA} | deep"),
+                 ("replace", self.OLD, "preapprove | #5178 | no | a5d26a5 | Zane 11 Nov 18:00"),
+                 ("replace", "hold | 5675 | yes | never touch", "hold | 7400 | no | x; Zane 11 Nov 18:00"),
+                 ("retire", "hold | 7400 | no | dup", "Zane 11 Nov 18:00"))
         for args in cases:
             with self.subTest(args=args):
                 self.holds.write_text(BASE + self.OLD + "\nhold | 7400 | no | dup\nhold | 7400 | no | dup\n"

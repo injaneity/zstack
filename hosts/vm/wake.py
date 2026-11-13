@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""wake.py: wake onigiri through the urgent-wake webhook the merge job already POSTs to, on failures only. Best effort.
-
-  wake.py blocked|failed|done <message> [pr=N] [rc=N] [report=<path>] [prs=<url,...>]
-
-A session that cannot go on sends blocked or failed with pr=. bin/pi-run sends failed when a run exits non-zero, and done
-when it exits 0 and its brief has a `wake: finish` line, both with rc, report and prs. Any other kind exits 2: a finished
-run is collected by the pickup (bin/pi-run list and collect), and a question goes in the report.
-The body keeps the merge job's keys (kind, id, pr, reason, time) with source=pi and host; id is $PI_SESSION_ID.
-ONIGIRI_WAKE_DRY=1 prints the body and sends nothing. Exits 0 whatever happens to the POST and prints one log-safe
-status line on stderr. The key is only in KEY_FILE; a host without it skips with "webhook not configured".
-"""
 import json
 import os
 import re
@@ -22,7 +11,6 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# The urgent wake routine. The URL is not secret; the key is only in KEY_FILE (0600).
 URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
 KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
 SGT = ZoneInfo("Asia/Singapore")
@@ -35,7 +23,6 @@ def now():
 
 
 def send(body, attempts=3, timeout=5):
-    """POST one event. Returns a log-safe status line; never echoes the key. Retries network errors and 5xx."""
     try:
         with open(KEY_FILE) as f:
             key = f.read().strip()
@@ -68,7 +55,6 @@ def sha():
 
 
 def post(kind, message, fields=None):
-    """Send one pi event (printed instead under ONIGIRI_WAKE_DRY). Returns the log-safe status line."""
     body = {"kind": kind, "id": os.environ.get("PI_SESSION_ID") or None, "pr": None, "reason": message[:1000],
             "time": now(), "source": "pi", "host": socket.gethostname().split(".")[0]}
     body.update({k: int(v) if k in ("pr", "rc") else v.split(",") if k == "prs" else v for k, v in (fields or {}).items()})

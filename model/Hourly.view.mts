@@ -1,7 +1,5 @@
-// The reader's words for Hourly.tla: one hourly pickup pass after another.
 export const title = "zstack hourly pickup: a pass that could pick never ends silently";
-const AUTO = 3;   // config/policy.toml [slots] auto, as HourlyChart.cfg sets it
-// Hourly.tla's CouldPick: an auto slot known free (none while the peer is unreachable) and a Todo no rule blocks.
+const AUTO = 3;
 const could = (v: any) => {
   const seenAuto = v.auto + (v.blind ? 0 : v.peer);
   const free = v.blind ? 0 : Math.max(0, AUTO - seenAuto);
@@ -27,7 +25,7 @@ const steps: Record<string, string | null> = {
   DrainDone: "the queue is drained, or its pools are full",
   Picks: "it launches a Todo",
   Skips: "it skips a Todo with one of the five rules",
-  Declines: "the chat declines the whole list in one row",   // the main-4e08648 mutants only
+  Declines: "the chat declines the whole list in one row",
   PickDone: "auto slots full, or every Todo launched or skipped",
   Done: "bin/hourly done stores the fingerprint",
   StaysSilent: "the pass stops with no row",
