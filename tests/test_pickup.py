@@ -18,7 +18,11 @@ FAKE_GH = """#!/bin/bash
 [ -e "$T/gh-sleep" ] && sleep 30
 case "$*" in
   "issue list"*) cat "$T/issues.json";;
+  "issue view "*) jq -n --arg n "$3" '{state: (if ($n | tonumber) % 2 == 0 then "OPEN" else "CLOSED" end)}';;
   *review-requested*) cat "$T/reviews.json";;
+  "pr list"*in:body*) cat "$T/salvages.json" 2>/dev/null || echo '[]';;
+  "pr view "*closingIssuesReferences*) jq -e --argjson n "$3" '.[] | select(.number == $n)' "$T/sources.json" 2>/dev/null \
+    || { echo "no pull request $3" >&2; exit 1; };;
   "pr list"*isDraft*) cat "$T/open.json";;
   "pr view"*) echo '{"headRefOid": "'"$(printf 'f%.0s' $(seq 40))"'", "headRefName": "x"}';;
   *) echo "fake gh: $*" >&2; exit 1;;
@@ -193,6 +197,49 @@ class Pickup(unittest.TestCase):
         brief = (self.root / "review" / "cua-304-review-130aaaa" / "brief.md").read_text()
         self.assertIn("a teammate (review-only: a first review and nothing else)", brief)
         self.assertIn("`drafts:`", brief)
+
+    def test_salvage_links_the_pass_lists_for_the_chat(self):
+        """Zane, 13 Nov 15:31 SGT: a salvage PR carries `Fixes #N` for its source issue, and an issue is closed by hand only
+        with a comment naming the merged PR of ours that fixed it. The pass names what is left: an open salvage missing
+        the line, and, for a salvage merged since [issues] since, an issue it left open (even numbers are open here) or a
+        source PR still open. Older merges, closed issues and held sources are not listed."""
+        self.peer(holds="hold | 604 | no | note\n")
+        ref = lambda *ns: [{"number": n} for n in ns]   # noqa: E731
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 701, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #601\n", "closingIssuesReferences": []},
+            {"number": 702, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #602\n\nFixes #12\n",
+             "closingIssuesReferences": ref(12)},
+            {"number": 703, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z",
+             "body": "Salvaged from https://github.com/trycua/cua/pull/603", "closingIssuesReferences": []},
+            {"number": 704, "state": "MERGED", "mergedAt": "2026-11-14T09:00:00Z", "body": "Salvaged from #604",
+             "closingIssuesReferences": ref(16)},
+            {"number": 705, "state": "MERGED", "mergedAt": "2026-11-01T00:00:00Z", "body": "Salvaged from #605",
+             "closingIssuesReferences": []},
+            {"number": 706, "state": "CLOSED", "mergedAt": None, "body": "Salvaged from #606", "closingIssuesReferences": []},
+            {"number": 707, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #9999", "closingIssuesReferences": []}]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 601, "state": "OPEN", "closingIssuesReferences": ref(10, 11)},
+            {"number": 602, "state": "OPEN", "closingIssuesReferences": ref(12)},
+            {"number": 603, "state": "OPEN", "closingIssuesReferences": ref(14, 15)},
+            {"number": 604, "state": "OPEN", "closingIssuesReferences": ref(16)},
+            {"number": 605, "state": "OPEN", "closingIssuesReferences": ref(18)},
+            {"number": 606, "state": "OPEN", "closingIssuesReferences": ref(20)}]))
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
+            "- salvage cua#701 of cua#601 lacks `Fixes #10`, `Fixes #11` in its body: add it",
+            "- cua#14 is still open: our merged salvage cua#703 fixed it but lacked `Fixes #14`; close it with a comment naming cua#703",
+            "- cua#603 is still open after its salvage cua#703 merged: close it with a comment naming cua#703 (playbooks/hourly.md step 7)"]))
+        self.assertNotIn("error:", report)   # a source GitHub can't show (#9999) is unchecked, not an error
+        self.pickup()
+        self.assertEqual(len(self.wakes()), 1)   # the same items wake once
+
+    def test_a_review_brief_asks_a_salvage_for_its_fixes_lines(self):
+        self.github(reviews=[review(310, "2026-10-06T00:00:00Z", login="CMGS")])
+        self.pickup()
+        brief = (self.root / "review" / "cua-310-review-136aaaa" / "brief.md").read_text()
+        self.assertIn("A salvage PR's body carries `Salvaged from #310` and a `Fixes #<issue>` line for each issue #310 fixes", brief)
 
     def test_no_pick_while_a_host_is_unreachable_or_github_fails(self):
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])

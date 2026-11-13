@@ -110,7 +110,9 @@ class Rules(unittest.TestCase):
             self.assertIn(old, r["text"])
             r["text"] = r["text"].replace(old, new)
             return data
-        for rid, old, new, why in (("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
+        for rid, old, new, why in (("issue-close", "`trycua/cua`", "`trycua/other`", "`trycua/cua`"),
+                                   ("salvage-fixes", "`Fixes #<issue>`", "`Closes #<issue>`", "`Fixes #<issue>`"),
+                                   ("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
                                    ("patent-scope", "Keyvault", "Vault", "keyvault"),
                                    ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human")):
             with self.subTest(rid=rid), self.assertRaisesRegex(policy.PolicyError, re.escape(why)):

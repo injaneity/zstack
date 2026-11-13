@@ -97,8 +97,18 @@ class Hourly(unittest.TestCase):
         self.assertIn("`follow-ups:` and `questions:`", text)
         self.assertTrue(r.stderr.startswith("zstack "))
         self.assertEqual(self.sh("new-brief", "cua-1", "coding", stdin=TASK).returncode, 3)
+        self.assertNotIn("Fixes #<issue>", text)
         self.assertEqual(self.sh("new-brief", "cua-2", "no-such-role", stdin=TASK).returncode, 1)
         self.assertEqual(self.sh("new-brief", "cua-3", "coding", stdin="").returncode, 2)
+
+    def test_a_salvage_brief_carries_the_fixes_rule(self):
+        """Zane, 13 Nov 15:31 SGT: salvage PRs always carry `Fixes #N` for the source issue, so a salvage brief says so
+        whoever wrote it."""
+        r = self.sh("new-brief", "salvage-1", "coding", stdin="Salvage outside PR trycua/cua #7255 by someone.\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rule = subprocess.run([str(BIN / "policy"), "rules", "salvage-fixes"], capture_output=True, text=True).stdout
+        self.assertIn(rule[2:].strip(), Path(r.stdout.strip()).read_text().splitlines())
+        self.assertIn("`Fixes #<issue>`", rule)
 
     def test_queue_then_hourly_shows_it_and_launch_starts_it_and_logs_it(self):
         self.sh("new-brief", "q1", "research", stdin=TASK)
