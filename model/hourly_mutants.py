@@ -14,7 +14,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DECLINES = ("PickDone ==", "Declines == pc = \"pick\" /\\ free > 0 /\\ todo # {} /\\ pc' = \"end\" /\\ rows' = rows \\cup {<<\"todo\", \"filed\">>}\n"
             "  /\\ UNCHANGED <<World, dirty, free>>\nPickDone ==")
 DECLINES_NEXT = ("PassSteps == PassStarts", "PassSteps == Declines \\/ PassStarts")
-NO_FREE_IN_ACTS = ("Acts == ended \\/ qhand + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ qhand + qauto > 0 \\/ blind")
+NO_FREE_IN_ACTS = ("Acts == ended \\/ SeenStalled \\/ qhand + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})",
+                   "Acts == ended \\/ SeenStalled \\/ qhand + qauto > 0 \\/ blind")
 M = [
     # name, the bug, [(old, new)], the rule that must catch it
     ("main-4e08648-silent-skip", "acts had no free auto slot, so an unchanged pass skipped with Todos to pick (before #68)",
@@ -68,6 +69,9 @@ M = [
     ("drain-ignores-pause", "the drain starts a queued auto run in a paused peer's queue",
      [("CanDrainAuto(there) == qauto > 0 /\\ ~AutoWaits(blind) /\\ (there => ~pause)",
        "CanDrainAuto(there) == qauto > 0 /\\ ~AutoWaits(blind)")], "NoAutoOnPausedPeer"),
+    ("hung-by-mtime", "bin/hourly read a stall from the session file's mtime, which pi's cache-warming moves every few minutes, so "
+     "cua-2879 never showed HUNG? (before run.idle_min, 13 Nov)",
+     [("SeenStalled == stalled", "SeenStalled == FALSE")], "NoSilentPassWhileStalled"),
 ]
 
 
