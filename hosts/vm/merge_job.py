@@ -27,7 +27,8 @@ an app). The job's own merges are the heads in state.json landed and queued.
   merge_job.py --webhook-test   one wiring-test POST to the urgent webhook
 
 PAUSED (first line = reason) stops merge and rerun, and holds back webhook POSTs: events.log still has the wake, and
-the first pass after the pause sends it. An urgent wake (URGENT) POSTs the webhook once per kind, PR and key, retried
+the first pass after the pause sends it. Free disk under config/policy.toml hourly.floor_gb is a disk wake, once per
+episode below the floor. An urgent wake (URGENT) POSTs the webhook once per kind, PR and key, retried
 every pass until it is sent (a host with no webhook key counts as sent). A wait goes
 nowhere but events.log and --dry-run's `who=` lines, which bin/hourly prints under needs-Zane and unstick. Outputs:
 $ROOT/events.log (one line per decision, only when it changes), $ROOT/tick/state.json and $ROOT/tick/last-run. ROOT is
@@ -40,6 +41,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -69,6 +71,7 @@ GATE_CHECK = POLICY["merge"]["gate_check"]   # the one check the gate reads: it 
 NOT_RERUN = set(POLICY["merge"]["never_rerun"])   # never rerun, never a reason to wait
 TIERS = POLICY["merge"]["tiers"]   # the one risk enum, mildest first; a PR declaring none of these never merges
 PREAPPROVE_TIERS = set(POLICY["merge"]["preapprove_tiers"])   # these need a preapprove row pinned to the head
+FLOOR_GB = POLICY["hourly"]["floor_gb"]   # free disk under this on the merge host is an urgent disk wake (12 Nov retro)
 WATCH_LIMIT = 500        # merged PRs one merge-watch fetch may return; a full page means the window was cut short
 WATCH_OVERLAP_S = 6 * 3600   # the next window starts this long before this run, for GitHub search lag
 MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5   # GitHub computes mergeability on the first ask, so UNKNOWN is read again
@@ -236,7 +239,7 @@ def blockers(pr, paused):
     return R
 
 
-URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed")   # the kinds that POST
+URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed", "disk")   # the kinds that POST
 ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}   # only Zane moves these
 SESSION_CODES = {"no-tier", "conflict"}                                   # the session that opened the PR fixes these
 
@@ -454,6 +457,11 @@ def sha():
     return subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
 
 
+def free_gb():
+    """Free GiB on the disk that holds ROOT, as bin/hourly counts it."""
+    return shutil.disk_usage(ROOT).free // 2**30
+
+
 def parity_problem():
     """Why this host is not merged main and nothing else (hosts/check-parity's FAIL lines), or None."""
     try:
@@ -470,7 +478,7 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused   # merge, rerun
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}   # a corrupt state file stops the run
-        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed")}
+        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed", "disk")}
         if "woken" not in s:   # once: the urgent keys the buffer had, so no wake goes out twice; the rest of it is dropped
             self.s["woken"] = {k: v for k, v in s.get("buffered", {}).items() if k.split("|")[0] in URGENT}
         if "landed" not in s:   # once, on the first run with this field
@@ -514,6 +522,20 @@ class Job:
             self.s["woken"][key] = now()
             return True
         return False
+
+    def disk(self):
+        """Free disk under FLOOR_GB is one urgent disk wake per episode: the episode starts the first run that sees it low
+        and ends the first run that sees it at the floor again (the VM sat at 15 to 18G for hours on 12 Nov unnoticed)."""
+        try:
+            free = free_gb()
+        except OSError as e:
+            return self.event("error", "disk", f"{type(e).__name__}: {str(e)[:150]}")
+        if free >= FLOOR_GB:
+            if self.s["disk"].pop("since", None):
+                self.event("disk-ok", "host", f"{free}G free, back at the {FLOOR_GB}G floor")
+            return
+        since = self.s["disk"].setdefault("since", now())
+        self.wake("disk", "host", since, f"{free}G free on {ROOT}, under the {FLOOR_GB}G floor: prune finished sessions' build output")
 
     def holds(self):
         try:
@@ -709,6 +731,7 @@ class Job:
             self.errors += 1
             self.event("error", "parity", drift)
             self.wake("parity", "host", now()[:13], drift)
+        self.disk()
         holds = self.holds()
         for name, fn in (("merge", lambda: self.merges(holds)), ("merge-watch", self.merge_watch)):
             try:
