@@ -3,6 +3,7 @@ step() is checked as a table; the rest runs the real launcher against a fake `pi
 Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import importlib.machinery
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -120,6 +121,18 @@ class Step(unittest.TestCase):
             with self.assertRaises(pr.Refused):
                 pr.step(run, "collect", alive)
 
+    def test_a_stopped_run_ends_with_no_wake_whether_it_exits_or_is_lost(self):
+        why = "2026-11-12T03:11:58Z replaced by pickup-timer-onhost.v2"
+        out = pr.step(self.R("running"), "exit", pid=10, rc=143, cap=3, stopped=why)
+        self.assertEqual((out["state"], out["rc"], out["wake"], out["stopped"]), ("exited", 143, None, why))
+        self.assertIsNone(pr.step(out, "collect")["wake"])
+        out = pr.step(self.R("running", wake_finish=True), "exit", pid=10, rc=1, resume_at="t", cap=3, stopped=why)
+        self.assertEqual((out["state"], out["wake"]), ("exited", None))   # a stop is not a 429 to resume, nor a done
+        out = pr.step(self.R("running"), "collect", alive=False, stopped=why)
+        self.assertEqual((out["state"], out["wake"], out["stopped"]), ("collected", None, why))
+        reopened = pr.step(out, "ci", pr="7", head="h", why="w", now="n", cap=3)
+        self.assertNotIn("stopped", reopened)
+
 
 class CiStep(unittest.TestCase):
     """The thread that pushed a PR's head owns its CI: a red PR reopens the collected run, once per head, fix_attempts times."""
@@ -197,13 +210,16 @@ class Model(unittest.TestCase):
                      for wf in (False, True) for dr in (False, True)]
             moves += [("pi-run queue <id>", "queue", dict(since="1", role="coding"), False)]
             moves += [(collect + (" [sends the failed wake]" if key[0] == "lost" else ""), "collect", {}, False)]
+            if key[0] == "lost":
+                moves += [(collect + " [stopped: no wake]", "collect", dict(stopped="t why"), False)]
             moves += [("its PR is red after the rerun, at a head it pushed [fix attempts left]", "ci",
                        dict(pr="7", head=f"h{len(seen)}", why="ci-gate", now="1", cap=1), False)]
             if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
                 limit = "resumes left, frees its slot" if key[2] < 1 else "resume.cap spent, sends the failed wake"
                 moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3, cap=1), False),
                           (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0, cap=1), False),
-                          (f"pi stops on an upstream 429 [{limit}]", "exit", dict(pid=run["pid"], rc=1, resume_at="5", cap=1), False)]
+                          (f"pi stops on an upstream 429 [{limit}]", "exit", dict(pid=run["pid"], rc=1, resume_at="5", cap=1), False),
+                          ("pi exits after pi-run stop <id> [no wake]", "exit", dict(pid=run["pid"], rc=143, cap=1, stopped="t why"), False)]
                 edges.add((key[0], "lost", "KILL or OOM"))
                 todo.append((run, False))
             for lbl, event, fields, alive_after in moves:
@@ -214,10 +230,13 @@ class Model(unittest.TestCase):
                 if after != run:   # a second queue is no step
                     edges.add((key[0], name(after, alive_after), lbl))
                 todo.append((after, alive_after))
-        joined = {}   # the chart draws one edge per (from, to), its labels sorted and joined with " or "
+        joined = {}   # the chart draws one edge per (from, to), its labels joined with " or " in the order TLC met them
         for a, b, lbl in edges:
             joined.setdefault((a, b), set()).add(lbl)
-        self.assertEqual({(a, b, " or ".join(sorted(ls))) for (a, b), ls in joined.items()}, chart())
+        drawn = {(a, b): lbl for a, b, lbl in chart()}
+        self.assertEqual(set(joined), set(drawn))
+        for edge, labels in joined.items():   # a label may itself hold " or ", so the chart's is matched as a whole
+            self.assertIn(drawn[edge], {" or ".join(p) for p in itertools.permutations(sorted(labels))}, edge)
 
 
 def tomllib_load(path):
@@ -444,6 +463,33 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.finished("term")["rc"], 143)
         self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
         self.assertIn("wake: failed", self.log("term"))
+
+    def test_pi_run_stop_ends_the_run_with_no_wake(self):
+        """12 Nov: option-a-build was killed on Zane's call, and raw-macos-build.v1 and pickup-timer-onhost.v1 were replaced
+        by .v2 briefs. Each sent a failed wake. A run stopped with `pi-run stop` sends none."""
+        (self.t / "w.md").write_text("task\nwake: finish\n")   # even a run that asked for its done wake
+        self.start("v1", hang=True, brief="w.md")
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        r = self.pi_run("stop", "v1", "replaced", "by", "v1.v2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        run = self.finished("v1")
+        self.assertEqual((run["rc"], run["wake"]), (143, None))
+        self.assertTrue(run["stopped"].endswith(" replaced by v1.v2"))
+        self.assertEqual((self.t / "got-sig").read_text().strip(), "TERM")
+        self.assertNotIn("wake: ", self.log("v1"))
+        self.assertEqual(self.pi_run("collect", "v1").stdout, "v1 attempt=1 rc=143\n")
+        self.assertIsNone(self.run_json("v1")["wake"])
+        self.assertEqual(self.pi_run("stop", "v1", "again").returncode, 3)   # not running
+
+    def test_a_stopped_run_whose_supervisor_was_killed_collects_with_no_wake(self):
+        self.start("gone2", hang=True)
+        wait_for(lambda: (self.t / "pi-pid").exists())
+        (self.t / "root" / "review" / "gone2" / "stopped").write_text("t killed by hand\n")
+        os.killpg(self.run_json("gone2")["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "gone2 lost attempt=1 rc=None\n"))
+        r = self.pi_run("collect", "gone2")
+        self.assertEqual((r.stdout, [x for x in r.stderr.splitlines() if x.startswith("{")]), ("gone2 attempt=1 lost\n", []))
+        self.assertIsNone(self.run_json("gone2")["wake"])
 
     def test_no_pi_starts_nothing_and_a_pi_gone_after_the_check_is_a_failed_exit_not_a_loss(self):
         r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH=f"{self.t}/py:/usr/bin:/bin")   # no pi on PATH

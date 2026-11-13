@@ -39,7 +39,16 @@ host = "each"
 format = "json"
 writer = "bin/pi-run"
 readers = ["bin/hourly"]
-schema = "{state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes, limit_resumes, ci, ci_now} (bin/pi-run docstring, bin/PiRun.tla)"
+schema = "{state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes, limit_resumes, stopped, ci, ci_now} (bin/pi-run docstring, bin/PiRun.tla)"
+
+
+[file.stopped]
+path = "review/<id>/stopped"
+host = "each"
+format = "mark"
+writer = "bin/pi-run"
+readers = ["bin/pi-run"]
+schema = "`<utc> <why>`: `pi-run stop` stopped the run on purpose, so its exit or lost collect sends no wake; `pi-run ci` removes it"
 
 
 [file.run-log]
