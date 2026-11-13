@@ -601,7 +601,7 @@ class Stage(unittest.TestCase):
         real = self.gh
         with patch.object(mj, "gh_json", lambda a: seen.append(a) or real(a)):
             out = self.run_(dry=True)
-        q = f"q=repo:trycua/cua is:pr is:open author:injaneity"
+        q = "q=repo:trycua/cua is:pr is:open author:injaneity"
         self.assertEqual([a for a in seen if any("search(" in x for x in a)],
                          [["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}"],
                           ["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}", "-f", "after=10"],
