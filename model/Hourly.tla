@@ -110,12 +110,14 @@ Moves(i) == pc = "idle" /\ i \in todo /\ todo' = todo \ {i} /\ dirty' = TRUE
 \* launch starts while it holds the lock, and a run that ends or is queued meanwhile is the next pass's, as step 5 goes
 \* by the drain's `queue:` line. So the world moves at any time except during the drain.
 \* A running run exits: its slot frees and it waits for a collect. Nothing stops a running run to make room.
-RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE /\ stalled' = FALSE
+\* The run that ends is the stalled one or another: a stall outlives the end of another run while any run is left.
+RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
   /\ \/ auto > 0 /\ auto' = auto - 1 /\ UNCHANGED <<peer, hand, legacy, quick>>
      \/ peer > 0 /\ peer' = peer - 1 /\ UNCHANGED <<auto, hand, legacy, quick>>
      \/ hand > 0 /\ hand' = hand - 1 /\ UNCHANGED <<auto, peer, legacy, quick>>
      \/ legacy > 0 /\ legacy' = legacy - 1 /\ UNCHANGED <<auto, peer, hand, quick>>
      \/ quick > 0 /\ quick' = quick - 1 /\ UNCHANGED <<auto, peer, hand, legacy>>
+  /\ stalled' \in {FALSE, stalled /\ auto' + peer' + hand' + legacy' + quick' > 0}
   /\ UNCHANGED <<todo, blocker, blind, pause, strayed, qhand, qauto, fair, free, pc, rows>>
 \* A running run stops showing progress, between passes. Until it ends (its supervisor stops it) it stays stalled.
 RunStalls == pc = "idle" /\ ~stalled /\ auto + peer + hand + legacy + quick > 0 /\ stalled' = TRUE /\ dirty' = TRUE
