@@ -1,7 +1,7 @@
 ---- MODULE Pickup ----
 EXTENDS Naturals, TLC
 
-CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules
+CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules, Foreign
 Active == {"collect", "drain", "pick", "report", "wake"}
 Min(a, b) == IF a < b THEN a ELSE b
 Sub(a, b) == IF a > b THEN a - b ELSE 0
@@ -36,7 +36,7 @@ Eligible(i) == i \notin taken /\ blocker[i] = "none"
 Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 News == unsent \/ (standing /\ ~seen)
 
-Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = {}
+Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = Foreign
   /\ auto = Sub(Auto, 1) /\ drained = Sub(Hand, 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
   /\ standing = FALSE /\ seen = FALSE /\ unsent = FALSE /\ pending = FALSE
   /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ rows = {}
@@ -126,6 +126,7 @@ OutputIsNew == [][\A p \in Passes : pc[p] # "wake" /\ pc'[p] = "wake" => (had' <
 WakeIffOutputOrFailure == [][\A p \in Passes : pc[p] \in Active /\ pc'[p] = "off" => (woke <=> (had \/ failed))]_vars
 NoResultLost == pending => unsent
 ResultReachesChat == pending ~> ~pending
+ForeignNeverLaunched == \A i \in Foreign : <<i, "launch">> \notin rows
 EveryPassEnds == \A p \in Passes : pc[p] \in Active ~> pc[p] = "off"
 
 ChartSteps == blocker' = blocker /\ blind' = blind /\ queued' = queued /\ chat' = chat /\ standing' = standing

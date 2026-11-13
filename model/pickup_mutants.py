@@ -38,6 +38,8 @@ M = [
       ("  /\\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>",
        "  /\\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, standing, seen, unsent, lock, free, had, failed, woke>>")],
      "NoResultLost"),
+    ("foreign-brief-not-taken", "a review dir with another launcher's brief and no run is not taken, so its brief runs as written",
+     [("/\\ taken = Foreign\n", "/\\ taken = {}\n")], "ForeignNeverLaunched"),
     ("failed-post-clears-outbox", "a wake whose POST failed empties the outbox",
      [("/\\ woke' = TRUE /\\ unsent' = (unsent \\/ failed)\n", "/\\ woke' = TRUE /\\ unsent' = FALSE\n")], "NoResultLost"),
 ]

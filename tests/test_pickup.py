@@ -154,6 +154,18 @@ class Pickup(unittest.TestCase):
         self.pickup()
         self.assertEqual([r[1] for r in self.rows("launch")][3:], ["cua-3", "cua-4", "cua-5"])
 
+    def test_a_brief_no_pickup_wrote_takes_its_id_and_a_died_pass_brief_launches_as_written(self):
+        (self.t / "hang").touch()
+        for sid, text in (("cua-4", "Task: Unstick trycua/cua#6561 at head fc0b2895. Linear CUA-4.\n"),
+                          ("cua-5", "# cua-5 (coding)\nrole: coding\nsource: auto\ntrycua/cua#5: issue 5\n")):
+            (self.root / "review" / sid).mkdir()
+            (self.root / "review" / sid / "brief.md").write_text(text)
+        self.github(issues=[issue(4, "2026-10-04T00:00:00Z"), issue(5, "2026-10-05T00:00:00Z")])
+        self.assertIn("1 candidates (1 taken before)", self.pickup())
+        self.assertEqual([r[1] for r in self.rows("launch")], ["cua-5"])
+        self.assertIn("#6561", (self.root / "review" / "cua-4" / "brief.md").read_text())
+        self.assertFalse((self.root / "review" / "cua-4" / "run.json").exists())
+
     def wait(self, sid, state, secs=10):
         end = time.time() + secs
         while time.time() < end:

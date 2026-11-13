@@ -93,6 +93,17 @@ def activity_min(d, sid):
 NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")
 
 
+def foreign_briefs(review, known):
+    out = []
+    for sid in sorted(os.listdir(review)) if os.path.isdir(review) else []:
+        brief = os.path.join(review, sid, "brief.md")
+        if sid in known or os.path.exists(os.path.join(review, sid, "run.json")) or not os.path.isfile(brief):
+            continue
+        if not any(x.strip() == "source: auto" for x in open(brief, errors="replace")):
+            out.append(sid)
+    return out
+
+
 def facts(full=True):
     r, ls = root(), run([os.path.join(PKG, "bin", "pi-run"), "list"])
     if ls.returncode:
@@ -113,6 +124,7 @@ def facts(full=True):
         runs[sid] = f
     if not full:
         return {"runs": runs}
+    ids += foreign_briefs(os.path.join(r, "review"), set(ids))
     parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     last = os.path.join(r, "tick", "last-run")
     try:
