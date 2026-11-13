@@ -289,7 +289,8 @@ def drain(dry):
 
 
 def taken_ids(hosts):
-    """Every review id on any host, and every id a launch row names: a pruned review dir is still taken."""
+    """Every review id on any host (a run, or a brief another launcher wrote: bin/hourly foreign_briefs), and every id a
+    launch row names: a pruned review dir is still taken."""
     ids = {sid for f in hosts.values() for sid in f.get("ids", [])}
     try:
         ids |= {x.split("\t")[3] for x in open(os.path.join(hourly.root(), "pickup.log"), errors="replace")

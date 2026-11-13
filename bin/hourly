@@ -111,6 +111,20 @@ def activity_min(d, sid):
 NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")   # a trycua/cua issue or PR a brief names
 
 
+def foreign_briefs(review, known):
+    """Review ids with a brief.md and no run.json that no pickup wrote (no `source: auto` line): an older launcher's
+    (a Linear-era CUA-<n> brief is cua-<n>, the id a pickup gives GitHub issue #<n>). Each is taken, so the pickup never
+    launches it as written; only its own unlaunched brief (a pass that died after new-brief) is."""
+    out = []
+    for sid in sorted(os.listdir(review)) if os.path.isdir(review) else []:
+        brief = os.path.join(review, sid, "brief.md")
+        if sid in known or os.path.exists(os.path.join(review, sid, "run.json")) or not os.path.isfile(brief):
+            continue
+        if not any(x.strip() == "source: auto" for x in open(brief, errors="replace")):
+            out.append(sid)
+    return out
+
+
 def facts(full=True):
     """This host: zstack sha and parity, free disk, and every run not collected, with the trycua/cua numbers its brief
     names (bin/pickup's overlap rule); every review id here, collected or not (bin/pickup's taken items); and on the merge
@@ -134,6 +148,7 @@ def facts(full=True):
         runs[sid] = f
     if not full:
         return {"runs": runs, "pools": 1}
+    ids += foreign_briefs(os.path.join(r, "review"), set(ids))
     parity = run([os.path.join(PKG, "hosts", "check-parity")], env={**os.environ, "ONIGIRI_ROOT": r})
     last = os.path.join(r, "tick", "last-run")   # the merge job's host only: its last finished run
     try:
