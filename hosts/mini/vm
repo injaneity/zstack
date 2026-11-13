@@ -1,6 +1,3 @@
 #!/bin/sh
-# vm: ssh into the onigiri-linux VM as box. `vm` alone opens a shell; `vm CMD` runs one. The key and known_hosts stay
-# on the mini, outside the package. hosts/mini/host.sh names this as the hourly's peer and sync-from-vm.sh uses it,
-# and ~/onigiri-vm/vm is a symlink to it for the chat's relay (docs/HOST.md).
 exec ssh -i "$HOME/.ssh/onigiri_vm_ed25519" -o UserKnownHostsFile="$HOME/onigiri-vm/known_hosts" \
   -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 box@192.168.64.142 "$@"

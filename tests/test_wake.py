@@ -1,5 +1,3 @@
-"""Tests for hosts/vm/wake.py, the pi event sender. No test reaches the network.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import contextlib
 import importlib.util
 import io

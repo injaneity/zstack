@@ -1,16 +1,9 @@
-// onigiri-mode's Hard rules' mechanical bans, enforced on bash commands and file writes instead of trusted to the prompt.
-// Pure: the caller passes the repo lookup, so tests run without pi or git. See docs/RULE-GUARD.md.
 import * as path from "node:path";
 import { fold } from "./holds.ts";
 import { base, commands, program } from "./shell.ts";
 
-/** Repos whose merges belong to the merge job (Hard rules, Merging: in trycua/cua the tick is the only merger), or null
- * when they can't be told. */
 export type Owned = ReadonlySet<string> | null;
 
-/** The merge job's repo, `merge.repo` in config/policy.toml, from `dump` (bin/policy dump's JSON; the caller runs it, so
- * this stays pure). A dump that fails or lacks the key is null: with the owned repo unknown, every merge and ready is
- * refused, as an unreadable holds file holds every PR. */
 export function mergeOwned(dump: () => string): Owned {
 	try {
 		const repo = JSON.parse(dump())?.merge?.repo;
@@ -20,8 +13,6 @@ export function mergeOwned(dump: () => string): Owned {
 	}
 }
 
-/** The repo whose issues a session closes by hand only with a comment naming the PR that fixed it, `issues.repo` in
- * config/policy.toml (Hard rules, Scope: issue-close), from the same dump. Unreadable is null: every hand close is refused. */
 export function issuesOwned(dump: () => string): Owned {
 	try {
 		const repo = JSON.parse(dump())?.issues?.repo;
@@ -31,15 +22,10 @@ export function issuesOwned(dump: () => string): Owned {
 	}
 }
 
-/** Whether the session's brief allows merging, so it may ready its own draft. The launcher sets $ONIGIRI_READY_ALLOWED
- * from the brief's `merge: allowed` header; the extension reads it once at load, so the session can't set it later. */
 export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
 	return env === "1";
 }
 
-/** What the guard asks of the machine: the GitHub repo (owner/name) checked out at a directory (null when it is not a
- * git checkout, so gh has no repo there; undefined when it can't be told), and whether a path (absolute, or starting
- * with ~) is one of the real holds files (holds.ts). `ghRepo` is the session's inherited $GH_REPO, which gh reads in any directory. */
 export interface Host {
 	repoAt(dir: string): string | null | undefined;
 	isHolds(p: string): boolean;
@@ -47,56 +33,33 @@ export interface Host {
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
-// A quoted word under these programs is a command line too: `ssh host "git push -f"`, `bash -c "..."`, `vm "..."`.
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
-// git global options that take the next word as their value.
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
-// the one sanctioned writer: bin/hold-row, which adds, retires or replaces a row relaying Zane's explicit call (Zane, 11 Nov)
 const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, use `bin/hold-row add '<row>; Zane <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
 
-/**
- * Whether the word `w`, a path in a command run in `dir`, may name a real holds file. A path the guard can resolve
- * (absolute, ~/, or relative to a known directory) counts only when it is one, symlinks followed, so a test root's
- * hold-prs.txt is an ordinary file. One it can't (a variable, a glob or brace, an unknown directory, or a path on a
- * remote host) counts when its file name is hold-prs.txt.
- */
 function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
 	const named = fold(base(w)) === HOLDS;
 	if (remote || /[$`*?[{]/.test(w) || /^~[^/]/.test(w)) return named;
-	// joined, not resolved: `..` after a symlink is the target's parent, which only the host can tell
 	const abs = /^[/~]/.test(w) ? w : dir && `${dir}/${w}`;
 	return abs === undefined ? named : host.isHolds(abs);
 }
 
-/**
- * A simple command, its raw words (env prefixes included) and every directory it might run in. A `cd` may fail
- * (`cd x || gh ...`), so a command keeps the directories from before each `cd` too; undefined is one that can't be
- * told (`cd ~/x`, `cd $X`, or a remote shell). `at` is the same for the holds check, which can't tell a relative cd
- * either, since $CDPATH may redirect it.
- */
 interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; at: (string | undefined)[]; remote: boolean }
 const REMOTE = new Set(["ssh", "vm"]);
 
-/** Whether `s` ends outside any quote or comment, so a `<<` after it is an operator and not text. */
 function unquotedEnd(s: string): boolean {
 	let q = "";
 	for (let i = 0; i < s.length; i++) {
 		const c = s[i];
 		if (q) { if (c === q) q = ""; else if (c === "\\" && q === '"') i++; }
 		else if (c === "'" || c === '"') q = c;
-		else if (c === "\\") { if (++i === s.length) return false; } // `\<<` escapes the operator
+		else if (c === "\\") { if (++i === s.length) return false; }
 		else if (c === "#" && (i === 0 || /[\s;&|()]/.test(s[i - 1]))) return false;
 	}
 	return !q;
 }
 
-/**
- * The line with each here-document body removed when it is only data: a `python3 - <<'EOF'` script or a
- * `cat > f <<'EOF'` body. A body stays when a shell on its line may read it (`bash <<EOF`, `ssh host <<EOF`, `cat <<EOF | sh`), when its delimiter
- * is unquoted and the body has a `$(` or backtick (the shell runs those), when the `<<` sits inside quotes, when its
- * line ends in a `\\` continuation, or when it has no closing line.
- */
 function stripHeredocs(line: string): string {
 	const lines = line.split("\n");
 	const out: string[] = [];
@@ -107,7 +70,6 @@ function stripHeredocs(line: string): string {
 			const end = lines.findIndex((l, k) => k > i && (m[1] ? l.replace(/^\t+/, "") : l) === m[3]);
 			if (end < 0) continue;
 			if (!m[2] && lines.slice(i + 1, end).some((l) => /\$\(|`/.test(l))) continue;
-			// any shell on the line may read it: `bash <<EOF`, `cat <<EOF | sh`; a continued line may add one
 			if (/\\$/.test(lines[i]) || commands(lines[i]).some((c) => SHELLS.has(program(c)[0] ?? ""))) continue;
 			lines.splice(i + 1, end - i - 1);
 		}
@@ -117,36 +79,27 @@ function stripHeredocs(line: string): string {
 
 function simpleCommands(line: string, dirs: (string | undefined)[], remote = false, depth = 0, env: string[] = [], at = dirs): Cmd[] {
 	const out: Cmd[] = [];
-	// the tokenizer splits a substitution out of the word it sits in (`cd /x/$(y)` reads as `cd /x/`), so on a line
-	// with one no cd can be told
 	const subst = /`|\$\(/.test(line);
 	for (const words of commands(stripHeredocs(line))) {
 		const w = program(words);
-		if (w[0] === "cd" || w[0] === "pushd" || w[0] === "popd") { // after keywords too: `{ cd x; ...; }`, `if cd x; then ...`
+		if (w[0] === "cd" || w[0] === "pushd" || w[0] === "popd") {
 			if (w[0] === "cd") {
-				// relative to every directory it might start in, since an earlier cd may have failed
 				const to = w[1] ?? "~";
 				const next = /^[~$]/.test(to) ? [undefined] : to.startsWith("/") ? [path.posix.resolve(to)] : dirs.map((d) => d && path.posix.resolve(d, to));
 				dirs = [...new Set([...dirs, ...next])];
 			}
-			// `cd -P x` takes x; `cd -`, `pushd +1` and popd go back to a directory the guard did not keep
 			const to = w[0] === "popd" ? "-" : w.slice(1).find((a) => !/^-[LPe@]+$/.test(a)) ?? "~";
-			// for holds only a literal absolute path is told: a relative one may go through $CDPATH, however it is set
-			// or spelled. It is kept as written (`cd -P`) and with `..` collapsed (bash's default logical cd).
 			const nextAt = subst || !to.startsWith("/") || /[$`*?[{]/.test(to) ? [undefined] : [to, path.posix.resolve(to)];
 			at = [...new Set([...at, ...nextAt])];
 			continue;
 		}
 		const raw = [...env, ...words];
-		// a wrapper that changes directory (`env -C dir`, `sudo -D dir`) runs the command somewhere the guard can't tell
 		const pre = words.slice(0, words.length - w.length);
 		const moved = pre.some((a) => /^(-C|--chdir|-D)(=|$)|^-C./.test(a) || /^-[A-Za-z]*[CD]$/.test(a));
 		const here = moved ? [undefined] : at;
 		out.push({ words: w, raw, dirs, at: here, remote });
-		// a local shell inherits this command's env prefix (`GH_REPO=x bash -c ...`); a remote one does not
 		const inner = REMOTE.has(w[0]) ? [] : raw.slice(0, raw.length - w.length);
 		if (depth < 3 && SHELLS.has(w[0] ?? ""))
-			// a local shell starts where this command runs, so a holds path in it resolves from there too
 			for (const a of w.slice(1)) if (/\s/.test(a)) out.push(...simpleCommands(a, [undefined], remote || REMOTE.has(w[0]), depth + 1, inner, REMOTE.has(w[0]) ? [undefined] : here));
 	}
 	return out;
@@ -156,7 +109,6 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 	let i = 1;
 	while (i < w.length && w[i].startsWith("-")) i += GIT_VALUE_OPTS.has(w[i]) ? 2 : 1;
 	if (w[i] !== "push") return undefined;
-	// -c core.hooksPath=, -ccore.hooksPath=, --config-env=core.hooksPath=..., or GIT_CONFIG_KEY_0=core.hooksPath
 	if ([...raw.slice(0, raw.length - w.length), ...w.slice(1, i)].some((a) => /core\.hookspath/i.test(a)))
 		return "it overrides core.hooksPath, which skips the pre-push hook";
 	for (const a of w.slice(i + 1)) {
@@ -167,9 +119,6 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 	return undefined;
 }
 
-/** The repo a gh command names: -R/--repo or a PR or run URL operand, or for `gh api` the endpoint's repos/<owner>/<name>/
- * path, whose `{owner}` and `{repo}` gh fills from the current repo (ghOwned resolves them). Option values (a header, a
- * field, a body) name nothing. */
 function ghNamedRepo(w: string[]): string | undefined {
 	const named = (m: RegExpMatchArray | null | undefined) => (m ? repoName(m[1]) : undefined);
 	if (w[1] === "api") return named(operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\//));
@@ -187,7 +136,6 @@ function ghNamedRepo(w: string[]): string | undefined {
 	return undefined;
 }
 
-/** `[HOST/]OWNER/REPO` or a URL, as gh accepts it, reduced to lower-case owner/repo. */
 function repoName(r: string | undefined): string | undefined {
 	return r?.toLowerCase().replace(/^(https?:\/\/)?/, "").replace(/\.git$/, "").split("/").filter(Boolean).slice(-2).join("/");
 }
@@ -204,29 +152,20 @@ function ghApiWrites(w: string[]): boolean {
 	return method ? method !== "GET" : fields;
 }
 
-// GraphQL mutations that ready, merge or auto-merge a PR. The query names a node id, not a repo, so any owned repo counts.
 const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
-// gh api options that take the next word as their value
 const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
 
-// gh pr merge/ready options that take the next word as their value
 const GH_VALUE_OPTS = new Set(["-R", "--repo", "-t", "--subject", "-b", "--body", "-F", "--body-file", "-A", "--author-email", "--match-head-commit", "-c", "--comment", "-r", "--reason", "--duplicate-of"]);
 
-/** Every repo (lower-case owner/name) a gh command `c` may act on, undefined where one can't be told: its -R, URL or
- * `gh api` path, else GH_REPO, else the checkout of each directory it might run in. */
 function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string | undefined)[] {
-	// GH_REPO from the command's own prefix wins; `GH_REPO=`, `env -u GH_REPO` and `env -i` drop the inherited one,
-	// and a remote shell never had it
 	const pre = raw.slice(0, raw.length - w.length);
 	const inline = pre.map((a) => a.match(/^GH_REPO=(.*)$/)?.[1]).filter((v) => v !== undefined).pop();
 	const cleared = pre.some((a, i) => a === "-i" || a === "--ignore-environment" || a === "--unset=GH_REPO" || ((a === "-u" || a === "--unset") && pre[i + 1] === "GH_REPO"));
 	const pattern = ghNamedRepo(w);
 	const named = pattern && !pattern.includes("{") ? pattern : repoName(inline !== undefined ? inline || undefined : cleared || remote ? undefined : host.ghRepo);
-	// every directory the command might run in counts, so a failed `cd` can't hide an owned checkout
 	const current = named ? [named] : dirs.map((d) => (d === undefined ? undefined : host.repoAt(d))).filter((r) => r !== null);
-	// `repos/{owner}/cua/...` takes each placeholder from the current repo, whichever it is
 	const fill = (r: string | undefined) => {
 		if (r === undefined) return undefined;
 		const [o, n] = r.split("/");
@@ -242,7 +181,6 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
-	// a flag, not the value of the option before it (`--subject --help`)
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
 	const act = help ? undefined :
@@ -257,14 +195,9 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
 }
 
-// A comment names the PR that fixed the issue: `#123` or a pull URL.
 const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const CLOSE_WAY = "Close a trycua/cua issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment \"Fixed by #<pr>.\"` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.";
 
-/** Why a gh command closes an issue in an `issues` repo other than as the issue-close rule allows, or undefined: `gh
- * issue close` needs `--comment` text naming a PR and no not-planned or duplicate reason; the REST and GraphQL closes
- * carry no comment, so they are refused, as is a REST issue update whose body comes from `--input`. The guard can't tell
- * that `#N` is a PR rather than an issue, or ours and merged: the session checks that. */
 function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	const w = c.words;
 	if ((issues && !issues.size) || w[0] !== "gh") return undefined;
@@ -288,18 +221,15 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 			act = "`gh issue close` without a `--comment` that names the PR that fixed it";
 	} else if (w[1] === "api" && ghApiWrites(w)) {
 		const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
-		// the endpoint without its query string or fragment: `issues/5?x=/a` is still issue 5
 		const issue = /\/issues\/[^/]+\/?$/.test((ops[0] ?? "").replace(/[?#].*$/s, ""));
 		if (ops[0] === "graphql" && w.some((a) => /\bcloseIssue\b/.test(a))) act = "a GraphQL closeIssue mutation";
 		else if (issue && w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a)))
 			act = "an issue close through `gh api`";
-		// a body from a file or stdin can't be read here, so it may close the issue
 		else if (issue && w.some((a) => /^--input(=|$)/.test(a)))
 			act = "an issue update through `gh api --input`, which may close it";
 	}
 	if (!act) return undefined;
 	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (bin/policy dump failed)`;
-	// GraphQL names a node id, not a repo, so it counts for any covered repo
 	if (act.includes("GraphQL")) return act;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown)`;
@@ -307,7 +237,6 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	return hit ? `${act} in ${hit}` : undefined;
 }
 
-/** The words that are not options. `valued` lists options that take the next word. */
 function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -320,15 +249,12 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 
 function writesHolds(w: string[], dir: string | undefined, remote: boolean, host: Host): boolean {
 	const isHolds = (a: string) => holdsAt(a, dir, remote, host);
-	// redirections: `> f`, `>> f`, `2>f`, `&>> f`, `>|f`, and `x>f` (the tokenizer keeps it one word). A word with
-	// whitespace in it was quoted, so its `>` is text: `echo "x >hold-prs.txt"` writes nothing.
 	for (let i = 0; i < w.length; i++) {
 		const m = /\s/.test(w[i]) ? null : w[i].match(/>>?\|?(.*)$/);
 		const to = m && (m[1] || w[i + 1]);
 		if (to && isHolds(to)) return true;
 	}
 	const [p, ...all] = w;
-	// drop redirections and their targets, so `tee x.bak < hold-prs.txt` reads the file instead of naming it
 	const args = all.filter((a, i) => !/^(?:\d*|&)?[<>]/.test(a) && !/^(?:\d*|&)?[<>]{1,2}\|?$/.test(all[i - 1] ?? ""));
 	const ops = operands(args, new Set(["-t", "-S", "-m", "-o", "-g", "-e", "--target-directory", "--suffix"]));
 	switch (p) {
@@ -337,12 +263,9 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 		case "sed": case "perl":
 			return args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place")) && ops.some(isHolds);
 		case "mv": case "rsync": case "cp": case "install": case "ln": case "ditto": {
-			// with -t DIR every operand is a source that lands in DIR under its own name; otherwise the last operand is
-			// the file written, or a directory each source lands in
 			const t = args.findIndex((a) => a === "-t" || a.startsWith("--target-directory"));
 			const into = t < 0 ? undefined : args[t].includes("=") ? args[t].slice(args[t].indexOf("=") + 1) : args[t + 1];
 			const sources = into !== undefined ? ops : ops.slice(0, -1);
-			// moving it away removes it, wherever it goes
 			if ((p === "mv" || args.includes("--remove-source-files")) && sources.some(isHolds)) return true;
 			const dest = into ?? ops[ops.length - 1];
 			if (dest === undefined || !sources.length) return false;
@@ -354,16 +277,10 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 	return false;
 }
 
-/** The reason to refuse a bash `command` run in `cwd`, or undefined. `ready` is readyAllowed(), `issues` issuesOwned(). */
 export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false, issues: Owned = new Set()): string | undefined {
-	// the launcher sets it from the brief. A session that set it (`X=1`, `export`, `printf -v`, `read`, a heredoc
-	// script, `${X:=1}`) would start a child pi that may ready, so any mention but a bare `$X` read is refused, heredoc
-	// bodies included. The bare reads go first, then quotes and backslashes, as the shell joins `ONIGIRI_READY_""ALLOWED`
-	// and `$'ONIGIRI_READY_ALLOWED'` into the name.
 	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/(?<!\\)\$ONIGIRI_READY_ALLOWED(?![A-Za-z0-9_])/g, "").replace(/["'\\]/g, "")))
 		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
 	for (const c of simpleCommands(command, [cwd])) {
-		// a `cd` may fail, so every directory the command might run in counts, as for gh
 		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
@@ -374,8 +291,6 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 	return undefined;
 }
 
-/** The reason to refuse a write or edit to `file` (as the tool got it, relative to `cwd`), or undefined. */
 export function checkWrite(file: string, host: Host = NO_HOST, cwd?: string): string | undefined {
-	// pi's tools drop a leading @ from the path
 	return holdsAt(file.replace(/^@/, ""), cwd, false, host) ? `blocked: it writes the holds file. ${HOLDS_WAY}` : undefined;
 }

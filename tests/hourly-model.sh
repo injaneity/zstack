@@ -1,10 +1,4 @@
 #!/bin/bash
-# Model-checks model/Hourly.tla, the hourly pickup: TLC passes every rule in model/Hourly.cfg (the safety rules at the
-# real pools) and model/HourlyLive.cfg (every pass ends), model/Hourly.mmd is the chart model/HourlyChart.cfg draws, and every
-# mutant in model/hourly_mutants.py fails on the rule it names (three put back zstack main 4e08648, before the pickup fix,
-# and two the shared 7-total/5-auto caps, before the slot split).
-# A change to bin/hourly's pass or the hourly playbook's steps 0 to 5 changes this model in the same PR.
-# usage: tests/hourly-model.sh   (TLA2TOOLS=<tla2tools.jar> and JAVA=<java> skip the mise lookup)
 set -u
 src="$(cd "$(dirname "$0")/.." && pwd)"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

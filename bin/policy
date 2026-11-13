@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
-"""policy: the one reader of zstack's declarative files in config/: policy.toml (values the code reads: models, slots,
-gates, the patent hold, the pickup), rules.toml (the Hard rules every session runs under) and state.toml (the runtime
-state files on a host, each with its one writer and its readers).
-
-  policy check          parse and validate all three: one line, exit 1 when one is not valid
-  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON
-  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)
-  policy rules          the Hard rules as the markdown bin/pi-run appends to every session's system prompt
-  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)
-
-Python readers load this file as a module and call load(), rules() or state(), which return the validated data or raise
-PolicyError. Every key is declared in a schema: an unknown key, a missing one or a wrong type is an error, never a
-default, so a typo cannot drop a rule without a word. The per-PR hold and preapprove rows are not config: they are the
-merge host's ledger, hold-prs.txt, a state file state.toml names (docs/HOST.md, Holds file). Runs on python3 3.9 or
-newer: 3.11 has tomllib, and older ones get vendor/tomli, the pinned upstream tomllib was copied from, because the mini's
-/usr/bin/python3 is 3.9 and cron or a bare shell runs it.
-"""
 import json
 import os
 import re
 import sys
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+USAGE = (
+    '  policy check          parse and validate all three: one line, exit 1 when one is not valid\n'
+    '  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON\n'
+    '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
+    "  policy rules          the Hard rules as the markdown bin/pi-run appends to every session's system prompt\n"
+    '  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)'
+)
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -45,12 +35,10 @@ def seat(v):
 
 
 def names(v):
-    """A list of distinct non-empty strings (it may be empty)."""
     return isinstance(v, list) and all(isinstance(x, str) and x.strip() for x in v) and len(set(v)) == len(v)
 
 
 def words(v):
-    """Distinct lowercase words: the merge job builds its risk regex from them, so nothing else may appear."""
     return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
 
 
@@ -59,13 +47,9 @@ def repo(v):
 
 
 def seats(v):
-    """One seat, or a non-empty list of them: a role run as a race has one seat per side (the designers)."""
     return seat(v) or isinstance(v, list) and bool(v) and all(seat(x) for x in v)
 
 
-# Each section: {key: (check, what it must be)}. Every key is required and no other is allowed: [models] names exactly
-# the roles bin/pi-run launches and the agents in agents/, so a misspelt verifier is an error, not a child that runs
-# on the parent's model.
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 SCHEMA = {
     "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
@@ -127,7 +111,7 @@ def validate(data):
                 raise PolicyError(f"missing {name}.{k}")
             if not check(sec[k]):
                 raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
-    if data["patent"]["public_repo"].lower() == data["patent"]["private_repo"].lower():   # GitHub names ignore case
+    if data["patent"]["public_repo"].lower() == data["patent"]["private_repo"].lower():
         raise PolicyError("patent.private_repo must differ from patent.public_repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
@@ -155,7 +139,6 @@ def text(v):
 
 
 def keys(where, d, want, optional=()):
-    """d is a table with exactly the keys `want` and any of `optional`."""
     if not isinstance(d, dict):
         raise PolicyError(f"{where} must be a table")
     for k in d.keys() - set(want) - set(optional):
@@ -166,9 +149,6 @@ def keys(where, d, want, optional=()):
 
 
 def validate_rules(data, pol):
-    """rules.toml: an intro and sections of rules with distinct ids. A rule that states a value the code enforces must
-    name policy.toml's copy of it, so the text and the code cannot drift apart: the patent rules name every held word
-    and both repos, and the risk rule names every tier."""
     keys("rules", data, ("schema", "intro", "section"))
     if type(data["schema"]) is not int or data["schema"] != 1:
         raise PolicyError(f"rules: schema must be 1, not {data['schema']!r}")
@@ -207,7 +187,6 @@ def rules(path=RULES):
 
 
 def render(data, ids=()):
-    """The Hard rules as markdown: the whole file, or only the rules `ids` names, in the order given."""
     if ids:
         by = {r["id"]: r["text"] for s in data["section"] for r in s["rule"]}
         if miss := [i for i in ids if i not in by]:
@@ -225,8 +204,6 @@ FORMATS = ("json", "toml", "rows", "lines", "tsv", "mark", "lock")
 
 
 def validate_state(data):
-    """state.toml: one [file.<name>] per runtime state file, with its path under $ONIGIRI_ROOT, its format, the one module
-    that writes it and the modules that read it (tests/test_state_files.py holds the code to this)."""
     keys("state", data, ("schema", "file"))
     if type(data["schema"]) is not int or data["schema"] != 1:
         raise PolicyError(f"state: schema must be 1, not {data['schema']!r}")
@@ -271,7 +248,7 @@ def main(argv):
     except PolicyError as e:
         print(f"policy: {e}", file=sys.stderr)
         return 1
-    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    print(USAGE, file=sys.stderr)
     return 2
 
 

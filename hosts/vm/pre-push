@@ -1,9 +1,4 @@
 #!/bin/sh
-# cua's pre-push hook: the patent hold at publish time (patent_push.py, next to this file). docs/HOST.md installs it
-# as a symlink at <root>/cua/.git/hooks/pre-push on every host, so it follows this checkout, and hosts/check-parity
-# fails when it is anything else. Do not bypass with --no-verify. python3 is PATH's, 3.9 or newer (bin/check-host).
-# <root> holds events.log: $ONIGIRI_ROOT, or the directory the clone is in (git runs a worktree's
-# hook from the clone's own .git/hooks).
 pkg=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
 echo "zstack $(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 ONIGIRI_ROOT=${ONIGIRI_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)} exec python3 "$(dirname "$(readlink -f "$0")")/patent_push.py" "$@"

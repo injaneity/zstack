@@ -1,7 +1,3 @@
-"""Mutation check for model/Pickup.tla: each mutant puts one bug into the pass (most of them a shape bin/pickup could
-take) and must make TLC fail with the rule it names, on Small.cfg (Pickup.cfg's rules on a smaller world). A mutant
-that still passes, or fails on another rule, means the model cannot see that bug.
-usage: python3 -I model/pickup_mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
 import subprocess
@@ -9,7 +5,6 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
-    # name, the bug, [(old, new)], the rule that must catch it
     ("no-lock", "two passes run at once (no flock on pickup.lock)",
      [("Lock(p) == pc[p] = \"trying\" /\\ lock = NoPass\n", "Lock(p) == pc[p] = \"trying\"\n")], "NoOverlap"),
     ("fingerprint-skip", "a pass with nothing changed skips its picks (bin/hourly's skip: before #68)",
@@ -35,7 +30,7 @@ M = [
     ("kill-is-silent", "a pass killed at its deadline ends with no wake (the parent dies with its child)",
      [("/\\ pc' = [pc EXCEPT ![p] = \"wake\"] /\\ failed' = TRUE /\\ had' = News",
        "/\\ pc' = [pc EXCEPT ![p] = \"off\"] /\\ failed' = TRUE /\\ had' = News /\\ lock' = NoPass"),
-      ("                 lock, free, woke, rows>>\n\\* hosts/vm/wake.py", "                 free, woke, rows>>\n\\* hosts/vm/wake.py")],
+      ("                 lock, free, woke, rows>>\nWakeOk(p)", "                 free, woke, rows>>\nWakeOk(p)")],
      "WakeIffOutputOrFailure"),
     ("collect-before-outbox", "a run collected before its report reached the outbox",
      [("/\\ ended' = FALSE /\\ unsent' = (unsent \\/ ended) /\\ pending' = (pending \\/ ended)",

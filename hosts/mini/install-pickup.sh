@@ -1,11 +1,4 @@
 #!/bin/bash
-# install-pickup.sh [on|off|status|print]: the mini's schedule for bin/pickup, a launchd LaunchAgent that starts one pass every
-# config/policy.toml [pickup] interval_s seconds (StartInterval). It is a plain timer: no KeepAlive and no RunAtLoad, so launchd
-# never restarts a pass that ended, and a pass that is still running when the timer fires is not started again (launchd
-# coalesces it; bin/pickup's lock covers a hand run too). `on` writes the plist and loads it, again after a change of
-# interval_s; `off` unloads it and removes the plist; `status` prints the plist's interval and launchd's state; `print`
-# prints the plist `on` would write, and writes and loads nothing.
-# The job runs the package's bin/pickup with ONIGIRI_HOST=mini, so hosts/mini/host.sh gives it the launch env.
 set -eu
 pkg="$(cd "$(dirname "$0")/../.." && pwd)"
 label=com.onigiri.pickup

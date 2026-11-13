@@ -1,59 +1,4 @@
 #!/usr/bin/env python3
-"""pi-run: the one launcher, and the only writer of a run's state. The model is bin/PiRun.tla (chart: bin/PiRun.mmd).
-
-  pi-run <id> <role> <brief> [extra pi args...]   start a detached pi session in $ONIGIRI_ROOT/review/<id>
-  pi-run collect <id>                             take a finished run's result, exactly once
-  pi-run queue <id>                               queue review/<id>/brief.md for the hourly drain (bin/queue)
-  pi-run ci <id> <pr> <head> <why...>             reopen a collected run for its trycua/cua PR that is red at <head>
-  pi-run list [<state>...]                        one line per run: <id> <state> attempt=<n> rc=<rc> [since= resume_at=]
-
-A run is review/<id>/run.json {state, attempt, pid, start, rc, wake_finish, wake, resume_at, since, role, pool, resumes,
-limit_resumes (its upstream-limit requeues, at most config/policy.toml resume.cap), and once its PR's CI reopened it:
-ci {pr: [heads]}, ci_now}. pool is the slot pool it counts in (config/policy.toml [slots]), tagged at
-queue and start from the brief: `source: auto` is auto, `source: quick` or role research is quick (the quick-check
-lane, in no pool), anything else is hand. A running run with no pool tag (started before the pools) counts as hand.
-A fresh start of an auto or hand run that bin/hourly has not counted (the drain and `bin/hourly launch` count first)
-takes this root's slots.lock and counts its pool across every host with `bin/hourly pools`. When the pool is full, or a
-host's runs are unknown (an unreachable peer, or one in $ONIGIRI_UNSEEN), it is queued instead, says so, and exits 0;
-the hourly drain starts it once its pool has room. A running run is never stopped to make room.
-step() is the whole lifecycle:
-
-  (no file)   --queue-->   queued     since = now, role from the brief's `role:` line, pool; a second queue changes nothing
-  (no file) or queued --start--> running   attempt + 1, a fresh pi session, pool from the brief; since is kept (now
-                                           when never queued)
-  queued with resume_at --start--> running  only from the hourly drain (PI_RUN_DRAIN=1, set by `bin/hourly recv
-                                           --drain`) once resume_at has passed: same attempt, same pi session, RESUME
-  running     --exit--->   exited     records pi's rc and the wake it sends: failed when rc != 0, done when rc is 0
-                                      and the brief has a `wake: finish` line, else none
-  running     --limit-->   queued     pi's last line is an upstream 429 (Claude Code or ChatGPT) or an incomplete Claude
-                                      Code upstream response (LIMIT): no wake, the slot is freed, resume_at is the reset
-                                      time pi names (else now), since is kept, limit_resumes + 1
-  running     --limit-->   exited     the same, once limit_resumes has reached resume.cap (config/policy.toml): the run
-                                      ends failed, and the failed wake names the cap and pi's last line
-  exited or lost --collect-> collected  the pickup's one command; a lost run's collect sends its failed wake first, and
-                                      then deletes cargo's target/ dirs under review/<id>/wt* whose worktree lsof
-                                      shows no process holding (prune), and logs the GB freed to stderr and run.log
-  collected   --ci------>  queued     its PR's ci-gate is red after the merge job's rerun, at a head this run pushed
-                                      (review/<id>/pushed, written by cua's pre-push hook): resume_at = now and ci_now
-                                      names the PR, head and failure, so the drain reopens the same session with them.
-                                      Once per PR and head, at most ci.fix_attempts heads per PR (config/policy.toml).
-  collected is otherwise final: a retry is a fresh id (onigiri-mode: nothing restarts a session)
-
-lost is running whose supervisor pid (with its start time) and process group are gone: a KILL or OOM. Every
-transition holds flock on the review dir, so two launchers or a launcher and a collect never interleave. A review dir
-with a QUEUED marker and no run.json (the queue before run.json had the state) becomes a queued run.json, with the
-marker's time as since, the first time pi-run reads that root.
-Exit codes: 0 done, 2 usage, 3 refused by the state, 4 setup failed. PI_RUN_DRY=1 checks a start and changes nothing.
-
-$ONIGIRI_HOST when set, else the name in ~/.config/onigiri/host, names hosts/<name>/host.sh, sourced with the subcommand as $1
-for the host's paths and env (ONIGIRI_ROOT, default ~/onigiri; ONIGIRI_BRIEF_PREFIX, a file put before the brief), so
-a launch from any shell (nohup, ssh, cron) loads it. A start then asks pi for the role's model in that env and
-exits 4, before any run state or wake, when pi lists none of the provider's models there (no credential). The role picks provider and
-model through bin/model-for. onigiri-mode's Hard rules (config/rules.toml, rendered by bin/policy rules into
-review/<id>/rules.md at each start) are appended to the system prompt as that file. A start first moves the package to
-origin/main (bin/ensure-package-main). The shipped host files
-then run hosts/check-parity, so a host that is not merged main and nothing else starts nothing (exit 4).
-"""
 import calendar
 import fcntl
 import json
@@ -69,10 +14,8 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
-         "| pi-run list [<state>...]")
-# pi's whole last line when the upstream refused on a usage limit or cut a response short: Claude Code's 429, its
-# incomplete response with status 200, unknown or 5xx (the relay lost it; five runs on 11 Nov passed when run again), or
-# ChatGPT's limit (which names the wait). Another 4xx is the request itself, so it would fail again: that stays a failure.
+         "| pi-run list [<state>...]\nexit 0 done, 2 usage, 3 refused by the run's state (bin/PiRun.mmd), 4 setup failed; "
+         "PI_RUN_DRY=1 checks a start and changes nothing")
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
                    r"|You have hit your ChatGPT usage limit.*)")
 RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
@@ -88,7 +31,6 @@ _POLICY = []
 
 
 def policy():
-    """bin/policy, the one reader of config/policy.toml, as a module, loaded once so its PolicyError is one class."""
     if not _POLICY:
         import importlib.machinery
         import importlib.util
@@ -103,7 +45,6 @@ POOLS = ("auto", "hand", "quick")
 
 
 def caps():
-    """{"auto": n, "hand": n}: config/policy.toml [slots], the one copy of the pool caps. A bad policy stops the launch."""
     pol = policy()
     try:
         return pol.load()["slots"]
@@ -112,14 +53,11 @@ def caps():
 
 
 def pool_of(brief, role):
-    """The slot pool a brief's run counts in: its `source:` line, else quick for role research, else hand."""
     src = next((x.split(":", 1)[1].strip() for x in brief.splitlines() if x.startswith("source:")), "")
     return src if src in ("auto", "quick") else "quick" if role == "research" else "hand"
 
 
 def pool_wait(pool, counts, unknown):
-    """Why a run of `pool` cannot start now, given every host's running counts per pool, or "" when it can. The quick lane
-    never waits and holds no slot."""
     if pool == "quick":
         return ""
     if unknown:
@@ -139,7 +77,6 @@ def utc(t=None):
 
 
 def resume_cap():
-    """config/policy.toml resume.cap: how many times one run id resumes after an upstream limit. A bad policy stops the launch."""
     pol = policy()
     try:
         return pol.load()["resume"]["cap"]
@@ -148,11 +85,10 @@ def resume_cap():
 
 
 def step(run, event, alive=False, **f):
-    """The transition function: the run after `event`, or Refused. run is None before the first queue or start."""
     s = run["state"] if run else "absent"
     if s == "running" and not alive and event != "exit":
         s = "lost"
-    cont = s == "queued" and bool(run.get("resume_at"))   # a 429's continuation, waiting in the queue
+    cont = s == "queued" and bool(run.get("resume_at"))
     if event == "queue" and s in ("absent", "queued"):
         return run or {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
                        "resume_at": None, "since": f["since"], "role": f["role"], "pool": f.get("pool", "hand")}
@@ -202,8 +138,6 @@ def starttime(pid):
 
 
 def alive(run):
-    """The run's supervisor is the pid it recorded, or its process group still has members (pi outlived a KILL).
-    A pid is never reused while a group with that id exists, so a reused pid (another start time) means both are gone."""
     if not run or run["state"] != "running":
         return False
     now = starttime(run["pid"])
@@ -224,7 +158,6 @@ def read_json(p):
 
 
 class Run:
-    """One review dir under flock. `with Run(d) as r:` reads r.run; r.write() replaces run.json atomically."""
     def __init__(self, d):
         self.d, self.path = d, os.path.join(d, "run.json")
 
@@ -245,7 +178,6 @@ class Run:
 
 
 def sha():
-    """The zstack commit this file runs from; every entry point prints it."""
     r = subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True)
     return r.stdout.strip() or "unknown"
 
@@ -256,7 +188,6 @@ def die(code, msg):
 
 
 def host_name():
-    """$ONIGIRI_HOST when set (empty: no host file), else the one word in ~/.config/onigiri/host, else none."""
     if "ONIGIRI_HOST" in os.environ:
         return os.environ["ONIGIRI_HOST"]
     try:
@@ -282,7 +213,6 @@ def host_env(cmd):
 
 
 def last_line(d, attempt):
-    """The attempt's last non-blank line of run.log, stripped, or "" when there is none."""
     try:
         with open(os.path.join(d, "run.log"), errors="replace") as f:
             return ([x for x in f.read().split(f"== attempt {attempt}\n")[-1].splitlines() if x.strip()] or [""])[-1].strip()
@@ -291,7 +221,6 @@ def last_line(d, attempt):
 
 
 def limit_until(last, rc, got):
-    """When pi stopped on an upstream usage limit (its last log line), the UTC time to resume at, else None."""
     if not rc or got or not LIMIT.fullmatch(last):
         return None
     m = re.search(r"Try again in ~(\d+) min", last)
@@ -299,8 +228,6 @@ def limit_until(last, rc, got):
 
 
 def supervise(d, sid, cmd, env, cap):
-    """The forked child: owns the run until pi exits, then writes exited, or queued after a 429 while fewer than `cap`
-    resumes have been spent. Never returns."""
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
@@ -314,7 +241,7 @@ def supervise(d, sid, cmd, env, cap):
             proc.send_signal(sig)
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, fwd)
-    with Run(d) as r:   # blocks until the launcher has recorded this pid
+    with Run(d) as r:
         if not r.run or r.run["pid"] != os.getpid():
             os._exit(1)
         print(f"== attempt {r.run['attempt']}" + (" resumed" if r.run.get("resumes") else ""), flush=True)
@@ -329,8 +256,8 @@ def supervise(d, sid, cmd, env, cap):
             proc.send_signal(got[0])
     if rc is None:
         rc = 128 + got[0] if proc is None else proc.wait()
-    killed, rc = rc < 0, 128 - rc if rc < 0 else rc   # a signal-killed pi is a failure, whatever it printed last
-    with Run(d) as r:   # the wake goes before the write, so an exited run has already sent the wake it records
+    killed, rc = rc < 0, 128 - rc if rc < 0 else rc
+    with Run(d) as r:
         last = last_line(d, r.run["attempt"])
         until = limit_until(last, rc, got or killed)
         done = step(r.run, "exit", pid=os.getpid(), rc=rc, resume_at=until, cap=cap)
@@ -343,7 +270,7 @@ def supervise(d, sid, cmd, env, cap):
                     f"so it ends failed. pi's last line: {last}")
             print(f"pi-run: {why}", flush=True)
         if done.get("wake"):
-            try:   # best effort: a wake that cannot even start must not cost the exit record
+            try:
                 subprocess.run([sys.executable, WAKE, done["wake"], why, f"rc={rc}",
                                 *report_fields(d, done["attempt"])], env=env)
             except OSError as e:
@@ -353,19 +280,17 @@ def supervise(d, sid, cmd, env, cap):
 
 
 def report_fields(d, attempt):
-    """report= the run's log (pi -p prints the final report there) and prs= the PR links this attempt's part of it names."""
     log = os.path.join(d, "run.log")
     try:
         with open(log, errors="replace") as f:
             text = f.read().split(f"== attempt {attempt}\n")[-1]
-    except OSError:   # a missing log must not cost the exit record
+    except OSError:
         text = ""
     prs = dict.fromkeys(re.findall(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", text))
     return [f"report={log}"] + ([f"prs={','.join(prs)}"] if prs else [])
 
 
 def check(d, sid, run=False, **f):
-    """Refuse (exit 3) a start that step() refuses, before any setup."""
     if run is False:
         run = read_json(os.path.join(d, "run.json"))
     try:
@@ -375,7 +300,6 @@ def check(d, sid, run=False, **f):
 
 
 def on_main(argv, script=__file__):
-    """Restart `script` on the package's origin/main (bin/ensure-package-main) before anything that starts pi."""
     if not os.environ.get("ZSTACK_ENSURED"):
         if subprocess.run([os.path.join(PKG, "bin", "ensure-package-main")], stdout=sys.stderr).returncode:
             sys.exit(4)
@@ -391,15 +315,13 @@ def start(sid, role, brief, extra):
 
 
 def launch(sid, role, brief, extra):
-    """Start pi for a new attempt, or (from the hourly drain only) continue a 429'd attempt's pi session with RESUME."""
     env, root = host_env("dry" if os.environ.get("PI_RUN_DRY") else "start")
     d, f = os.path.join(root, sid), dict(drain=os.environ.get("PI_RUN_DRAIN") == "1", now=utc())
     migrate(root)
     run = read_json(os.path.join(d, "run.json"))
     cont = continuation(run)
-    # the pool its run.json was tagged with when queued, which the drain counted; untagged, a continuation is hand
     pool = (run or {}).get("pool") or ("hand" if cont else pool_of(open(brief).read(), role))
-    if cont:   # the same session goes on: its role, pi args and brief are the ones it started with
+    if cont:
         role, extra = run.get("role") or role, run.get("extra") or []
         text = CI_RESUME.format(**run["ci_now"]) if run.get("ci_now") else RESUME
         with open(os.path.join(d, "brief.full.md")) as fh:
@@ -412,12 +334,12 @@ def launch(sid, role, brief, extra):
         die(2, pm.stderr.strip())
     provider, model = pm.stdout.split()
     cap = resume_cap()
-    check(d, sid, run, **f)   # refuse before setup; checked again under the lock below
-    try:   # pi lists a provider's models only when it has a credential (a model missing from pi's catalog still runs)
+    check(d, sid, run, **f)
+    try:
         ls = subprocess.run(["pi", "--list-models"], env=env, capture_output=True, text=True).stdout
     except OSError as e:
         die(4, f"{sid}: cannot run pi in the launch env: {e}")
-    if not any(x.split()[:1] == [provider] for x in ls.splitlines()):   # the 13:04 10 Nov "No API key" runs stop here
+    if not any(x.split()[:1] == [provider] for x in ls.splitlines()):
         die(4, f"{sid}: no {provider} credential in the launch env: `pi --list-models` lists no {provider} model "
                f"(host file: {env.get('ONIGIRI_HOST') or 'none'}). Log in, or name the host file that loads it with ONIGIRI_HOST "
                "or ~/.config/onigiri/host; bin/check-host lists what this host lacks. Nothing started.")
@@ -426,7 +348,7 @@ def launch(sid, role, brief, extra):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
     pol = policy()
-    try:   # config/rules.toml through bin/policy, rendered now so pi reads main's text
+    try:
         rules = pol.render(pol.rules())
     except pol.PolicyError as e:
         die(2, f"no Hard rules: {e}")
@@ -438,7 +360,7 @@ def launch(sid, role, brief, extra):
     os.makedirs(d, exist_ok=True)
     with Run(d) as r:
         check(d, sid, r.run, **f)
-        if continuation(r.run) != cont or (r.run or {}).get("ci_now") != (run or {}).get("ci_now"):   # the setup above is stale
+        if continuation(r.run) != cont or (r.run or {}).get("ci_now") != (run or {}).get("ci_now"):
             die(3, f"{sid}: its state changed during setup; nothing started")
         with open(os.path.join(d, "rules.md"), "w") as fh:
             fh.write(rules)
@@ -449,8 +371,8 @@ def launch(sid, role, brief, extra):
         sys.stderr.flush()
         pid = os.fork()
         if pid == 0:
-            os.close(r.fd)   # the lock stays the launcher's until run.json names this child
-            gate is None or os.close(gate)   # and slots.lock until run.json counts this run
+            os.close(r.fd)
+            gate is None or os.close(gate)
             try:
                 supervise(d, sid, cmd, env, cap)
             finally:
@@ -464,16 +386,12 @@ def launch(sid, role, brief, extra):
 
 
 def slots_gate(root, d, sid, role, pool, brief):
-    """A fresh start that no hourly count covers: hold slots.lock (the drain holds it for its pass, `bin/hourly launch` while
-    it counts) and count every host's runs with `bin/hourly pools`. Returns the lock's fd, held until run.json says
-    running. When the pool is full or a count is unknown, the run is queued instead for the drain, and pi-run says so
-    and exits 0. A quick run is in no pool and starts now."""
     if pool == "quick":
         return None
-    dry = bool(os.environ.get("PI_RUN_DRY"))   # a dry run counts and changes nothing, so it takes no lock
+    dry = bool(os.environ.get("PI_RUN_DRY"))
     dry or os.makedirs(os.path.dirname(root), exist_ok=True)
     fd = None if dry else os.open(os.path.join(os.path.dirname(root), "slots.lock"), os.O_RDWR | os.O_CREAT, 0o644)
-    dry or fcntl.flock(fd, fcntl.LOCK_EX)   # a drain holds it for its pass: wait, then count what it left
+    dry or fcntl.flock(fd, fcntl.LOCK_EX)
     try:
         p = subprocess.run([os.path.join(PKG, "bin", "hourly"), "pools"], capture_output=True, text=True)
     except OSError as e:
@@ -490,7 +408,7 @@ def slots_gate(root, d, sid, role, pool, brief):
         print(f"pi-run: dry run, would queue {sid} ({pool} pool), not start it: {why}")
         sys.exit(0)
     os.makedirs(d, exist_ok=True)
-    here = os.path.join(d, "brief.md")   # the drain starts review/<id>/brief.md
+    here = os.path.join(d, "brief.md")
     if not os.path.exists(here):
         with open(here, "w") as fh:
             fh.write(open(brief).read())
@@ -517,11 +435,11 @@ def collect(sid):
             done = step(r.run, "collect", not lost)
         except Refused as e:
             die(3, f"{sid}: {e}")
-        if lost:   # its supervisor died with pi and sent nothing: the wake goes before the write, as in supervise()
+        if lost:
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
         r.write(done)
-        line = prune(d)   # under the lock, so no `pi-run ci` reopen or drain start of this id runs while it deletes
+        line = prune(d)
         if line:
             print(f"pi-run: {sid}: {line}", file=sys.stderr)
             with open(os.path.join(d, "run.log"), "a") as fh:
@@ -532,9 +450,6 @@ def collect(sid):
 
 
 def build_dirs(d):
-    """Cargo's target/ dirs (each holds cargo's CACHEDIR.TAG) under the run's own wt* worktrees, as (target, worktree) real
-    paths inside d.
-    A symlink is never followed, so nothing outside the review dir is a candidate."""
     real, found = os.path.realpath(d), []
     for wt in sorted(os.listdir(d)):
         top = os.path.join(d, wt)
@@ -542,7 +457,7 @@ def build_dirs(d):
             continue
         for root, dirs, _ in os.walk(top):
             dirs[:] = [x for x in dirs if x not in (".git", "node_modules") and not os.path.islink(os.path.join(root, x))]
-            for name in [x for x in dirs if x == "target" or x.startswith(".target.pruning-")]:   # or one a died prune left
+            for name in [x for x in dirs if x == "target" or x.startswith(".target.pruning-")]:
                 if os.path.isfile(os.path.join(root, name, "CACHEDIR.TAG")):
                     dirs.remove(name)
                     t = os.path.realpath(os.path.join(root, name))
@@ -552,14 +467,13 @@ def build_dirs(d):
 
 
 def open_paths():
-    """Every path some process has open or as its cwd, from one `lsof -Fn` snapshot, or None when lsof cannot say."""
-    lsof = shutil.which("lsof", path=os.environ.get("PATH", "") + ":/usr/sbin:/usr/bin")   # cron's PATH has no /usr/sbin
+    lsof = shutil.which("lsof", path=os.environ.get("PATH", "") + ":/usr/sbin:/usr/bin")
     try:
         p = subprocess.run([lsof or "lsof", "-n", "-P", "-w", "-Fn"], capture_output=True, text=True, errors="replace", timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return None
     paths = [x[1:] for x in p.stdout.splitlines() if x.startswith("n/")]
-    return paths if paths else None   # lsof exits 1 when one process's files are unreadable; no paths at all is no answer
+    return paths if paths else None
 
 
 def disk_bytes(path):
@@ -578,11 +492,6 @@ def held_in(paths, held):
 
 
 def prune(d):
-    """At collect: delete the cargo target/ dirs under the run's wt* worktrees that nothing holds, and say how much that
-    freed. A target is first renamed aside, so no process can open it by its path from then on; then a fresh lsof must show
-    nothing open in its worktree or in the renamed dir (an open file or cwd follows the rename) before it is deleted.
-    Anything held is renamed back and kept, and every target is kept when lsof cannot answer. Never raises: a prune that
-    fails must not cost the collect."""
     try:
         targets = build_dirs(d)
         if not targets:
@@ -591,7 +500,7 @@ def prune(d):
         if held is None:
             return f"kept {len(targets)} target/ dir(s): lsof gave no answer"
         freed, gone, kept = 0, [], []
-        for t, wt in targets:   # anything open in the worktree (a shell's cwd, an editor, cargo) may be a live session's
+        for t, wt in targets:
             if held_in([wt], held):
                 kept.append(t)
                 continue
@@ -604,7 +513,7 @@ def prune(d):
                 continue
             size = disk_bytes(aside)
             shutil.rmtree(aside, ignore_errors=True)
-            if os.path.exists(aside):   # not removable: kept under the aside name, which a later collect of this id (after a CI reopen) retries
+            if os.path.exists(aside):
                 kept.append(aside)
             else:
                 freed += size
@@ -617,28 +526,24 @@ def prune(d):
 
 
 def continuation(run):
-    """The run is a continuation waiting in the queue: a 429's, or its PR's red CI's."""
     return bool(run and run["state"] == "queued" and run.get("resume_at"))
 
 
 def migrate(root):
-    """The queue before run.json had the state: a review dir with a QUEUED marker and no run.json becomes a queued run
-    (since = the marker's time, role = the marker's text or the brief's `role:` line), and the marker goes. A run.json
-    the old code left `paused` becomes the queued continuation it now is, with since = its attempt's start time."""
     for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         d, mark = os.path.join(root, sid), os.path.join(root, sid, "QUEUED")
         if (read_json(os.path.join(d, "run.json")) if os.path.isfile(os.path.join(d, "run.json")) else {}).get("state") == "paused":
             with Run(d) as r:
                 if r.run["state"] == "paused":
                     try:
-                        since = utc(calendar.timegm(time.strptime(r.run["start"], "%a %b %d %H:%M:%S %Y")))   # ps lstart, UTC
+                        since = utc(calendar.timegm(time.strptime(r.run["start"], "%a %b %d %H:%M:%S %Y")))
                     except (TypeError, ValueError):
                         since = r.run["resume_at"]
                     r.write({**r.run, "state": "queued", "since": r.run.get("since") or since})
         if not os.path.isfile(mark):
             continue
         with Run(d) as r:
-            if not os.path.exists(mark) or r.run is not None:   # beside a run that already started: a leftover nothing reads
+            if not os.path.exists(mark) or r.run is not None:
                 continue
             role = open(mark).read().strip()
             if role in ("", "next") and os.path.isfile(os.path.join(d, "brief.md")):
@@ -664,7 +569,6 @@ def list_runs(states):
 
 
 def ci(sid, pr_n, head, why):
-    """Reopen a collected run for its trycua/cua PR that is red at a head it pushed: queued with resume_at now, for the drain."""
     _, root = host_env("list")
     d = os.path.join(root, sid)
     if not os.path.exists(os.path.join(d, "run.json")):
@@ -685,7 +589,6 @@ def ci(sid, pr_n, head, why):
 
 
 def queue(sid):
-    """Queue review/<id> (its brief.md) for the hourly drain: run.json queued, with the role from the brief's `role:` line."""
     _, root = host_env("list")
     d = os.path.join(root, sid)
     brief = os.path.join(d, "brief.md")
@@ -704,7 +607,7 @@ def queue(sid):
 def main(argv):
     print(f"zstack {sha()}", file=sys.stderr)
     if argv[:1] in (["-h"], ["--help"]):
-        print(__doc__)
+        print(USAGE)
         return 0
     if len(argv) == 2 and argv[0] in ("collect", "queue") and ID.fullmatch(argv[1]):
         return {"collect": collect, "queue": queue}[argv[0]](argv[1])

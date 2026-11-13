@@ -1,8 +1,4 @@
 #!/bin/bash
-# model-for <role>[:<n>]: prints "<provider> <model>" for <role> from [models] in the package's config/policy.toml.
-# A role with several seats (designer) needs :<n>, 1-based: the bare name exits 1 naming its seats, because one
-# launch cannot run a race. model-for --roles lists every role and seat.
-# Exit 1 for a name the file lacks, or a policy file bin/policy refuses.
 set -eu
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
 echo "zstack $(git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2

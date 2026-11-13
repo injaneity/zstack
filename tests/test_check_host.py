@@ -1,7 +1,3 @@
-"""Tests for bin/check-host against a fake pi, gh and claude in an empty HOME: each missing dependency is one FAIL line
-naming its fix and the exit is 1; with everything present no dependency line fails. check-host runs in process, with its
-pi-claude-code pin set to a temp checkout's HEAD, since no temp repo can have the real pinned commit.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import importlib.machinery
 import importlib.util
 import io
@@ -15,7 +11,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 PKG = Path(__file__).resolve().parent.parent
-# fake pi: `pi list` prints $T/packages, `--list-models` prints $T/models, `-p` prints $T/answer-<provider> (exit 0) or fails.
 FAKE_PI = """#!/bin/bash
 case "$1" in
   list) cat "$T/packages" 2>/dev/null; exit 0;;
@@ -45,10 +40,9 @@ class CheckHost(unittest.TestCase):
         for name, text in (("pi", FAKE_PI), ("gh", FAKE_GH), ("claude", "#!/bin/sh\n"), ("node", "#!/bin/sh\n")):
             (t / "bin" / name).write_text(text)
             (t / "bin" / name).chmod(0o755)
-        (t / "bin" / "python3").symlink_to(sys.executable)   # the interpreter running the tests, not the host's /usr/bin one
+        (t / "bin" / "python3").symlink_to(sys.executable)
         self.env = {"PATH": f"{t}/bin:/usr/bin:/bin", "HOME": str(t), "T": str(t), "ONIGIRI_HOST": "",
                     "ONIGIRI_ROOT": str(t / "root"), "PI_CODING_AGENT_DIR": str(t / "agent")}
-        # the pi-claude-code checkout `pi list` names: a real git repo, so its HEAD is a real sha
         self.claude = t / "claude-pkg"
         subprocess.run(["git", "init", "-q", str(self.claude)], check=True)
         subprocess.run(["git", "-C", str(self.claude), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
@@ -56,7 +50,6 @@ class CheckHost(unittest.TestCase):
         self.pin = subprocess.run(["git", "-C", str(self.claude), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 
     def check(self, *args, pin=None, run=None):
-        """(exit, stdout lines) of check-host's main(args), parity lines dropped (this temp host has no cua clone)."""
         ch = load()
         out = io.StringIO()
         with patch.dict(os.environ, self.env, clear=True), patch.object(ch, "CLAUDE_PIN", pin or self.pin), \
@@ -91,17 +84,15 @@ class CheckHost(unittest.TestCase):
         self.assertEqual(self.fails(lines), [], lines)
         self.assertIn(f"ok    package pi-claude-code revision: the pinned {self.pin[:9]}", lines)
         self.assertFalse(any(x.startswith("ok    live") for x in lines))
-        self.assertEqual(rc, 1)   # this temp host has no cua clone, so check-parity's hook line fails it
+        self.assertEqual(rc, 1)
 
     def test_pi_claude_code_at_another_commit_fails_even_offline(self):
-        """Its main after d070212 gets every Claude request refused as third-party usage, while pi still lists the models."""
         self.ready()
         _, lines = self.check("--offline", pin="d070212" + "0" * 33)
         self.assertTrue(any(x.startswith(f"FAIL  package pi-claude-code revision: {self.pin[:9]}") and "not the pinned d0702120" in x
                             for x in lines), lines)
 
     def test_a_listed_provider_that_refuses_a_real_call_fails(self):
-        """The 11 Nov fresh run: pi listed claude-code models and every request came back as a billing refusal."""
         self.ready()
         os.unlink(self.t / "answer-claude-code")
         _, lines = self.check()
@@ -109,7 +100,6 @@ class CheckHost(unittest.TestCase):
         self.assertTrue(any(x.startswith("ok    live openai-codex") for x in lines), lines)
 
     def shadowed_python3(self, module):
-        """The real interpreter with only `module` shadowed, as PATH's python3."""
         (self.t / "shadow").mkdir()
         (self.t / "shadow" / f"{module}.py").write_text(f"raise ModuleNotFoundError(\"No module named '{module}'\")\n")
         (self.t / "bin" / "python3").unlink()
@@ -117,8 +107,6 @@ class CheckHost(unittest.TestCase):
         (self.t / "bin" / "python3").chmod(0o755)
 
     def test_a_python3_without_tomllib_still_runs_the_policy_reader(self):
-        """The mini's /usr/bin/python3 is 3.9: zoneinfo but no tomllib. The 14:36 SGT 12 Nov hourly pickup died there on
-        `import tomllib`; bin/policy now falls back to vendor/tomli, and check-host runs it under PATH's python3."""
         self.ready()
         self.shadowed_python3("tomllib")
         _, lines = self.check("--offline")
@@ -138,7 +126,6 @@ class CheckHost(unittest.TestCase):
         self.assertTrue(any("`claude` CLI is not on PATH" in x for x in self.fails(lines)), lines)
 
     def test_the_merge_host_needs_the_holds_file(self):
-        """The host file's env names this host as the merge host; host_env is faked so nothing is written in the repo."""
         self.ready()
         env = {**self.env, "ONIGIRI_HOST": "m", "ONIGIRI_MERGE_HOST": "m"}
         ch = load()
@@ -153,7 +140,6 @@ class CheckHost(unittest.TestCase):
             (self.t / "root" / "hold-prs.txt").write_text("")
 
     def test_a_parity_check_that_dies_without_output_fails(self):
-        """check-parity that cannot run (killed, timed out) prints nothing; that is a FAIL, not a pass."""
         self.ready()
         dead = lambda real: lambda cmd, env, **kw: (subprocess.CompletedProcess(cmd, 9, "", "")  # noqa: E731
                                                     if cmd[0].endswith("check-parity") else real(cmd, env, **kw))

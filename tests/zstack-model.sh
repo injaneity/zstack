@@ -1,9 +1,4 @@
 #!/bin/bash
-# Model-checks model/Zstack.tla, the whole flow from the chat to merged: TLC passes every rule in model/Zstack.cfg, every
-# mutant in model/mutants.py makes it fail with the rule it names, and model/Race.cfg (a probe for the hold row added
-# while the job's entry waits in GitHub's queue) still breaks on HeldIsNeverMergedStrict. A probe that starts passing
-# means the model changed under it.
-# usage: tests/zstack-model.sh   (TLA2TOOLS=<tla2tools.jar> and JAVA=<java> skip the mise lookup)
 set -u
 src="$(cd "$(dirname "$0")/.." && pwd)"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

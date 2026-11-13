@@ -1,23 +1,19 @@
 #!/bin/bash
-# Checks hosts/check-parity and the host files' use of it against throwaway local repos. No network.
-# usage: tests/check-parity.sh (exit 0 when every check passes)
 set -u
 src="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: got '$2', want '$3'"; fail=1; fi; }
 has() { case "$2" in *"$3"*) echo "ok    $1";; *) echo "FAIL  $1: '$2' lacks '$3'"; fail=1;; esac; }
 tmp=$(cd "$(mktemp -d)" && pwd -P); trap 'rm -rf "$tmp"' EXIT
-export ONIGIRI_HOST=   # set and empty: no host file, whatever ~/.config/onigiri/host says
+export ONIGIRI_HOST=
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
-# origin.git is the remote main; seed pushes to it; pkg is a host's installed checkout; root holds the host's cua clone.
 git init -q --bare -b main "$tmp/origin.git"
 git clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
 mkdir -p "$tmp/seed/hosts/vm" "$tmp/seed/hosts/h" "$tmp/seed/agents" "$tmp/seed/bin" "$tmp/seed/config" "$tmp/seed/skills/onigiri-mode"
 cp "$src/hosts/check-parity" "$tmp/seed/hosts/"; cp "$src/hosts/vm/pre-push" "$tmp/seed/hosts/vm/"; cp "$src/agents/"*.md "$tmp/seed/agents/"
 cp "$src/bin/pi-run" "$src/bin/model-for" "$src/bin/policy" "$src/bin/ensure-package-main" "$tmp/seed/bin/"; cp "$src/config/policy.toml" "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"
 cp "$src/config/rules.toml" "$src/config/state.toml" "$tmp/seed/config/"
-# the line both shipped host files end with
 grep -h 'check-parity' "$src/hosts/vm/host.sh" | tail -1 > "$tmp/seed/hosts/h/host.sh"
 check "the vm and mini host files run the same parity line" "$(grep -h 'check-parity"' "$src/hosts/vm/host.sh")" "$(grep -h 'check-parity"' "$src/hosts/mini/host.sh")"
 git -C "$tmp/seed" add -A; git -C "$tmp/seed" commit -qm one; git -C "$tmp/seed" push -q origin main
@@ -65,9 +61,7 @@ run; check "stale, unknown and backup agent files fail" "$rc" 1
 for f in verifier.md onigiri-reviewer.md .verifier.md.bak-1105; do has "it names $f" "$out" "$f"; done
 check "only the agents line fails" "$(fails)" 1
 
-# a launch through a host file starts nothing on a host that differs, and starts on one that does not
 echo task > "$tmp/brief.md"
-# a pi with claude-code logged in
 mkdir "$tmp/bin"; printf '#!/bin/sh\necho "claude-code m"\n' > "$tmp/bin/pi"; chmod +x "$tmp/bin/pi"; export PATH="$tmp/bin:$PATH"
 launch() { out=$(PI_RUN_DRY=1 ONIGIRI_HOST=h ONIGIRI_ROOT="$tmp/root" PI_CODING_AGENT_DIR="$tmp/agent" "$tmp/pkg/bin/pi-run" s coding "$tmp/brief.md" 2>&1); rc=$?; }
 launch; check "pi-run refuses to launch on a host that differs" "$rc" 4

@@ -1,22 +1,14 @@
-"""Mutation check for model/Hourly.tla: each mutant puts back one way the hourly pickup went wrong, and must make TLC fail
-on HourlySmall.cfg (Hourly.cfg's rules at smaller caps) with the rule it names. The first three are zstack main
-4e08648, before the pickup fix (#68); shared-total and auto-cap-5 are the caps before the slot split. A mutant that
-still passes, or fails on another rule, means the model cannot see that bug.
-usage: python3 -I model/hourly_mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# The chat declining every Todo in one row of its own (pickup.log, 12 Nov 02:38 SGT: "backlog is unstick/review items
-# already filed; no auto pick"), which step 5 allowed at main because it never said its rules were the only ones.
 DECLINES = ("PickDone ==", "Declines == pc = \"pick\" /\\ free > 0 /\\ todo # {} /\\ pc' = \"end\" /\\ rows' = rows \\cup {<<\"todo\", \"filed\">>}\n"
             "  /\\ UNCHANGED <<World, dirty, free>>\nPickDone ==")
 DECLINES_NEXT = ("PassSteps == PassStarts", "PassSteps == Declines \\/ PassStarts")
 NO_FREE_IN_ACTS = ("Acts == ended \\/ qhand + qauto > 0 \\/ blind \\/ (Free > 0 /\\ todo # {})", "Acts == ended \\/ qhand + qauto > 0 \\/ blind")
 M = [
-    # name, the bug, [(old, new)], the rule that must catch it
     ("main-4e08648-silent-skip", "acts had no free auto slot, so an unchanged pass skipped with Todos to pick (before #68)",
      [NO_FREE_IN_ACTS], "NoSilentPassWhenCouldPick"),
     ("main-4e08648-group-decline", "step 5 named no closed set of rules, so the chat declined the list in one row (before #68)",

@@ -1,6 +1,4 @@
 #!/bin/bash
-# Checks bin/model-for against [models] in config/policy.toml, read here with bin/policy get, so it runs under any python3 bin/policy does.
-# usage: tests/models.sh (exit 0 when every check passes)
 set -u
 pkg="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0

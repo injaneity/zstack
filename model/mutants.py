@@ -1,7 +1,3 @@
-"""Mutation check for model/Zstack.tla: each mutant puts back one behaviour zstack had before the consolidation (or breaks
-a rule outright) and must make TLC fail on Zstack.cfg with the rule it names. A mutant that still passes, or that fails
-on another rule, means the model cannot see that bug.
-usage: python3 -I model/mutants.py <tla2tools.jar> <java> <scratch dir>   (one line per mutant, exit 1 on a survivor)"""
 import os
 import re
 import subprocess
@@ -9,7 +5,6 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
-    # name, the bug, [(old, new)], the rule that must catch it
     ("lost-run-sends-no-wake", "bin/pi-run collect sent nothing for a lost run (before #50)",
      [("collected' = TRUE /\\ woke' = TRUE", "collected' = TRUE /\\ woke' = woke")], "CollectedFailureWoke"),
     ("retry-reuses-id", "bin/pi-run step() started from collected with the same --session-id (before #50)",
@@ -71,7 +66,6 @@ M = [
 ]
 
 
-# The PROPERTY lines in Zstack.cfg: TLC reports a temporal failure without naming which one broke.
 TEMPORAL = {"EveryFailureWakes", "EveryOtherMergeWakes", "EveryJobMergeLogged", "OffGateLeavesQueue", "ContinuationRuns",
             "RedPrGoesBackToItsThread", "ReopenedThreadEnds"}
 

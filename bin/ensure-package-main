@@ -1,10 +1,4 @@
 #!/bin/bash
-# ensure-package-main: fast-forward the zstack checkout that holds this script to origin/main.
-# bin/pi-run runs it before every new session, so a launch runs on the latest merged main or not at all, and
-# hosts/vm/merge_job.py runs it before every cron run.
-# Prints "zstack: <old> -> <new>" or "zstack: already at <sha>". Exit 1 with the reason on stderr when the
-# checkout is not on main, has local edits, cannot fetch, or cannot fast-forward. It never stashes, resets,
-# forces or deletes anything: a failure leaves the checkout exactly as it was.
 set -u
 die() { echo "ensure-package-main: $*; not launching on an old tree" >&2; exit 1; }
 here="$(cd "$(dirname "$0")/.." && pwd)"

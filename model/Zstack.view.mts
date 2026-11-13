@@ -1,4 +1,3 @@
-// The reader's words for Zstack.tla: one piece of work from the chat to merged, after the consolidation.
 export const title = "zstack, consolidated: a piece of work from the chat to merged";
 export const state = (v: any) => {
   switch (v.phase) {
@@ -29,7 +28,7 @@ const steps: Record<string, string | null> = {
   Collect: "pickup collects, failed wake",
   Retry: "chat files it again under a fresh id",
   ExitOk: "pi exits 0",
-  CiFinishes: null,        // ci-gate finishing stays inside the PR state
+  CiFinishes: null,
   Push: "a push (new head)",
   DeclareTier: null,
   MainMoves: null,

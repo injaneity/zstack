@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""check-host: can this host run zstack? One `ok`, `warn` or `FAIL` line per check, exit 1 on any FAIL.
-
-  check-host            every check, then one real `pi -p` call per provider in config/policy.toml [models]
-  check-host --offline  every check but the `pi -p` calls
-
-It reads the env bin/pi-run launches with ($ONIGIRI_HOST or ~/.config/onigiri/host names hosts/<name>/host.sh), so
-what it passes is what a launch sees. README's install section lists the dependencies it checks:
-  tools     pi, node, git, gh and python3 3.9 or newer on PATH (zoneinfo), which runs bin/policy (tomllib, else vendor/tomli)
-  policy    bin/policy accepts config/policy.toml, whose [models] names the providers below
-  packages  pi lists npm:@ff-labs/pi-fff (the agents' search tools), and pi-claude-code at README's pinned commit when a
-            role uses claude-code
-  provider  `pi --list-models` lists a model of every provider a role uses, and the `claude` CLI is on PATH for claude-code
-  live      each provider answers one `pi -p`: a listed model can still refuse every request (a billing refusal does)
-  gh        `gh auth status` passes, so the hourly pass and the merge job can read PRs
-  parity    hosts/check-parity: the package at origin/main, the cua clone's pre-push hook, the agents dir
-  holds     $ONIGIRI_ROOT/hold-prs.txt exists on the merge host ($ONIGIRI_MERGE_HOST); without it every PR counts as held
-  webhook   ~/.config/onigiri-urgent-webhook exists (warn only: wakes are best effort)
-It changes nothing but the fetched origin/main ref.
-"""
 import importlib.machinery
 import importlib.util
 import os
@@ -27,7 +8,11 @@ import sys
 import tempfile
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-CLAUDE_PIN = "70abb65186592ca788b29b3db22c3160d629c41f"   # README: later pi-claude-code commits are refused as third-party usage
+USAGE = (
+    '  check-host            every check, then one real `pi -p` call per provider in config/policy.toml [models]\n'
+    '  check-host --offline  every check but the `pi -p` calls'
+)
+CLAUDE_PIN = "70abb65186592ca788b29b3db22c3160d629c41f"
 _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi-run"))
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
@@ -54,7 +39,6 @@ def last(p):
 
 
 def seats():
-    """{provider: (model, [roles])} from config/policy.toml [models], with the first model each provider is named with."""
     out = {}
     for role, v in pr.policy().load()["models"].items():
         for s in v if isinstance(v, list) else [v]:
@@ -65,7 +49,7 @@ def seats():
 
 def main(argv):
     if argv not in ([], ["--offline"]):
-        print(__doc__, file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     print(f"zstack {pr.sha()}", file=sys.stderr)
     env, review = pr.host_env("list")
@@ -80,7 +64,7 @@ def main(argv):
     py = run(["python3", "-c", "import sys, zoneinfo; print('%d.%d' % sys.version_info[:2])"], env)
     say("ok" if not py.returncode else "FAIL",
         "python3 version: " + (py.stdout.strip() if not py.returncode else "needs 3.9 or newer (zoneinfo): " + last(py)))
-    pol = run(["python3", os.path.join(PKG, "bin", "policy"), "check"], env)   # the interpreter the shebangs resolve to
+    pol = run(["python3", os.path.join(PKG, "bin", "policy"), "check"], env)
     say("ok" if not pol.returncode else "FAIL", "python3 runs bin/policy: " + last(pol))
 
     try:
@@ -96,7 +80,7 @@ def main(argv):
     for pkg, how in need.items():
         say("ok" if pkg in listed else "FAIL", f"package {pkg}: {'installed' if pkg in listed else 'missing; ' + how}")
     if "claude-code" in providers and "earendil-works/pi-claude-code" in listed:
-        rows = listed.splitlines()   # `pi list`: a package line, then its checkout path
+        rows = listed.splitlines()
         at = next(i for i, x in enumerate(rows) if "earendil-works/pi-claude-code" in x)
         where = rows[at + 1].strip() if at + 1 < len(rows) else ""
         head = run(["git", "-C", where, "rev-parse", "HEAD"], env).stdout.strip() if where else ""

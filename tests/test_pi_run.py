@@ -1,6 +1,3 @@
-"""Tests for bin/pi-run, the run lifecycle: start, exit, collect, relaunch, kill detection, signals and wakes.
-step() is checked as a table; the rest runs the real launcher against a fake `pi` in a temp root.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import importlib.machinery
 import importlib.util
 import json
@@ -23,9 +20,6 @@ pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
 RULES = subprocess.run([sys.executable, str(PKG / "bin" / "policy"), "rules"], capture_output=True, text=True, check=True).stdout
-# fake pi: `--list-models` lists a claude-code model only when $TEST_TOKEN (its credential) is set, and never openai-codex.
-# A run records its args and env, then hangs while $T/hang exists and exits with $T/rc. It traps TERM like
-# pi does, so a forwarded signal is visible.
 FAKE_PI = """#!/bin/bash
 if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "claude-code m"; exit 0; fi
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM
@@ -51,20 +45,18 @@ def wait_for(pred, secs=10):
 
 
 class Step(unittest.TestCase):
-    """The transition function, one row per (state, event)."""
     R = lambda self, s, **k: {"state": s, "attempt": 1, "pid": 10, "start": "t", "rc": None, "wake_finish": False, "wake": None, **k}   # noqa: E731
 
     def test_queue_then_start_opens_the_first_attempt_and_keeps_its_queue_place(self):
         q = pr.step(None, "queue", since="2026-11-10T01:00:00Z", role="research")
         self.assertEqual(q, {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
                              "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "research", "pool": "hand"})
-        self.assertEqual(pr.step(q, "queue", since="later", role="coding"), q)   # queued twice: still the first place
+        self.assertEqual(pr.step(q, "queue", since="later", role="coding"), q)
         self.assertEqual(pr.step(q, "start", pid=5, start="s", wake_finish=True, now="2026-11-10T02:00:00Z"),
                          {**q, "state": "running", "attempt": 1, "pid": 5, "start": "s", "wake_finish": True})
         self.assertEqual(pr.step(None, "start", pid=5, start="s", wake_finish=False, now="n")["since"], "n")
 
     def test_start_is_refused_until_the_last_result_is_collected_and_after_it(self):
-        """A retry is a fresh id: nothing restarts a session (onigiri-mode)."""
         for run, alive, why in ((self.R("running"), True, "already running"), (self.R("exited", rc=0), False, "not collected"),
                                 (self.R("running"), False, "was lost"), (self.R("collected", rc=0), False, "a retry is a fresh id")):
             with self.assertRaisesRegex(pr.Refused, why):
@@ -87,9 +79,9 @@ class Step(unittest.TestCase):
         back = pr.step(run, "exit", pid=10, rc=1, resume_at="2026-11-10T05:00:00Z", cap=3)
         self.assertEqual({k: back[k] for k in ("state", "attempt", "wake", "wake_finish", "resume_at", "since")},
                          {"state": "queued", "attempt": 1, "wake": None, "wake_finish": True, "resume_at": "2026-11-10T05:00:00Z",
-                          "since": "2026-11-10T01:00:00Z"})   # no wake, the same attempt, and its first queue place
+                          "since": "2026-11-10T01:00:00Z"})
         go = dict(pid=8, start="w", wake_finish=False)
-        for f, why in ((dict(go, now="2026-11-10T06:00:00Z"), "the hourly drain resumes it$"),   # a direct start, even after
+        for f, why in ((dict(go, now="2026-11-10T06:00:00Z"), "the hourly drain resumes it$"),
                        (dict(go, now="2026-11-10T04:59:59Z", drain=True), "once that has passed")):
             with self.assertRaisesRegex(pr.Refused, why):
                 pr.step(back, "start", **f)
@@ -100,7 +92,6 @@ class Step(unittest.TestCase):
                          {"state": "running", "attempt": 1, "pid": 8, "rc": None, "resume_at": None, "wake_finish": True,
                           "since": "2026-11-10T01:00:00Z", "resumes": 1})
         self.assertEqual(back["limit_resumes"], 1)
-        # rc 0 is never a pause, whatever the log said
         self.assertEqual(pr.step(self.R("running"), "exit", pid=10, rc=0, resume_at="x")["state"], "exited")
 
     def test_an_upstream_limit_resumes_a_run_cap_times_and_the_next_one_fails_it(self):
@@ -122,7 +113,6 @@ class Step(unittest.TestCase):
 
 
 class CiStep(unittest.TestCase):
-    """The thread that pushed a PR's head owns its CI: a red PR reopens the collected run, once per head, fix_attempts times."""
     R = Step.R
 
     def test_a_red_pr_reopens_its_collected_run_once_per_head_up_to_the_cap(self):
@@ -134,12 +124,12 @@ class CiStep(unittest.TestCase):
                           "since": "2026-11-10T01:00:00Z", "ci": {"7338": ["a5d26a5"]},
                           "ci_now": {"pr": "7338", "head": "a5d26a5", "why": "ci-gate, contract clients", "n": 1, "cap": 2}})
         self.assertTrue(pr.continuation(q))
-        with self.assertRaisesRegex(pr.Refused, "the hourly drain resumes it"):   # a direct start never takes it
+        with self.assertRaisesRegex(pr.Refused, "the hourly drain resumes it"):
             pr.step(q, "start", pid=8, start="w", wake_finish=False, now="2026-11-11T06:00:00Z")
         go = pr.step(q, "start", pid=8, start="w", wake_finish=False, now="2026-11-11T05:00:00Z", drain=True)
         self.assertEqual((go["state"], go["attempt"], go["resumes"], go["ci_now"], go["wake_finish"]), ("running", 1, 1, None, True))
         back = pr.step(pr.step(go, "exit", pid=8, rc=0), "collect")
-        self.assertEqual(back["wake"], "done")   # the reopened thread reports back like the first time
+        self.assertEqual(back["wake"], "done")
         with self.assertRaisesRegex(pr.Refused, "already reopened for cua#7338 at a5d26a5"):
             pr.step(back, "ci", head="a5d26a5", **f)
         again = pr.step(back, "ci", head="b7", **f)
@@ -147,7 +137,7 @@ class CiStep(unittest.TestCase):
         spent = pr.step(pr.step(pr.step(again, "start", pid=9, start="x", wake_finish=False, now="9", drain=True), "exit", pid=9, rc=0), "collect")
         with self.assertRaisesRegex(pr.Refused, "fix attempts spent for cua#7338: 2 of 2"):
             pr.step(spent, "ci", head="c9", **f)
-        self.assertEqual(pr.step(spent, "ci", head="c9", **dict(f, pr="7400"))["ci"]["7400"], ["c9"])   # the cap is per PR
+        self.assertEqual(pr.step(spent, "ci", head="c9", **dict(f, pr="7400"))["ci"]["7400"], ["c9"])
 
     def test_only_a_collected_run_is_reopened(self):
         f = dict(pr="1", head="h", why="w", now="n", cap=3)
@@ -158,7 +148,6 @@ class CiStep(unittest.TestCase):
 
 
 def chart():
-    """bin/PiRun.mmd as {(from, to, label)}: the chart TLC draws from bin/PiRun.tla (tests/pirun-model.sh keeps them equal)."""
     names, edges = {}, set()
     for line in (PKG / "bin" / "PiRun.mmd").read_text().replace("#60;", "<").splitlines():
         if m := re.fullmatch(r"\s*(s\d+): (.+)", line):
@@ -171,7 +160,6 @@ def chart():
 
 
 class Model(unittest.TestCase):
-    """step() against the model: every transition the chart has, and no other."""
 
     def test_step_makes_exactly_the_charts_transitions(self):
         def name(run, alive):
@@ -199,7 +187,7 @@ class Model(unittest.TestCase):
             moves += [(collect + (" [sends the failed wake]" if key[0] == "lost" else ""), "collect", {}, False)]
             moves += [("its PR is red after the rerun, at a head it pushed [fix attempts left]", "ci",
                        dict(pr="7", head=f"h{len(seen)}", why="ci-gate", now="1", cap=1), False)]
-            if key[0] == "running":   # only a live supervisor exits, and only a live run can be killed
+            if key[0] == "running":
                 limit = "resumes left, frees its slot" if key[2] < 1 else "resume.cap spent, sends the failed wake"
                 moves += [("pi exits rc != 0", "exit", dict(pid=run["pid"], rc=3, cap=1), False),
                           (f"pi exits rc 0 [{asked}]", "exit", dict(pid=run["pid"], rc=0, cap=1), False),
@@ -211,10 +199,10 @@ class Model(unittest.TestCase):
                     after = pr.step(run, event, alive, **fields)
                 except pr.Refused:
                     continue
-                if after != run:   # a second queue is no step
+                if after != run:
                     edges.add((key[0], name(after, alive_after), lbl))
                 todo.append((after, alive_after))
-        joined = {}   # the chart draws one edge per (from, to), its labels sorted and joined with " or "
+        joined = {}
         for a, b, lbl in edges:
             joined.setdefault((a, b), set()).add(lbl)
         self.assertEqual({(a, b, " or ".join(sorted(ls))) for (a, b), ls in joined.items()}, chart())
@@ -229,7 +217,7 @@ class Launcher(unittest.TestCase):
         (self.t / "bin" / "pi").write_text(FAKE_PI)
         (self.t / "bin" / "pi").chmod(0o755)
         (self.t / "py").mkdir()
-        (self.t / "py" / "python3").symlink_to(sys.executable)   # the interpreter the suite runs under, so a 3.9 run tests the mini's /usr/bin one
+        (self.t / "py" / "python3").symlink_to(sys.executable)
         (self.t / "bin" / "python3").symlink_to(sys.executable)
         (self.t / "brief.md").write_text("task\n")
         self.env = {"PATH": f"{self.t}/bin:/usr/bin:/bin", "HOME": str(self.t), "T": str(self.t), "ZSTACK_ENSURED": "1",
@@ -237,10 +225,9 @@ class Launcher(unittest.TestCase):
         self.addCleanup(self.reap)
 
     def reap(self):
-        """Kill every run a test left behind (each supervisor leads its own process group) and wait until it is gone."""
         for p in (self.t / "root").glob("**/run.json"):
             pid = json.loads(p.read_text())["pid"]
-            if pid is None:   # queued: nothing started
+            if pid is None:
                 continue
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -296,7 +283,7 @@ class Launcher(unittest.TestCase):
         self.finished("rules")
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual(args.count("--append-system-prompt"), 1)
-        rules = Path(args[args.index("--append-system-prompt") + 1])   # rendered at the start, so pi reads main's text
+        rules = Path(args[args.index("--append-system-prompt") + 1])
         self.assertEqual(rules, self.t / "root" / "review" / "rules" / "rules.md")
         self.assertEqual(rules.read_text(), RULES)
         self.assertEqual((self.t / "int-ignored").read_text().strip(), "False")
@@ -309,14 +296,13 @@ class Launcher(unittest.TestCase):
         self.assertIn("`config/rules.toml`", skill)
 
     def test_no_hard_rules_starts_nothing(self):
-        """A missing or unreadable config/rules.toml starts no pi: a session never runs without its rules."""
         pkg = self.t / "pkg"
         for sub in ("bin", "config", "hosts/vm"):
             (pkg / sub).mkdir(parents=True)
         for f in ("bin/pi-run", "bin/hourly", "bin/model-for", "bin/policy", "config/policy.toml", "config/state.toml", "hosts/vm/wake.py"):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
-        shutil.copytree(PKG / "vendor", pkg / "vendor")   # bin/policy before python3 3.11
+        shutil.copytree(PKG / "vendor", pkg / "vendor")
         for text in (None, "  \n", (PKG / "config/rules.toml").read_text().replace("trycua/cua-staging", "trycua/elsewhere")):
             if text is not None:
                 (pkg / "config/rules.toml").write_text(text)
@@ -335,7 +321,6 @@ class Launcher(unittest.TestCase):
         body = next(json.loads(line) for line in self.log("w").splitlines() if line.startswith('{"kind": "done"'))
         self.assertEqual((body["id"], body["rc"], body["prs"], body["report"]),
                          ("w", 0, ["https://github.com/o/r/pull/38"], str(self.t / "root" / "review" / "w" / "run.log")))
-        # a brief without the line is failures-only
         (self.t / "say").unlink()
         self.start("w2")
         self.assertEqual(self.finished("w2")["wake"], None)
@@ -343,7 +328,7 @@ class Launcher(unittest.TestCase):
 
     def test_a_wake_that_cannot_start_still_records_the_exit(self):
         (self.t / "w.md").write_text("task\nwake: finish\n")
-        (self.t / "say").write_text(" ".join(f"https://github.com/o/r/pull/{n}" for n in range(60000)) + "\n")   # over ARG_MAX
+        (self.t / "say").write_text(" ".join(f"https://github.com/o/r/pull/{n}" for n in range(60000)) + "\n")
         self.start("big", brief="w.md")
         self.assertEqual(self.finished("big")["rc"], 0)
         self.assertIn("pi-run: wake not sent", self.log("big"))
@@ -367,7 +352,6 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.pi_run("list", "exited", "lost").stdout, "")
 
     def test_a_retry_is_a_fresh_id_and_its_result_reaches_the_pickup(self):
-        # cua-3926 was relaunched under its own id after collect; a retry now takes a fresh id (cua-3308-r, 10 Nov)
         self.start("cua-3926", rc=0)
         self.finished("cua-3926")
         self.pi_run("collect", "cua-3926")
@@ -377,7 +361,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.pi_run("list", "exited").stdout, "cua-3926-r exited attempt=1 rc=1\n")
         self.assertEqual(self.pi_run("collect", "cua-3926-r").stdout, "cua-3926-r attempt=1 rc=1\n")
         args = (self.t / "args").read_text().splitlines()
-        self.assertEqual(args[args.index("--session-id") + 1], "cua-3926-r")   # a new pi session
+        self.assertEqual(args[args.index("--session-id") + 1], "cua-3926-r")
 
     def test_a_second_launch_of_a_live_id_is_refused(self):
         self.start("live", hang=True)
@@ -399,11 +383,10 @@ class Launcher(unittest.TestCase):
         wait_for(lambda: (self.t / "pi-pid").exists())
         sup, pi = self.run_json("oom")["pid"], int((self.t / "pi-pid").read_text())
         os.kill(sup, signal.SIGKILL)
-        # pi outlives its supervisor: the run's process group is alive, so it still counts as running
         self.assertEqual(self.pi_run("list").stdout, "oom running attempt=1 rc=None\n")
         os.kill(pi, signal.SIGKILL)
         self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "oom lost attempt=1 rc=None\n"))
-        self.assertEqual(self.run_json("oom")["state"], "running")   # nothing wrote it: lost is derived
+        self.assertEqual(self.run_json("oom")["state"], "running")
         r = self.pi_run("oom", "coding", str(self.t / "brief.md"))
         self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: oom: attempt 1 was lost and is not collected"))
         self.assertEqual(self.pi_run("collect", "oom").stdout, "oom attempt=1 lost\n")
@@ -418,11 +401,11 @@ class Launcher(unittest.TestCase):
         self.assertIn("wake: failed", self.log("term"))
 
     def test_no_pi_starts_nothing_and_a_pi_gone_after_the_check_is_a_failed_exit_not_a_loss(self):
-        r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH=f"{self.t}/py:/usr/bin:/bin")   # no pi on PATH
+        r = self.pi_run("nopi", "coding", str(self.t / "brief.md"), PATH=f"{self.t}/py:/usr/bin:/bin")
         self.assertEqual(r.returncode, 4, r.stderr)
         self.assertIn("cannot run pi in the launch env", r.stderr)
         self.assertIsNone(self.run_json("nopi"))
-        (self.t / "bin" / "pi").write_text('#!/bin/bash\necho "claude-code m"; rm "$0"\n')   # answers the check, then is gone
+        (self.t / "bin" / "pi").write_text('#!/bin/bash\necho "claude-code m"; rm "$0"\n')
         self.start("nopi")
         run = self.finished("nopi")
         self.assertEqual(run["rc"], 127)
@@ -446,18 +429,18 @@ class Launcher(unittest.TestCase):
         self.assertTrue(wait_for(lambda: (self.run_json("lim") or {}).get("state") == "queued"), self.run_json("lim"))
         run = self.run_json("lim")
         self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None))
-        self.assertNotIn("wake:", self.log("lim"))   # no failed wake
+        self.assertNotIn("wake:", self.log("lim"))
         self.assertEqual(self.pi_run("list", "queued").stdout, f"lim queued attempt=1 rc=1 since={run['since']} resume_at={run['resume_at']}\n")
-        self.assertEqual(self.pi_run("list", "exited", "lost").stdout, "")   # nothing for the pickup to collect
+        self.assertEqual(self.pi_run("list", "exited", "lost").stdout, "")
         self.assertEqual(self.pi_run("collect", "lim").returncode, 3)
-        r = self.pi_run("lim", "coding", str(self.t / "w.md"))   # a direct start never resumes it
+        r = self.pi_run("lim", "coding", str(self.t / "w.md"))
         self.assertEqual(r.returncode, 3)
         self.assertIn("queued after a 429", r.stderr)
-        self.assertEqual(self.pi_run("resume", "lim").returncode, 2)   # pi-run resume is gone
+        self.assertEqual(self.pi_run("resume", "lim").returncode, 2)
         (self.t / "say").unlink()
         (self.t / "rc").write_text("0")
         brief = (self.t / "root/review/lim/brief.full.md").read_text()
-        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")   # what `bin/hourly recv --drain` runs
+        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed lim attempt 1", r.stdout)
         run = self.finished("lim")
@@ -466,13 +449,11 @@ class Launcher(unittest.TestCase):
         self.assertEqual(args[args.index("--session-id") + 1], "lim")
         self.assertEqual(args[args.index("--name") + 1], "role:coding")
         self.assertEqual(args[-1], pr.RESUME)
-        self.assertEqual((self.t / "drain").read_text().strip(), "unset")   # the drain's mark never reaches the session
-        self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)   # the first brief, kept
+        self.assertEqual((self.t / "drain").read_text().strip(), "unset")
+        self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
-        """The five 11 Nov failures (half-bounce-spaces, statechart-fixes, driver-macos-fixes, ci-fail-owner, ci-fail-owner-2)
-        each passed when run again under a fresh id; these are their last lines, verbatim."""
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
                          ("i2", "Incomplete Claude Code upstream response (status 200, capture incomplete, relay failure Error, "
                                 "native retries denied 1)"),
@@ -486,7 +467,7 @@ class Launcher(unittest.TestCase):
             self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None), sid)
             self.assertNotIn("wake:", self.log(sid), sid)
             at = time.mktime(time.strptime(run["resume_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
-            self.assertLess(abs(at - before), 30, sid)   # resume at once: nothing names a wait
+            self.assertLess(abs(at - before), 30, sid)
         (self.t / "say").unlink()
         (self.t / "args").unlink()
         r = self.pi_run("i1", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
@@ -497,8 +478,6 @@ class Launcher(unittest.TestCase):
         self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
 
     def test_an_upstream_that_always_fails_stops_after_three_resumes_and_sends_the_failed_wake(self):
-        """config/policy.toml resume.cap is 3: three resumes in the same session, then the fourth incomplete response ends
-        the run failed, and its one wake names the cap, pi's last line and the log."""
         say = "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"
         (self.t / "say").write_text(say + "\n")
         self.start("af", rc=1)
@@ -518,7 +497,7 @@ class Launcher(unittest.TestCase):
         self.assertIn(say, wakes[0]["reason"])
         self.assertEqual(wakes[0]["report"], str(self.t / "root/review/af/run.log"))
         r = self.pi_run("af", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
-        self.assertEqual(r.returncode, 3)   # nothing resumes it again: the pickup collects it
+        self.assertEqual(r.returncode, 3)
         self.assertIn("not collected", r.stderr)
         self.assertEqual(self.pi_run("collect", "af").returncode, 0)
         self.assertEqual(self.run_json("af")["state"], "collected")
@@ -550,13 +529,13 @@ class Launcher(unittest.TestCase):
         held = self.cargo_target("pr1", "wt3/target")
         src = d / "wt" / "libs" / "x" / "src.rs"
         src.write_text("fn main() {}\n")
-        notcargo = d / "wt" / "web" / "target"   # a dir named target that cargo did not make
+        notcargo = d / "wt" / "web" / "target"
         notcargo.mkdir(parents=True)
-        outside = self.cargo_target("pr1", "scratch/target")   # not under a wt* worktree
-        other = self.cargo_target("other", "wt/target")         # another run's
-        (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")   # a link out is never followed
+        outside = self.cargo_target("pr1", "scratch/target")
+        other = self.cargo_target("other", "wt/target")
+        (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")
         (d / "wt3" / "src").mkdir()
-        holder = subprocess.Popen(["/bin/sh", "-c", "exec sleep 30"], cwd=d / "wt3" / "src")   # a live shell in that worktree
+        holder = subprocess.Popen(["/bin/sh", "-c", "exec sleep 30"], cwd=d / "wt3" / "src")
         self.addCleanup(holder.kill)
         r = self.pi_run("collect", "pr1")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -571,7 +550,7 @@ class Launcher(unittest.TestCase):
     def test_collect_deletes_nothing_when_lsof_gives_no_answer_or_the_run_is_live(self):
         self.start("pr2", hang=True)
         t = self.cargo_target("pr2", "wt/target")
-        self.assertEqual(self.pi_run("collect", "pr2").returncode, 3)   # running: refused, nothing touched
+        self.assertEqual(self.pi_run("collect", "pr2").returncode, 3)
         self.assertTrue(t.exists())
         (self.t / "hang").unlink()
         self.finished("pr2")
@@ -583,7 +562,6 @@ class Launcher(unittest.TestCase):
         self.assertIn("kept 1 target/ dir(s): lsof gave no answer", r.stderr)
 
     def test_a_worktree_entered_after_the_first_lsof_keeps_its_target(self):
-        """The second lsof, after the target is renamed aside, sees a process that entered the worktree since the first."""
         self.start("pr3")
         self.finished("pr3")
         t = self.cargo_target("pr3", "wt/target")
@@ -593,23 +571,22 @@ class Launcher(unittest.TestCase):
         (self.t / "bin" / "lsof").chmod(0o755)
         r = self.pi_run("collect", "pr3")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((t / "CACHEDIR.TAG").exists())   # renamed back
+        self.assertTrue((t / "CACHEDIR.TAG").exists())
         self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
         self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
 
     def test_a_build_started_after_the_second_lsof_gets_a_fresh_target_that_prune_never_deletes(self):
-        """Once renamed aside, the old build is reachable only by its aside name: cargo started later makes a new target/."""
         self.start("pr5")
         self.finished("pr5")
         t = self.cargo_target("pr5", "wt/target")
-        (self.t / "bin" / "lsof").write_text(   # the second snapshot is clean, then a build starts in the worktree
+        (self.t / "bin" / "lsof").write_text(
             '#!/bin/sh\nn=$(cat "$T/lsof-n" 2>/dev/null || echo 0); echo $((n+1)) > "$T/lsof-n"\n'
             f'[ "$n" -ge 1 ] && mkdir -p "{t}/debug" && echo new > "{t}/debug/fresh"\necho p1; echo n/\n')
         (self.t / "bin" / "lsof").chmod(0o755)
         r = self.pi_run("collect", "pr5")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")   # the later build's target/ is untouched
-        self.assertFalse((t / "debug" / "blob").exists())                 # the old build went
+        self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")
+        self.assertFalse((t / "debug" / "blob").exists())
         self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
 
     def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
@@ -625,12 +602,12 @@ class Launcher(unittest.TestCase):
         os.killpg(self.run_json("gone")["pid"], signal.SIGKILL)
         self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == "gone lost attempt=1 rc=None\n"))
         r = self.pi_run("collect", "gone")
-        self.assertEqual(r.stdout, "gone attempt=1 lost\n")   # the hourly reads this line; the wake goes to stderr
+        self.assertEqual(r.stdout, "gone attempt=1 lost\n")
         wakes = [json.loads(x) for x in r.stderr.splitlines() if x.startswith("{")]
         self.assertEqual([(w["kind"], w["id"]) for w in wakes], [("failed", "gone")])
         self.assertIn("was lost (KILL or OOM)", wakes[0]["reason"])
         self.assertEqual(self.run_json("gone")["wake"], "failed")
-        self.assertEqual(self.pi_run("collect", "gone").returncode, 3)   # once
+        self.assertEqual(self.pi_run("collect", "gone").returncode, 3)
 
     def test_a_run_that_only_quotes_a_429_is_a_plain_failure(self):
         for sid, say in (("q1", "Incomplete Claude Code upstream response (status 429, x)\nreport done\n"),
@@ -667,7 +644,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.pi_run("list", "queued").stdout.split()[:1], ["qb"])
         self.assertEqual(self.pi_run("queue", "nobrief").returncode, 2)
         self.pi_run("collect", "qa")
-        r = self.pi_run("qa", "coding", str(self.t / "brief.md"))   # a start after collected: a retry is a fresh id
+        r = self.pi_run("qa", "coding", str(self.t / "brief.md"))
         self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: qa: attempt 1 was collected; a retry is a fresh id"))
 
     def test_a_paused_run_from_the_old_code_becomes_a_queued_continuation(self):
@@ -678,7 +655,7 @@ class Launcher(unittest.TestCase):
                                                 "resume_at": "2026-11-10T06:00:00Z", "role": "coding", "extra": []}))
         self.assertEqual(self.pi_run("list").stdout,
                          "old-pause queued attempt=1 rc=1 since=2026-11-10T04:53:24Z resume_at=2026-11-10T06:00:00Z\n")
-        self.assertEqual(self.pi_run("old-pause", "coding", str(self.t / "brief.md")).returncode, 3)   # only the drain resumes it
+        self.assertEqual(self.pi_run("old-pause", "coding", str(self.t / "brief.md")).returncode, 3)
         r = self.pi_run("old-pause", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed old-pause attempt 1", r.stdout)
@@ -689,7 +666,6 @@ class Launcher(unittest.TestCase):
         q = {"state": "queued", "attempt": 0, "pid": None, "start": None, "rc": None, "wake_finish": False, "wake": None,
              "resume_at": None, "since": "2026-11-10T01:00:00Z", "role": "coding"}
         (d / "run.json").write_text(json.dumps(q))
-        # the fake pi's --list-models is the setup window: another launcher's run hits a 429 there and is queued again
         cont = {**q, "attempt": 1, "rc": 1, "resume_at": "2026-11-10T02:00:00Z", "extra": []}
         swap = f'echo {json.dumps(json.dumps(cont))} > "{d}/run.json";'
         (self.t / "bin" / "pi").write_text(FAKE_PI.replace('if [ "$1" = --list-models ]; then', f'if [ "$1" = --list-models ]; then {swap}'))
@@ -706,19 +682,18 @@ class Launcher(unittest.TestCase):
         run = self.run_json("rr")
         (self.t / "root/review/rr/run.json").write_text(json.dumps({**run, "resume_at": "2000-01-01T00:00:00Z"}))
         (self.t / "say").unlink()
-        r = self.pi_run("rr", "verifier", str(self.t / "brief.md"), PI_RUN_DRAIN="1")   # the brief's role changed since
-        self.assertEqual(r.returncode, 0, r.stderr)   # verifier's provider has no credential here: coding's is used
+        r = self.pi_run("rr", "verifier", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("as role coding: claude-code", r.stdout)
 
     def test_a_live_queued_marker_becomes_a_queued_run_with_its_place(self):
-        """The QUEUED files before run.json had the queue: migrated, not deleted (ci-times-72h and lint-audit, 10 Nov)."""
         for sid, mark in (("old", ""), ("rq", "research\n")):
             d = self.t / "root" / "review" / sid
             d.mkdir(parents=True)
             (d / "brief.md").write_text("task\nrole: coding\n")
             (d / "QUEUED").write_text(mark)
-            os.utime(d / "QUEUED", (1762743960, 1762743960))   # 2025-11-10T03:06:00Z
-        done = self.t / "root" / "review" / "done"   # a marker beside a run that already started is left alone
+            os.utime(d / "QUEUED", (1762743960, 1762743960))
+        done = self.t / "root" / "review" / "done"
         done.mkdir()
         (done / "QUEUED").write_text("")
         (done / "run.json").write_text(json.dumps(Step.R(Step(), "collected", rc=0)))
@@ -728,7 +703,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.run_json("old")["role"], self.run_json("rq")["role"]), ("coding", "research"))
         self.assertFalse((self.t / "root/review/old/QUEUED").exists())
         self.assertTrue((done / "QUEUED").exists())
-        self.assertEqual(self.pi_run("list").stdout.count("queued"), 2)   # twice: the same
+        self.assertEqual(self.pi_run("list").stdout.count("queued"), 2)
 
     def test_every_entry_point_prints_its_zstack_sha(self):
         sha = subprocess.run(["git", "-C", str(PKG), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -753,7 +728,6 @@ class Launcher(unittest.TestCase):
         return host
 
     def test_a_launch_with_no_credential_fails_fast_with_no_state_and_no_wake(self):
-        # the 13:04 10 Nov incident: pi started without the env file, so claude-code had no key
         env = {k: v for k, v in self.env.items() if k != "TEST_TOKEN"}
         for dry in ("", "1"):
             r = subprocess.run([sys.executable, str(LAUNCHER), "nokey", "coding", str(self.t / "brief.md")], capture_output=True,
@@ -761,14 +735,13 @@ class Launcher(unittest.TestCase):
             self.assertEqual(r.returncode, 4, r.stderr)
             self.assertIn("pi-run: nokey: no claude-code credential in the launch env", r.stderr)
             self.assertIn("Nothing started.", r.stderr)
-        r = self.pi_run("nokey", "verifier", str(self.t / "brief.md"), PI_RUN_DRY="1")   # the role's own provider is checked
+        r = self.pi_run("nokey", "verifier", str(self.t / "brief.md"), PI_RUN_DRY="1")
         self.assertEqual(r.returncode, 4, r.stderr)
         self.assertIn("no openai-codex credential", r.stderr)
-        self.assertFalse((self.t / "root").exists())   # no run.json, so no exit and no wake
-        self.assertFalse((self.t / "args").exists())   # pi never ran a session
+        self.assertFalse((self.t / "root").exists())
+        self.assertFalse((self.t / "args").exists())
 
     def test_the_host_file_named_in_config_is_loaded_without_onigiri_host(self):
-        # a bare nohup or ssh launch: no ONIGIRI_HOST and no credential in the shell; the host file holds it
         self.host("test-cfg", 'export TEST_TOKEN=from-host-file ONIGIRI_ROOT="$HOME/root/cfg"\n')
         env = {k: v for k, v in self.env.items() if k != "TEST_TOKEN"}
         self.assertEqual(subprocess.run([sys.executable, str(LAUNCHER), "c", "coding", str(self.t / "brief.md")], capture_output=True,
@@ -780,7 +753,6 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("started c attempt 1 pid", r.stdout)
         self.assertIn(f"in {self.t}/root/cfg/review/c ", r.stdout)
-        # ONIGIRI_HOST set, even empty, wins over the config file
         r = subprocess.run([sys.executable, str(LAUNCHER), "list"], capture_output=True, text=True, env={**env, "ONIGIRI_HOST": ""}, timeout=30)
         self.assertEqual(r.stdout, "")
 

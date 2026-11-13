@@ -1,5 +1,3 @@
-// tool-guard: adds three wall-clock rules to every session's system prompt, subagent children included. They are
-// prompt rules, not blocks.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const GUIDELINES = [

@@ -1,8 +1,3 @@
-"""Every package config file the tracked files name exists in config/. zstack #72 deleted config/models.json while the
-subagent tool still named it, so a verifier call failed with ENOENT. A reference counts when it is written as
-config/<file> (not ~/.config/ or .cursor/), or as a "config" path segment joined to a file name ("config", "x.toml" or
-"config" / "x.toml"). vendor/ is third-party code and is skipped, and so is this file, whose examples name missing files.
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import re
 import subprocess
 import unittest
@@ -16,7 +11,6 @@ REFS = (
 
 
 def refs(text):
-    """The config file names text refers to, as {name: [line numbers]}."""
     found = {}
     for n, line in enumerate(text.splitlines(), 1):
         for rx in REFS:
@@ -43,7 +37,6 @@ class ConfigRefs(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_the_forms_the_pre_72_subagent_tool_used_are_caught(self):
-        """The subagent tool before #72, the reader that broke, in both of its forms."""
         old = ('const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "models.json");\n'
                "// a child's provider and model come from config/models.json by agent name\n"
                'cfg = PKG / "config" / "slots.json"\n')

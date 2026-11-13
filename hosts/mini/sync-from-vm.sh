@@ -1,14 +1,7 @@
 #!/bin/bash
-# sync-from-vm.sh: refresh the mini's read-only copy of the VM's holds file, ~/onigiri/sync/hold-prs.txt, for pi
-# sessions here. hosts/mini/host.sh runs it at every launch, so launches overlap. Each run holds an exclusive lock on
-# $d/.lock from fetch to rename, so a slow fetch never replaces a newer one, and fetches into its own temp file, so
-# nothing is left half-written when a run dies. A failed fetch keeps the old copy and exits 1. It reaches the VM
-# through ./vm, or $ONIGIRI_VM when set (the test's fake).
 set -u
 d=$HOME/onigiri/sync; mkdir -p "$d"
 if [ -z "${SYNC_FROM_VM_LOCKED:-}" ]; then
-  # macOS has no flock(1); python3 takes the lock and execs this script again with the lock fd open. A run stuck on
-  # ssh would hold it, so a launch waits at most 60s and then keeps the old copy.
   SYNC_FROM_VM_LOCKED=1 exec python3 -c 'import fcntl, os, sys, time
 fd, end = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644), time.time() + 60
 while True:

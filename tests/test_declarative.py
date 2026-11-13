@@ -1,15 +1,3 @@
-"""zstack keeps rules, config and state in declarative files under config/, read through bin/policy, and prose only for
-method. These tests hold the code and the skills to that:
-
-  - config/rules.toml renders the Hard rules, and only bin/policy reads it (no second copy, no hard-rules.md).
-  - No skill, playbook, agent prompt or prompt template restates a value that lives in config/policy.toml: the skills
-    name the key instead (`[hourly]` `floor_gb`), so a value has one copy and changes in one place.
-  - Every runtime state file the code opens under a host's root is declared in config/state.toml, and each file's
-    declared writer and readers name it.
-  - Nothing asks a session for the `verified <sha>` PR comment: verification is not a merge condition (zstack #54), so
-    its line goes to the run report only.
-
-Run: python3 -m unittest discover -s tests -p 'test_*.py'"""
 import importlib.machinery
 import importlib.util
 import json
@@ -24,8 +12,6 @@ policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name
 _l.exec_module(policy)
 POLICY, RULES, STATE = policy.load(), policy.rules(), policy.state()
 
-# The prose a session or the chat reads. The skills vendored verbatim from pstack and trycua/cua (docs/PROVENANCE.md)
-# are not zstack's and say nothing about its config.
 VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/",
             "skills/cua/")
 
@@ -41,9 +27,6 @@ def prose():
 
 
 def restated(text, pol):
-    """The policy values a piece of prose states as values, as [(key, the text that states it)]. A string value counts
-    where it appears as its own word or path segment; a number counts with its unit or as a bare count next to the
-    word its key is about. A number inside a date, a time or a step number is not a policy value."""
     hits = []
     words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]],
              "merge.gate_check": [pol["merge"]["gate_check"]], "patent.private_repo": [pol["patent"]["private_repo"]]}
@@ -85,7 +68,6 @@ class Rules(unittest.TestCase):
         self.assertIn("`config/rules.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 
     def test_no_prose_carries_a_second_copy_of_a_rule(self):
-        """A skill or agent may point at a rule or quote it with {{rule <id>}}, never paste its text."""
         texts = [r["text"] for s in RULES["section"] for r in s["rule"]]
         copies = [(f, t[:60]) for f in prose() for t in texts if len(t) > 50 and t in (PKG / f).read_text()]
         self.assertEqual(copies, [])
@@ -129,7 +111,6 @@ class NoRestatedValues(unittest.TestCase):
         self.assertEqual(found, [], "name the config/policy.toml key instead of its value")
 
     def test_the_check_catches_what_the_playbook_said_before(self):
-        """Lines from playbooks/hourly.md before the move, each a value the policy now holds."""
         old = {"it has at least 20G free": "hourly.floor_gb", "no log or session write for 3h": "hourly.hung_min",
                "(none in the last 55 minutes": "hourly.merge_stale_min", "The first pass after 08:00 SGT": "hourly.batch_hour",
                "at most 10 a pass": "hourly.file_cap", "lume VMs older than 24h": "hourly.lume_prune_age_h",
@@ -147,12 +128,10 @@ class NoRestatedValues(unittest.TestCase):
 
 
 class StateFiles(unittest.TestCase):
-    # A literal file name the code joins onto a root or review dir (os.path.join(<root or d>, "<name>") or
-    # f"{ROOT}/<name>"); package paths (PKG) are code, not state.
     JOIN = re.compile(r"os\.path\.join\((?!PKG\b)[^()]*?(?:\([^()]*\))?[^()]*?"
                       r"\"([\w.-]+\.(?:json|log|txt|md|lock)|[A-Z]+|pushed|last-run|auto-pause)\"\)")
     FSTR = re.compile(r"f\"\{(?:ROOT|DIR|root|d)\}/([\w.-]+)\"")
-    DIRS = {"tick", "review", "pickup", "sync"}   # directories under the root, not state files
+    DIRS = {"tick", "review", "pickup", "sync"}
     CODE = ("bin/pi-run", "bin/hourly", "bin/pickup", "bin/hold-row", "bin/check-host", "hosts/vm/merge_job.py",
             "hosts/vm/patent_push.py", "hosts/mini/sync-from-vm.sh", "hosts/vm/cron-wrap.sh")
 
@@ -189,8 +168,6 @@ class StateFiles(unittest.TestCase):
 
 class NoVerifiedComment(unittest.TestCase):
     def test_nothing_asks_for_the_verified_pr_comment(self):
-        """Zane, 12 Nov: "why do we need the comment even if we aren't using it anymore". The verifier still runs and its
-        line goes to the run report."""
         rx = re.compile(r"verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
         rendered = policy.render(RULES)
         hits = [f"config/rules.toml: {m.group(0)}" for m in rx.finditer(rendered)]

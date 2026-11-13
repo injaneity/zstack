@@ -1,11 +1,4 @@
 #!/bin/bash
-# check-parity: is this host merged main and nothing else? Three checks, one "ok" or "FAIL" line each, exit 1 on any FAIL.
-#   package  this checkout is on main, clean, and at origin/main (fetched now)
-#   hook     $ONIGIRI_ROOT/cua's pre-push hook is a symlink to this checkout's hosts/vm/pre-push
-#   agents   <pi agent dir>/agents holds nothing but files equal to this checkout's agents/<same name>: the subagent
-#            tool loads agents/ from this checkout, so anything else there is an old copy or an agent main lacks
-# hosts/*/host.sh run it before a launch, and bin/pi-run starts nothing when it fails. hosts/vm/merge_job.py runs it on
-# every cron run and raises an urgent parity wake. It fetches origin/main and changes nothing else. ONIGIRI_ROOT defaults to /srv/onigiri.
 set -u
 pkg="$(cd "$(dirname "$0")/.." && pwd -P)"
 root=${ONIGIRI_ROOT:-/srv/onigiri}
