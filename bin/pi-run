@@ -438,7 +438,7 @@ def launch(sid, role, brief, extra):
         text = brief_text = "".join(open(x).read() for x in (prefix, brief) if x)
     pol = policy()
     try:
-        provider, model = pol.model_for(role)
+        provider, model = pol.model_for(role, conf())
     except pol.PolicyError as e:
         die(2, str(e))
     cap, idle = conf("resume", "cap"), conf("run", "idle_min") * 60

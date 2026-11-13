@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import io
 import itertools
 import json
 import os
@@ -11,7 +12,9 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 PKG = Path(__file__).resolve().parent.parent
 LAUNCHER = PKG / "bin" / "pi-run"
@@ -249,6 +252,16 @@ class OneConfigPerProcess(unittest.TestCase):
             self.assertEqual((mod.conf("slots"), mod.conf("resume", "cap"), mod.conf("run", "idle_min")),
                              (want["slots"], want["resume"]["cap"], want["run"]["idle_min"]))
             self.assertEqual(mod.conf(), want)
+            (pkg / "config/policy.toml").write_text((PKG / "config/policy.toml").read_text().replace(
+                want["models"]["coding"]["model"], "a-newer-model"))
+            seat = want["models"]["coding"]
+            (pkg / "brief.md").write_text("do it\n")
+            env = {"PI_RUN_DRY": "1", "PI_RUN_COUNTED": "1", "ZSTACK_ENSURED": "1", "ONIGIRI_HOST": "", "ONIGIRI_ROOT": t}
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, env), mock.patch.object(mod, "subprocess") as sp, redirect_stdout(out):
+                sp.run.return_value.stdout = f"{seat['provider']} {seat['model']}\n"
+                self.assertEqual(mod.launch("snap", "coding", str(pkg / "brief.md"), []), 0)
+            self.assertIn(f"{seat['provider']} {seat['model']}", out.getvalue())
 
 
 class Launcher(unittest.TestCase):
