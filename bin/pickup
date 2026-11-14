@@ -242,16 +242,13 @@ def old_workers():
     if vms is None or not seed:
         return None, None, f"lume ls failed: {pr.tail(p, 150)}" if vms is None else f"no seed in {LUME_CONFIG}"
     marks = set(os.listdir(LUME_UNRESOLVED)) if os.path.isdir(LUME_UNRESOLVED) else set()
-    old, alive = {}, set()
+    old, alive = {}, {}
     for v in vms:
         m = WORKER.fullmatch(v.get("name") or "")
         if not m:
             continue
-        alive.add(m[1])
-        if v["name"] in (seed, *marks) or v.get("status") != "stopped":
-            continue
-        born = calendar.timegm(time.strptime(m[1][:16], "%Y%m%dT%H%M%SZ"))
-        if time.time() - born >= PRUNE_AGE_S:
+        alive[m[1]] = born = calendar.timegm(time.strptime(m[1][:16], "%Y%m%dT%H%M%SZ"))
+        if v["name"] not in (seed, *marks) and v.get("status") == "stopped" and time.time() - born >= PRUNE_AGE_S:
             old[m[1]] = (v, born)
     return old, alive, None
 
@@ -303,9 +300,9 @@ def prune_lume(dry, state):
         return [["lume-prune", f"lume workers not pruned this pass: {why}"]]
     seen = {rid: x for rid, x in state["lume"].items() if rid in alive}
     start = time.time()
-    since = min((seen[rid]["scanned"] if rid in seen else born for rid, (_, born) in old.items()), default=start)
-    named = runs_naming(set(old), since)
-    for rid in old:
+    since = min((seen[rid]["scanned"] if rid in seen else born for rid, born in alive.items()), default=start)
+    named = runs_naming(set(alive), since)
+    for rid in alive:
         seen[rid] = {"runs": sorted(set(seen.get(rid, {}).get("runs", [])) | named.get(rid, set())), "scanned": start}
     if not dry:
         state["lume"] = seen

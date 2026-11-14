@@ -511,6 +511,19 @@ class Pickup(unittest.TestCase):
         self.pickup()
         self.assertEqual(self.vms(), [name])
 
+    def test_a_run_that_named_a_running_worker_still_holds_it_once_stopped(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000ef"
+        self.lume([(name, "running")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.run_dir("going", "running", [name[8:]])
+        self.pickup()
+        (self.root / "review" / "going" / "notes.txt").unlink()
+        time.sleep(1.1)
+        self.run_dir("done", "collected", [name[8:]])
+        self.lume([(name, "stopped")])
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+
     def test_no_delete_while_a_lume_e2e_run_holds_its_lock(self):
         name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000ff"
         self.lume([(name, "stopped")])
