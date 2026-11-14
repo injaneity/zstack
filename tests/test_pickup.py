@@ -245,7 +245,8 @@ class Pickup(unittest.TestCase):
         self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
             "- salvage cua#701 of cua#601 lacks `Fixes #10`, `Fixes #11` in its body: add it",
             "- cua#14 is still open: our merged salvage cua#703 fixed it but lacked `Fixes #14`; close it with a comment naming cua#703",
-            "- cua#603 is still open after its salvage cua#703 merged: close it only after its approved thank-you is posted, given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
+            "- cua#603 is still open after its salvage cua#703 merged: close it only after its approved thank-you is posted, "
+            "given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
         self.assertNotIn("error:", report)
         self.pickup()
         self.assertEqual(len(self.wakes()), 1)
@@ -264,7 +265,8 @@ class Pickup(unittest.TestCase):
         chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
         self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
             "- cua#22 is still open: our merged salvage cua#4561 fixed it but lacked `Fixes #22`; close it with a comment naming cua#4561",
-            "- cua#4469 is still open after its salvage cua#4561 merged: close it only after its approved thank-you is posted, given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
+            "- cua#4469 is still open after its salvage cua#4561 merged: close it only after its approved thank-you is posted, "
+            "given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
         self.assertNotIn("cua#7030", report)
         self.assertNotIn("cua#4468", report)
         self.assertNotIn("cua#20 ", report)
