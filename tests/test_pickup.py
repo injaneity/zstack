@@ -101,7 +101,8 @@ class Pickup(unittest.TestCase):
         facts = {"sha": "s", "at_main": at_main, "parity": [], "free_gb": 25, "runs": runs or {}, "ids": list(ids),
                  "pushed": {}, "merge_last": last, "holds": holds}
         p = self.t / "vm"
-        p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' " + " ".join(f"'dry-run {w}'" for w in waits)
+        p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) echo x >> \"$T/merge-dry-runs\"; printf '%s\\n' "
+                     + " ".join(f"'dry-run {w}'" for w in waits)
                      + " ;;\n*) cat " + str(self.t / "vm-facts.json") + ";; esac\n")
         p.chmod(0o755)
         (self.t / "vm-facts.json").write_text(json.dumps(facts))
@@ -446,6 +447,27 @@ class Pickup(unittest.TestCase):
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertNotIn("would launch", out)
         self.assertIn("skip cua-10: host", out)
+
+    def test_a_pass_runs_the_merge_job_dry_run_once_and_the_queue_and_picks_share_it(self):
+        self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate"])
+        out = self.pickup()
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+        self.assertIn("red cua#7229 fffffffff: no run pushed this head; file an unstick", out)
+        self.assertEqual([r[1] for r in self.rows("launch")], ["cua-7229-unstick-4ef9df0"])
+        (self.t / "merge-dry-runs").unlink()
+        self.pickup("--dry")
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+
+    def test_a_failed_merge_job_dry_run_is_reported_by_the_queue_and_blocks_the_picks(self):
+        p = self.t / "vm"
+        self.peer()
+        p.write_text(p.read_text().replace("*merge_job.py*) ", "*merge_job.py*) echo x >> \"$T/merge-dry-runs\"; echo boom >&2; exit 1;; *never*) "))
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup()
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+        self.assertIn("error: merge job dry run on vm: boom: no red PR was reopened this pass", out)
+        self.assertIn("no picks: merge job dry run on vm: boom", out)
+        self.assertEqual(self.rows("launch"), [])
 
     def test_an_unstick_is_picked_only_for_a_red_pr_no_thread_owns(self):
         self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate",

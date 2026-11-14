@@ -246,8 +246,9 @@ def collect(hosts, dry, state, errors):
             hourly.log(h, "collect", sid, f"rc={r.get('rc')}; prs {' '.join(res['prs']) or 'none'}; to the outbox")
 
 
-def drain(dry):
-    p = hourly.run([os.path.join(PKG, "bin", "hourly"), "queue"], env={**os.environ, **({"PI_RUN_DRY": "1"} if dry else {})})
+def drain(dry, waits, errors):
+    p = hourly.run([os.path.join(PKG, "bin", "hourly"), "queue", "--waits", "-"], input=json.dumps({"waits": waits, "errors": errors}),
+                   env={**os.environ, **({"PI_RUN_DRY": "1"} if dry else {})})
     out = p.stdout + (f"queue: not drained (exit {p.returncode}): {p.stderr.strip().splitlines()[-1] if p.stderr.strip() else ''}\n"
                       if p.returncode else "")
     print(out, end="")
@@ -268,10 +269,12 @@ def run_pass(dry):
     state, errors = read_state(), []
     hosts = hourly.all_facts()
     collect(hosts, dry, state, errors)
-    lines = drain(dry)
+    merge_errors = []
+    waits = hourly.merge_waits(merge_errors)
+    errors += merge_errors
+    lines = drain(dry, waits, merge_errors)
     hosts = hourly.all_facts() if not dry else hosts
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
-    waits = hourly.merge_waits(errors)
     blind = hourly.unknown(hosts)
     h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds(None)
     if mh and "holds" not in hosts.get(mh, {}):
