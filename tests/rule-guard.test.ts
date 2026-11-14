@@ -5,14 +5,17 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
 
 const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
 const ISSUES = issuesOwned(DUMP);
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
 const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)) };
+const TEAM = reviewOnlyLogins(["review-only    | f-trycua      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
+const AUTHORS: Record<number, string> = { 7030: "f-trycua", 4468: "DDupont808", 3138: "injaneity", 6853: "someone" };
+const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)), reviewOnly: () => TEAM,
+	authorOf: (_repo: string, n: number) => AUTHORS[n] };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inCua = "/cua/wt";
@@ -488,4 +491,29 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 	assert.equal(checkBash("gh issue close 6853 -R trycua/cua", OWNED, host, "/zs", false, new Set()), undefined);
 	assert.equal(issuesOwned(() => "{}"), null);
 	assert.equal(issuesOwned(() => { throw new Error("x"); }), null);
+});
+
+test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {
+	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
+	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", false, ISSUES), undefined, c);
+	assert.deepEqual(TEAM, new Set(["f-trycua", "ddupont808"]));
+	for (const c of [
+		'gh issue close 7030 -R trycua/cua --comment "Fixed by #7147."',
+		'gh pr close 7030 -R trycua/cua --comment "Replaced by #7147, which merged."',
+		'gh pr close https://github.com/trycua/cua/pull/4468 -c "Replaced by #4560"',
+		'gh issue close https://github.com/trycua/cua/issues/4468 --comment "Fixed by #4560"',
+		"gh api -X PATCH repos/trycua/cua/pulls/7030 -f state=closed",
+		'ssh vm "gh pr close 7030 -R trycua/cua"',
+	]) no(c);
+	ok('gh pr close 3138 -R trycua/cua --comment "Replaced by #7587, which merged."');
+	ok('gh issue close 6853 -R trycua/cua --comment "Fixed by #6928."');
+	ok("gh pr close 7030 -R injaneity/zstack");
+	ok("gh pr view 7030 -R trycua/cua");
+	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", why, c);
+	refuse('gh pr close 3138 -R trycua/cua -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /no hold-prs.txt could be read/);
+	refuse('gh pr close 9999 -R trycua/cua -c "Replaced by #7587"', host, /could not tell/);
+	refuse('gh pr close -R trycua/cua -c "Replaced by #7587"', host, /without a number/);
+	refuse(`gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`, host, /GraphQL close/);
+	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
+	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
 });
