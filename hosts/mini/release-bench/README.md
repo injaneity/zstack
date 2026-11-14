@@ -6,7 +6,7 @@ against 0.49.4, 14 Nov). Arm `pi-cua-driver-main`, `openai-codex/gpt-6.1-terra` 
 - `serial.sh RUN_DIR VM_RUN_DIR OLD NEW` runs the macOS lane, then the Linux lane, one trial at a time on the mini.
 - macOS: `guest/` goes to the Lume bench guest's `~/rb/guest/`, with the releases' darwin-arm64 `cua-driver`,
   `cua-cursor-theme`, `skills/cua-driver/` and `GIT_SHA` (the tag commit) in `~/rb/drv-<version>/`. `guest/run-all.sh`
-  installs each release into the bench's private apps with `guest/install-driver.sh` (the driver-latency-macos
+  installs each release into the bench's private apps with `~/rb/guest/install-driver.sh` (the driver-latency-macos
   installer, which needs the guest's `~/bench-work` from the bench seed) and runs `guest/session.sh` per task.
   `ssh.sh` reaches the guest at `$RB_DIR/guest-ip`.
 - Linux: on the VM, `VM_RUN_DIR` holds `wt` (a trycua/cua worktree at origin/main) and `drv-<version>/` (the

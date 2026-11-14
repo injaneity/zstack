@@ -7,7 +7,7 @@ log() { echo "$(date -u +%FT%TZ) $*" >> $R/progress.log; }
     for r in $R/sessions/rb-l-*/runs/rb-l-*; do touch $r/STOP; done; log "disk guard: STOP under 20G"; break; done ) &
 G=$!
 log "start linux lane old=$OLD new=$NEW harness $(git -C $R/wt rev-parse --short HEAD) P1=${P1:-5}"
-i=0
+i=0; bad=""
 for t in $TASKS; do
   if (( i % 2 )); then order="$NEW $OLD"; else order="$OLD $NEW"; fi; i=$((i+1))
   for v in $order; do
@@ -17,8 +17,10 @@ for t in $TASKS; do
     log "start $id"
     $(dirname "$(readlink -f "$0")")/linux-session.sh $v $t $id > $R/logs/$id.log 2>&1; rc=$?
     log "end $id rc=$rc done=$([ -f $R/sessions/$id/runs/$id/DONE ] && echo 1 || echo 0)"
+    [ -f $R/sessions/$id/runs/$id/DONE ] || bad="$bad $id"
     [ -f $R/sessions/$id/runs/$id/STOP ] && { log "stopped at $id"; kill $G; exit 1; }
   done
 done
 kill $G 2>/dev/null
+[ -z "$bad" ] || { log "linux lane incomplete:$bad"; exit 1; }
 log "linux lane done"
