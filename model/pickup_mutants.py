@@ -35,8 +35,8 @@ M = [
     ("collect-before-outbox", "a run collected before its report reached the outbox",
      [("/\\ ended' = FALSE /\\ unsent' = (unsent \\/ ended) /\\ pending' = (pending \\/ ended)",
        "/\\ ended' = FALSE /\\ pending' = (pending \\/ ended)"),
-      ("  /\\ UNCHANGED <<worker, user, listed, blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>",
-       "  /\\ UNCHANGED <<worker, user, listed, blocker, taken, auto, drained, chat, queued, blind, standing, seen, unsent, lock, free, had, failed, woke>>")],
+      ("  /\\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>",
+       "  /\\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, standing, seen, unsent, lock, free, had, failed, woke>>")],
      "NoResultLost"),
     ("foreign-brief-not-taken", "a review dir with another launcher's brief and no run is not taken, so its brief runs as written",
      [("/\\ taken = Foreign\n", "/\\ taken = {}\n")], "ForeignNeverLaunched"),
@@ -46,8 +46,10 @@ M = [
      [("/\\ listed' = Prunable\n", "/\\ listed' = FALSE\n")], "a temporal property", "Prune"),
     ("prune-uncollected", "a worker whose run is not collected is deleted",
      [("Prunable == worker = \"old\" /\\ user = \"collected\"", "Prunable == worker = \"old\"")], "PruneIsSafe", "Prune"),
-    ("delete-without-recheck", "a worker listed stopped is deleted after it booted again",
-     [("/\\ worker' = (IF listed /\\ worker = \"old\" THEN \"gone\" ELSE worker)", "/\\ worker' = (IF listed THEN \"gone\" ELSE worker)")],
+    ("delete-outside-run-lock", "the delete runs without lume-e2e's run.lock, so a worker boots between the check and the delete",
+     [("/\\ listed /\\ vmlock = \"none\" /\\ pc' = [pc EXCEPT ![p] = \"remove\"]\n  /\\ vmlock' = \"prune\"",
+       "/\\ listed /\\ pc' = [pc EXCEPT ![p] = \"remove\"]\n  /\\ vmlock' = vmlock"),
+      ("  /\\ vmlock' = \"none\" /\\ worker' = (IF checked", "  /\\ vmlock' = vmlock /\\ worker' = (IF checked")],
      "PruneIsSafe", "Prune"),
 ]
 

@@ -28,7 +28,7 @@ stateDiagram-v2
   s2 --> s3: deadline_s passes: the pass is killed
   s2 --> s4: stopped workers past lume_prune_age_h that only collected runs name
   s4 --> s3: deadline_s passes: the pass is killed
-  s4 --> s5: each still stopped is deleted, every pass
+  s4 --> s5: none to delete, or a lume-e2e run holds run.lock
   s3 --> s0: wake delivered, lock freed
   s3 --> s6: wake not delivered: outbox kept, lock freed
   s5 --> s3: deadline_s passes: the pass is killed
