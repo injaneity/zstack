@@ -47,12 +47,16 @@ M = [
     ("stopped-lost-wakes", "the collect of a stopped run that was lost sends the failed wake",
      [("IF Lost /\\ ~stopped THEN \"failed\" ELSE IF Lost", "IF Lost THEN \"failed\" ELSE IF Lost")], "StopIsSilent"),
     ("exit-leaves-daemon", "a run's private cua-driver daemon outlives its pi (cua-4243's daemon, 13 Nov)",
-     [("/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE /\\ daemon' = FALSE\n  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
-       "/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE\n  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
+     [("/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE /\\ daemon' = FALSE\n"
+       "  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
+       "/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE\n"
+       "  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
      "DaemonEndsWithTheRun"),
     ("lost-collect-leaves-daemon", "a lost run's collect leaves the daemon its dead supervisor never stopped",
-     [("ELSE IF Lost THEN \"none\" ELSE wake) /\\ daemon' = FALSE\n  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
-       "ELSE IF Lost THEN \"none\" ELSE wake)\n  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
+     [("ELSE IF Lost THEN \"none\" ELSE wake) /\\ daemon' = FALSE\n"
+       "  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
+       "ELSE IF Lost THEN \"none\" ELSE wake)\n"
+       "  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
      "DaemonEndsWithTheRun"),
 ]
 

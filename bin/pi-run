@@ -361,8 +361,8 @@ def run_daemons(sid):
         pid, uid, args = (line.split(None, 2) + ["", ""])[:3]
         args = args.strip()
         w = args.split()
-        if not (pid.isdigit() and int(pid) != os.getpid() and uid == str(os.getuid()) and len(w) > 1 and os.path.basename(w[0]).startswith("cua-driver")
-                and w[1] == "serve" and "--socket" in w[2:]):
+        if not (pid.isdigit() and int(pid) != os.getpid() and uid == str(os.getuid()) and len(w) > 1
+                and os.path.basename(w[0]).startswith("cua-driver") and w[1] == "serve" and "--socket" in w[2:]):
             continue
         env = env_of(pid, args)
         if env is None:
