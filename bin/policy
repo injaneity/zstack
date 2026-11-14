@@ -86,6 +86,12 @@ SCHEMA = {
         "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "preapprove_tiers": (words, "a list of distinct lowercase words"),
     },
+    "release_bench": {
+        "repo": (repo, "owner/name"),
+        "tag_prefix": (lambda v: text(v) and re.fullmatch(r"[\w.-]+", v) is not None, "a tag prefix of letters, digits, . - _"),
+        "benched": (lambda v: isinstance(v, str) and re.fullmatch(r"\d+(\.\d+)*", v) is not None, "a dotted version"),
+        "host": (lambda v: text(v), "a host name"),
+    },
     "issues": {
         "repo": (repo, "owner/name"),
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),

@@ -21,6 +21,8 @@ _l.exec_module(hourly)
 pr = hourly.pr
 CFG = hourly._policy["pickup"]
 ISSUES = hourly._policy["issues"]
+RB = hourly._policy["release_bench"]
+RB_ID = re.compile(r"release-bench-(\d+(?:\.\d+)*)")
 REPO, ME = hourly.REPO, hourly.ME
 RULES = ("held", "pr", "overlap", "zane", "host")
 URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
@@ -71,6 +73,27 @@ def candidates(errors, waits, owned):
     return sorted(out, key=lambda c: ("urgent" not in c["labels"], c["created"] or "9", c["id"]))
 
 
+def version(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def release_candidate(errors, taken):
+    tags = [r["tagName"][len(RB["tag_prefix"]):] for r in gh(errors, "release", "list", "-R", RB["repo"], "--exclude-drafts",
+                                                           "--limit", "200", "--json", "tagName,isDraft")
+            if not r.get("isDraft") and r["tagName"].startswith(RB["tag_prefix"])]
+    tags = [t for t in tags if re.fullmatch(r"\d+(\.\d+)*", t)]
+    if not tags:
+        return []
+    new = max(tags, key=version)
+    if version(new) <= version(RB["benched"]) or f"release-bench-{new}" in taken:
+        return []
+    done = [m[1] for t in taken if (m := RB_ID.fullmatch(t)) and version(m[1]) < version(new)] + [RB["benched"]]
+    old = max(done, key=version)
+    return [dict(id=f"release-bench-{new}", kind="release", n=0, head=None, author={"login": ME}, title=f"release bench {new} vs {old}",
+                 url=f"https://github.com/{RB['repo']}/releases/tag/{RB['tag_prefix']}{new}", created="", labels=[], linked=[],
+                 why=old)]
+
+
 def open_prs(errors):
     return {p["number"]: p["isDraft"] for p in gh(errors, "pr", "list", "-R", REPO, "--state", "open", "--limit", "3000",
                                                   "--json", "number,isDraft")}
@@ -86,6 +109,12 @@ def launch_host(hosts, needs=None):
 
 
 def rule(c, h, prs, live, zane, hosts):
+    if c["kind"] == "release":
+        if any(RB_ID.fullmatch(sid) for f in hosts.values() for sid, r in f.get("runs", {}).items()
+               if r["state"] in ("running", "queued")):
+            return "overlap", None
+        there = launch_host(hosts, RB["host"])
+        return ("host", None) if there is None else (None, there)
     if hourly.bot(c["author"]) or c["author"]["login"].lower() in h["skip"] or "hold" in c["labels"] \
             or (c["kind"] != "issue" and c["n"] in h["hold"]):
         return "held", None
@@ -165,6 +194,11 @@ def salvage_check(errors, h):
 
 
 def task(c, h):
+    if c["kind"] == "release":
+        new = c["id"][len("release-bench-"):]
+        return (f"Release bench: {RB['repo']} {RB['tag_prefix']}{new} against {RB['tag_prefix']}{c['why']}.\n{c['url']}\n\n"
+                "Kind: release bench, picked by the pickup when the release was published. Run onigiri-mode's "
+                "playbooks/release-bench.md with NEW = " + new + " and OLD = " + c["why"] + ".\n")
     head = f" at head {c['head']}" if c["head"] else ""
     if c["kind"] == "issue":
         return (f"trycua/cua#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in trycua/cua, picked from the issues assigned to "
@@ -305,6 +339,7 @@ def run_pass(dry):
     live = {n for f in hosts.values() for r in f.get("runs", {}).values() for n in r.get("nums", [])}
     zane = {int(w.split()[0][4:]) for w in waits if " wait who=zane: " in w}
     taken = taken_ids(hosts)
+    cands = release_candidate(errors, taken) + cands
     free = 0 if errors else hourly.auto_free(hosts)
     todo = [c for c in cands if c["id"] not in taken]
     print(f"pickup {hourly.now()}: {len(todo)} candidates ({len(cands) - len(todo)} taken before), auto free {free}"

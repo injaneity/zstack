@@ -86,6 +86,10 @@ id = "checks-verifier"
 text = '''Before you call a diff done or open a PR, spawn the `verifier` subagent on the diff range. Check each finding, and report its `ran …; skipped …; result …` line in your run report. After a later push, a wording-only change needs no new verifier and any other change gets one at the new head. Only a read-only answer with no diff skips it, and says so.'''
 
 [[section.rule]]
+id = "checks-bench"
+text = '''A PR gets functional verification on its platform and never waits on an agent bench. Benches run per published cua-driver release, the newest against the last one benched, one trial at a time (`playbooks/release-bench.md`; Zane, 14 Nov 23:33 SGT: "lets bench releases instead of each individual pr, since it takes too long. we can just be aggressive with reverting our own prs").'''
+
+[[section.rule]]
 id = "checks-target"
 text = '''Cargo builds into each workspace's own `target/`. Never commit it.'''
 
@@ -113,7 +117,7 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-text = '''In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Reruns are decided without asking (Zane, 11 Nov; only real failures go to him): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused. Approve outside-contributor (fork) workflow runs on `trycua/cua` that await approval, so CI runs (Zane, 12 Nov 11:45 SGT): `gh api -X POST repos/trycua/cua/actions/runs/<id>/approve`. Approving a run is not a review or a merge. Never revert or close a PR, and never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
+text = '''In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Reruns are decided without asking (Zane, 11 Nov; only real failures go to him): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused. Approve outside-contributor (fork) workflow runs on `trycua/cua` that await approval, so CI runs (Zane, 12 Nov 11:45 SGT): `gh api -X POST repos/trycua/cua/actions/runs/<id>/approve`. Approving a run is not a review or a merge. Never revert or close a PR, except a revert PR for one of our own PRs that a release bench found regressed, opened without asking (Zane, 14 Nov 23:33 SGT); never revert a teammate's or outside contributor's PR. Never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
 
 [[section.rule]]
 id = "merge-drafts"
