@@ -44,7 +44,8 @@ M = [
      [("/\\ woke' = TRUE /\\ unsent' = (unsent \\/ failed)\n", "/\\ woke' = TRUE /\\ unsent' = FALSE\n")], "NoResultLost"),
     ("merge-job-read-twice", "the queue and the picks each run the merge job's dry run (13 Nov pickup pass)",
      [("DrainDone(p) == pc[p] = \"drain\" /\\ lock = p /\\ ~CanDrain\n  /\\ pc' = [pc EXCEPT ![p] = \"pick\"] /\\ free' = Free\n",
-       "DrainDone(p) == pc[p] = \"drain\" /\\ lock = p /\\ ~CanDrain\n  /\\ pc' = [pc EXCEPT ![p] = \"pick\"] /\\ free' = Free /\\ reads' = reads + 1\n"),
+       "DrainDone(p) == pc[p] = \"drain\" /\\ lock = p /\\ ~CanDrain\n"
+       "  /\\ pc' = [pc EXCEPT ![p] = \"pick\"] /\\ free' = Free /\\ reads' = reads + 1\n"),
       ("                 lock, had, failed, woke, rows, reads>>\nPick(p, i)", "                 lock, had, failed, woke, rows>>\nPick(p, i)")],
      "MergeJobReadOnce"),
 ]
