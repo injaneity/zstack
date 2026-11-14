@@ -329,6 +329,77 @@ def last_progress(d, sid, since=float("inf")):
     return t if t > since else max(t, files_progress(d, since))
 
 
+def ps(*args):
+    try:
+        p = subprocess.run(["ps", *args], capture_output=True, text=True, errors="replace", timeout=30,
+                           env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/bin:/usr/bin"})
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode == 0:
+        return p.stdout
+    return "" if "-p" in args and p.returncode == 1 and not p.stdout.strip() else None
+
+
+def env_of(pid, args):
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            return f.read().decode(errors="replace").split("\0")
+    except OSError:
+        both = ps("eww", "-o", "command=", "-p", str(pid))
+        if both is None:
+            return None
+        both = both.strip()
+        return both[len(args):].split() if both.startswith(args) else []
+
+
+def run_daemons(sid):
+    out = ps("axww", "-o", "pid=,uid=,args=")
+    if out is None:
+        return None
+    found = []
+    for line in out.splitlines():
+        pid, uid, args = (line.split(None, 2) + ["", ""])[:3]
+        args = args.strip()
+        w = args.split()
+        if not (pid.isdigit() and int(pid) != os.getpid() and uid == str(os.getuid()) and len(w) > 1 and os.path.basename(w[0]).startswith("cua-driver")
+                and w[1] == "serve" and "--socket" in w[2:]):
+            continue
+        env = env_of(pid, args)
+        if env is None:
+            return None
+        if f"PI_SESSION_ID={sid}" in env:
+            found.append((int(pid), starttime(pid), args))
+    return found
+
+
+def same(x):
+    pid, start, args = x
+    now = ps("-o", "lstart=,args=", "-p", str(pid))
+    if now is None or (not start and now):
+        return None
+    return bool(now) and now.split() == f"{start} {args}".split()
+
+
+def stop_daemons(sid):
+    found = run_daemons(sid)
+    if found is None:
+        return "cua-driver daemons not checked: ps gave no answer"
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for x in [x for x in found if same(x)]:
+            try:
+                os.kill(x[0], sig)
+            except ProcessLookupError:
+                pass
+        end = time.time() + 5
+        while time.time() < end and any(same(x) is not False for x in found):
+            time.sleep(0.2)
+    state = {x: same(x) for x in found}
+    out = [("stopped the cua-driver daemon(s) the run left serving a private socket", False),
+           ("cua-driver daemon(s) still serving", True), ("cua-driver daemon(s) not rechecked: ps gave no answer", None)]
+    return "; ".join(f"{text}: pid {' '.join(str(x[0]) for x in found if state[x] is v)}" for text, v in out
+                     if any(state[x] is v for x in found))
+
+
 def supervise(d, sid, cmd, env, cap, idle):
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -393,6 +464,9 @@ def supervise(d, sid, cmd, env, cap, idle):
                                 *report_fields(d, done["attempt"])], env=env)
             except OSError as e:
                 print(f"pi-run: wake not sent: {e}", flush=True)
+        if done["state"] != "queued":
+            reaped = stop_daemons(sid)
+            reaped and print(f"pi-run: {reaped}", flush=True)
         r.write(done)
     os._exit(rc)
 
@@ -545,8 +619,9 @@ def collect(sid):
         if lost and done.get("wake"):
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
+        reaped = stop_daemons(sid)
         r.write(done)
-        line = prune(d)
+        line = "; ".join(x for x in (reaped, prune(d)) if x)
         if line:
             print(f"pi-run: {sid}: {line}", file=sys.stderr)
             with open(os.path.join(d, "run.log"), "a") as fh:
