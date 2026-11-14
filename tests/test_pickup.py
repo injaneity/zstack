@@ -478,7 +478,7 @@ class Pickup(unittest.TestCase):
         self.assertEqual([r[:2] for r in self.rows("prune")], [["prune", gone]])
         self.assertIn("done-a collected", self.rows("prune")[0][2])
         self.assertIn(f"lume worker {booted} not pruned: it is no longer stopped", "".join(map(str, self.wakes())))
-        (self.root / "review" / "still-going" / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "rc": 0, "pid": None, "pool": "hand"}))
+        self.run_dir("still-going", "collected", [live_[8:]])
         self.assertIn(f"prune {live_}:", self.pickup())
         self.assertNotIn(live_, self.vms())
 
