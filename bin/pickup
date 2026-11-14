@@ -77,18 +77,16 @@ def version(v):
     return tuple(int(x) for x in v.split("."))
 
 
-def release_candidate(errors, taken):
+def release_candidate(errors, taken, benched):
     tags = [r["tagName"][len(RB["tag_prefix"]):] for r in gh(errors, "release", "list", "-R", RB["repo"], "--exclude-drafts",
                                                            "--limit", "200", "--json", "tagName,isDraft")
             if not r.get("isDraft") and r["tagName"].startswith(RB["tag_prefix"])]
     tags = [t for t in tags if re.fullmatch(r"\d+(\.\d+)*", t)]
     if not tags:
         return []
-    new = max(tags, key=version)
-    if version(new) <= version(RB["benched"]) or f"release-bench-{new}" in taken:
+    new, old = max(tags, key=version), max([RB["benched"], *benched], key=version)
+    if version(new) <= version(old) or f"release-bench-{new}" in taken:
         return []
-    done = [m[1] for t in taken if (m := RB_ID.fullmatch(t)) and version(m[1]) < version(new)] + [RB["benched"]]
-    old = max(done, key=version)
     return [dict(id=f"release-bench-{new}", kind="release", n=0, head=None, author={"login": ME}, title=f"release bench {new} vs {old}",
                  url=f"https://github.com/{RB['repo']}/releases/tag/{RB['tag_prefix']}{new}", created="", labels=[], linked=[],
                  why=old)]
@@ -219,7 +217,7 @@ def task(c, h):
 
 
 
-EMPTY = {"seen": {}, "unsent": [], "failures": [], "authors": {}}
+EMPTY = {"seen": {}, "unsent": [], "failures": [], "authors": {}, "benched": []}
 
 
 def state_path():
@@ -274,6 +272,8 @@ def collect(hosts, dry, state, errors):
                 print(f"would collect {h} {sid}: rc={r.get('rc')}, prs {len(res['prs'])}")
                 continue
             state["authors"].pop(sid, None)
+            if (m := RB_ID.fullmatch(sid)) and r["state"] == "exited" and str(r.get("rc")) == "0":
+                state["benched"] = sorted({*state["benched"], m[1]}, key=version)
             write(state_path(), state)
             p = hourly.on(h, ["bin/pi-run", "collect", sid])
             print(f"collect {h} {sid}: {(p.stdout or p.stderr).strip()[-200:]}")
@@ -339,7 +339,7 @@ def run_pass(dry):
     live = {n for f in hosts.values() for r in f.get("runs", {}).values() for n in r.get("nums", [])}
     zane = {int(w.split()[0][4:]) for w in waits if " wait who=zane: " in w}
     taken = taken_ids(hosts)
-    cands = release_candidate(errors, taken) + cands
+    cands = release_candidate(errors, taken, state["benched"]) + cands
     free = 0 if errors else hourly.auto_free(hosts)
     todo = [c for c in cands if c["id"] not in taken]
     print(f"pickup {hourly.now()}: {len(todo)} candidates ({len(cands) - len(todo)} taken before), auto free {free}"

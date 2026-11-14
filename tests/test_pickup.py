@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
-FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+FAKE_PI = ("#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+           "[ -e \"$T/pi-rc\" ] && exit \"$(cat \"$T/pi-rc\")\"\nexit 0\n")
 FAKE_GH = """#!/bin/bash
 [ -e "$T/gh-sleep" ] && sleep 30
 case "$*" in
@@ -468,6 +469,26 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("release-bench-0.49.14", out)
         self.pickup(ONIGIRI_HOST="mini")
         self.assertIn("NEW = 0.49.15 and OLD = 0.49.13", (self.root / "review" / "release-bench-0.49.15" / "brief.md").read_text())
+
+    def test_a_failed_bench_is_no_baseline_and_an_older_release_is_never_benched(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.12")
+        (self.t / "pi-rc").write_text("1")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.12", "exited"))
+        self.pickup(ONIGIRI_HOST="mini")
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("NEW = 0.49.13 and OLD = 0.49.11", (self.root / "review" / "release-bench-0.49.13" / "brief.md").read_text())
+        self.assertTrue(self.wait("release-bench-0.49.13", "exited"))
+        (self.t / "pi-rc").unlink()
+        self.releases("cua-driver-rs-v0.49.14")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.14", "exited"))
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertEqual(json.loads((self.root / "pickup" / "state.json").read_text())["benched"], ["0.49.14"])
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12")
+        self.assertNotIn("release-bench", self.pickup("--dry", ONIGIRI_HOST="mini"))
 
     def test_no_release_bench_when_the_newest_release_was_benched(self):
         (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
