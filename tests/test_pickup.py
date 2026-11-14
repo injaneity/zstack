@@ -478,6 +478,51 @@ class Pickup(unittest.TestCase):
         self.pickup()
         self.assertEqual(self.vms(), [name])
 
+    def test_a_dir_that_cannot_be_read_holds_every_old_worker(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000dd"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.run_dir("going", "running", [], where="secret/notes.txt")
+        (self.root / "review" / "going" / "secret").chmod(0)
+        self.addCleanup((self.root / "review" / "going" / "secret").chmod, 0o755)
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+
+    def test_a_file_that_cannot_be_read_holds_every_old_worker(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000de"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.run_dir("going", "running", [])
+        (self.root / "review" / "going" / "notes.txt").chmod(0)
+        self.addCleanup((self.root / "review" / "going" / "notes.txt").chmod, 0o644)
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+
+    def test_a_worker_a_run_named_stays_held_while_it_runs_and_after(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000ee"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.run_dir("going", "running", [name[8:]])
+        self.pickup()
+        self.lume([(name, "running")])
+        self.pickup()
+        (self.root / "review" / "going" / "notes.txt").unlink()
+        self.lume([(name, "stopped")])
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+
+    def test_no_delete_while_a_lume_e2e_run_holds_its_lock(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000ff"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        fd = os.open(self.t / ".local" / "share" / "cua-lume-e2e" / "run.lock", os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.assertIn("holds", self.pickup())
+        self.assertEqual(self.vms(), [name])
+        os.close(fd)
+        self.pickup()
+        self.assertEqual(self.vms(), [])
+
     def test_lume_failing_prunes_nothing_and_tells_the_chat_once(self):
         name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000bb"
         self.lume([(name, "stopped")])
