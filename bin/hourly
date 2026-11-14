@@ -23,7 +23,8 @@ USAGE = (
     '  hourly launch <id> <host> <reason...>           start review/<id>/brief.md on <host> while its pool has room (counted\n'
     '                                                  under slots.lock), then log the launch; else log a wait and exit 3\n'
     "  hourly brief <id>               this host's review/<id>/brief.md, for a launch from a peer\n"
-    "  hourly pools                    every host's running runs per pool as JSON, and the hosts whose runs are unknown\n"
+    "  hourly pools                    every host's running runs per pool, its queued runs the drain could start now per pool\n"
+    "                                  (oldest first), and the hosts whose runs are unknown, as JSON\n"
     "  hourly queue                    first reopen the thread that pushed each of our PRs red after the merge job's rerun\n"
     "                                  (bin/pi-run ci on its host), then start every host's queued runs on that host,\n"
     "                                  oldest since= first, while its pool has room: fresh ones, and continuations (a 429's,\n"
@@ -223,6 +224,12 @@ def all_facts(full=True):
 def slots(hosts):
     rs = [r for f in hosts.values() for r in f.get("runs", {}).values() if r["state"] == "running"]
     return {p: sum(r["pool"] == p for r in rs) for p in pr.POOLS}
+
+
+def queued_ids(hosts):
+    rs = sorted((r.get("since", ""), h, sid, r["pool"]) for h, f in hosts.items() for sid, r in f.get("runs", {}).items()
+                if r["state"] == "queued" and not waiting(r))
+    return {p: [[since, h, sid] for since, h, sid, q in rs if q == p] for p in pr.POOLS}
 
 
 def pool_at(hosts, host, sid, brief):
@@ -490,7 +497,7 @@ def main(argv):
         return print(open(p).read() if os.path.exists(p) else "", end="") or 0
     if cmd == "pools" and not rest:
         hosts = all_facts(full=False)
-        return print(json.dumps({"running": slots(hosts), "unknown": unknown(hosts)})) or 0
+        return print(json.dumps({"running": slots(hosts), "unknown": unknown(hosts), "queued": queued_ids(hosts), "self": SELF})) or 0
     if cmd == "log" and len(rest) >= 4:
         return log(rest[0], rest[1], rest[2], " ".join(rest[3:])) or 0
     if cmd == "on" and len(rest) >= 2:

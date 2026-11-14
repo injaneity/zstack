@@ -84,6 +84,13 @@ def pool_wait(pool, counts, unknown):
     return ""
 
 
+def queue_ahead(pool, queued, me, brief):
+    ahead = [e[2] for e in queued.get(pool, []) if e[1:] != me[1:] and e < me]
+    if not ahead or field(brief, "priority"):
+        return ""
+    return f"{len(ahead)} run(s) already queued in the {pool} pool start first ({', '.join(ahead)})"
+
+
 class Refused(Exception):
     pass
 
@@ -579,7 +586,8 @@ def slots_gate(root, d, sid, role, pool, brief):
         p = subprocess.CompletedProcess([], 127, "", str(e))
     try:
         got = json.loads(p.stdout)
-        why = pool_wait(pool, got["running"], got["unknown"])
+        mine = (read_json(os.path.join(d, "run.json")) or {}).get("since") or "~"
+        why = pool_wait(pool, got["running"], got["unknown"]) or queue_ahead(pool, got["queued"], [mine, got["self"], sid], open(brief).read())
     except (ValueError, KeyError, TypeError):
         why = "the pool count failed: " + tail(p)
     if not why:
