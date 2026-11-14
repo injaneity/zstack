@@ -251,7 +251,7 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 
 const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
 
-function closeTarget(w: string[]): { n?: number; repo?: string; what: string } | undefined {
+function closeTarget(w: string[]): { n?: number; what: string } | undefined {
 	if ((w[1] === "issue" || w[1] === "pr") && w[2] === "close" && !w.includes("--help") && !w.includes("-h")) {
 		const a = operands(w.slice(3), GH_VALUE_OPTS)[0] ?? "";
 		const m = a.match(/^#?(\d+)$/) ?? a.match(/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/(\d+)/);
@@ -260,9 +260,9 @@ function closeTarget(w: string[]): { n?: number; repo?: string; what: string } |
 	if (w[1] !== "api" || !ghApiWrites(w)) return undefined;
 	const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
 	if (ops[0] === "graphql") return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } : undefined;
-	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)\/?$/);
+	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/(\d+)\/?$/);
 	if (!m || !w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a) || /^--input(=|$)/.test(a))) return undefined;
-	return { n: Number(m[2]), repo: repoName(m[1]), what: "a close through `gh api`" };
+	return { n: Number(m[1]), what: "a close through `gh api`" };
 }
 
 function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined {
@@ -271,7 +271,7 @@ function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined 
 	if (!t) return undefined;
 	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (bin/policy dump failed)`;
 	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\``;
-	const repos = t.repo ? [t.repo] : targetRepos(c, host);
+	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${t.what} where the target repo can't be told, so its author can't be checked`;
 	const repo = repos.find((r) => issues.has(r as string));
 	if (!repo) return undefined;

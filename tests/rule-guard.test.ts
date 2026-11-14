@@ -505,6 +505,8 @@ test("a PR or issue a review-only teammate opened is never closed, by the author
 		"gh api -X PATCH repos/trycua/cua/pulls/7030 -f state=closed",
 		'ssh vm "gh pr close 7030 -R trycua/cua"',
 	]) no(c);
+	for (const c of ["gh api -X PATCH repos/{owner}/{repo}/pulls/7030 -f state=closed", "gh pr close 7030 -c 'Replaced by #7147'"])
+		assert.match(checkBash(c, OWNED, host, inCua, false, ISSUES) ?? "", /, a review-only teammate\. /, c);
 	ok('gh pr close 3138 -R trycua/cua --comment "Replaced by #7587, which merged."');
 	ok('gh issue close 6853 -R trycua/cua --comment "Fixed by #6928."');
 	ok("gh pr close 7030 -R injaneity/zstack");

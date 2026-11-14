@@ -246,12 +246,12 @@ class Pickup(unittest.TestCase):
         self.assertEqual(len(self.wakes()), 1)
 
     def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
-        self.peer(holds="review-only | f-trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
+        self.peer(holds="review-only | F-Trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
         (self.t / "salvages.json").write_text(json.dumps([
             {"number": n, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": f"Salvaged from #{src}",
              "closingIssuesReferences": []} for n, src in ((7147, 7030), (4560, 4468), (4561, 4469))]))
         (self.t / "sources.json").write_text(json.dumps([
-            {"number": 7030, "state": "OPEN", "login": "f-trycua", "closingIssuesReferences": []},
+            {"number": 7030, "state": "OPEN", "login": "f-trycuA", "closingIssuesReferences": []},
             {"number": 4468, "state": "OPEN", "login": "ddupont808", "closingIssuesReferences": [{"number": 20, "login": "f-trycua"}]},
             {"number": 4469, "state": "OPEN", "login": "CMGS", "closingIssuesReferences": [{"number": 22, "login": "CMGS"}]}]))
         self.pickup()
