@@ -10,8 +10,8 @@ Regression (the bench's one decision rule, written before any row was read):
 - pass: NEW loses more paired slots than it wins and the two-sided sign test gives p < 0.05, on a platform-condition
   or overall; or
 - cost: the bootstrap 95% CI of a paired median ratio (tokens, turns or wall) lies wholly above 1.10 on a platform.
-Anything else is "no regression" (directional moves are reported, not acted on), unless a platform has no paired rows
-or a row of either release has no pair: then the verdict is "inconclusive", and the bench is not done.
+Anything else is "no regression" (directional moves are reported, not acted on). A platform with no paired rows, or a
+row of either release with no pair, makes the verdict "inconclusive" whatever `regression` lists: the bench is not done.
 """
 import json
 import math
@@ -143,7 +143,7 @@ def main(argv):
     missing = [p for p in ("linux", "macos") if p not in out["groups"]]
     out["missing_platforms"] = missing
     out["regression"] = regress
-    out["verdict"] = "regression" if regress else "inconclusive" if missing or out["unpaired"] else "no regression"
+    out["verdict"] = "inconclusive" if missing or out["unpaired"] else "regression" if regress else "no regression"
     print(json.dumps(out, indent=1, default=lambda x: round(x, 4) if isinstance(x, float) else str(x)))
 
 
