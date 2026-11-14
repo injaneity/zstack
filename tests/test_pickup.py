@@ -103,7 +103,10 @@ class Pickup(unittest.TestCase):
         p = self.t / "vm"
         p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) echo x >> \"$T/merge-dry-runs\"; printf '%s\\n' "
                      + " ".join(f"'dry-run {w}'" for w in waits)
-                     + " ;;\n*) cat " + str(self.t / "vm-facts.json") + ";; esac\n")
+                     + " ;;\n*ensure-package-main*) echo x >> \"$T/ff\"; [ -e \"$T/ff-fails\" ] && "
+                     "{ echo 'ensure-package-main: main has commits not on origin/main; not a fast-forward' >&2; exit 1; }; "
+                     "sed -i.bak 's/\"at_main\": false/\"at_main\": true/' \"$T/vm-facts.json\";;\n"
+                     "*) cat " + str(self.t / "vm-facts.json") + ";; esac\n")
         p.chmod(0o755)
         (self.t / "vm-facts.json").write_text(json.dumps(facts))
         self.env.update(ONIGIRI_PEERS=f"vm={p}", ONIGIRI_MERGE_HOST="vm")
@@ -199,6 +202,7 @@ class Pickup(unittest.TestCase):
                              review(303, "2026-10-08T00:00:00Z"),
                              review(304, "2026-10-09T00:00:00Z", login="f-trycua")],
                     open_=[{"number": 900, "isDraft": False}])
+        (self.t / "ff-fails").touch()
         self.pickup()
         self.assertEqual(self.rows("skip"), [
             ["skip", "cua-101", "held; https://github.com/trycua/cua/issues/101"],
@@ -296,6 +300,22 @@ class Pickup(unittest.TestCase):
         self.pickup()
         brief = (self.root / "review" / "cua-310-review-136aaaa" / "brief.md").read_text()
         self.assertIn("A salvage PR's body carries `Salvaged from #310` and a `Fixes #<issue>` line for each issue #310 fixes", brief)
+
+    def test_a_peer_behind_main_is_fast_forwarded_and_flagged_only_when_that_fails(self):
+        self.peer(at_main=False)
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        self.assertIn("would fast-forward vm's zstack to origin/main", self.pickup("--dry"))
+        self.assertFalse((self.t / "ff").exists())
+        self.pickup()
+        self.assertEqual((self.t / "ff").read_text(), "x\n")
+        self.assertEqual([r[0:2] for r in self.rows("launch")], [["launch", "cua-10"]])
+        self.assertNotIn("not at main", "".join(w[1] for w in self.wakes()))
+        self.peer(at_main=False)
+        (self.t / "ff-fails").touch()
+        self.pickup()
+        self.assertEqual((self.t / "ff").read_text(), "x\nx\n")
+        self.assertIn("host vm not at main: fast-forward failed: ensure-package-main: main has commits not on origin/main; "
+                      "not a fast-forward", self.wakes()[-1][1])
 
     def test_no_pick_while_a_host_is_unreachable_or_github_fails(self):
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
