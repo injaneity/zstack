@@ -13,7 +13,7 @@ render() {
 <plist version="1.0"><dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key><array><string>$pkg/bin/pickup</string></array>
-  <key>EnvironmentVariables</key><dict><key>ONIGIRI_HOST</key><string>mini</string><key>PATH</key><string>$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
+  <key>EnvironmentVariables</key><dict><key>ONIGIRI_HOST</key><string>mini</string><key>PATH</key><string>$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
   <key>StartInterval</key><integer>$interval</integer>
   <key>AbandonProcessGroup</key><true/>
   <key>Nice</key><integer>5</integer>
