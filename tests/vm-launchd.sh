@@ -10,8 +10,7 @@ cat > "$tmp/job.sh" <<EOF
 #!/bin/bash
 "$py" -c 'import subprocess, sys
 p = subprocess.run([sys.argv[1], "echo ok; exit 7"], capture_output=True, text=True)
-print(p.returncode, p.stdout.strip())' "$src/hosts/mini/vm" > "$tmp/out" 2>&1
-touch "$tmp/done"
+print(p.returncode, p.stdout.strip())' "$src/hosts/mini/vm" > "$tmp/fifo" 2>&1
 EOF
 chmod +x "$tmp/job.sh"
 cat > "$tmp/job.plist" <<EOF
@@ -23,8 +22,8 @@ cat > "$tmp/job.plist" <<EOF
   <key>RunAtLoad</key><true/>
 </dict></plist>
 EOF
+mkfifo "$tmp/fifo"
 launchctl bootstrap "gui/$(id -u)" "$tmp/job.plist" || exit 1
-for _ in $(seq 60); do [ -e "$tmp/done" ] && break; sleep 0.5; done
-got=$(cat "$tmp/out" 2>/dev/null)
+got=$(perl -e 'alarm 60; exec @ARGV' cat "$tmp/fifo")
 if [ "$got" = "7 ok" ]; then echo "ok    hosts/mini/vm from a launchd job under $py"; exit 0; fi
 echo "FAIL  hosts/mini/vm from a launchd job under $py: got '$got', want '7 ok'"; exit 1
