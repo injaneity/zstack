@@ -34,6 +34,12 @@ ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake"
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
 [ -e "$T/say" ] && cat "$T/say"
+if [ -e "$T/daemons" ]; then
+  "$T/bin/cua-driver" serve --socket "$T/own.sock" & echo $! > "$T/own-pid"
+  "$T/bin/cua-driver" serve & echo $! > "$T/shared-pid"
+  PI_SESSION_ID=another-run-$$ "$T/bin/cua-driver" serve --socket "$T/other.sock" & echo $! > "$T/other-pid"
+  for f in own shared other; do while ! grep -q started "$T/$f.started" 2>/dev/null; do sleep 0.05; done; done
+fi
 while [ -e "$T/hang" ]; do sleep 0.05; done
 exit $(cat "$T/rc" 2>/dev/null || echo 0)
 """
@@ -447,6 +453,77 @@ class Launcher(unittest.TestCase):
         self.assertEqual((r.returncode, r.stderr.strip().splitlines()[-1]), (3, "pi-run: oom: attempt 1 was lost and is not collected"))
         self.assertEqual(self.pi_run("collect", "oom").stdout, "oom attempt=1 lost\n")
         self.assertEqual(self.run_json("oom")["wake"], "failed")
+
+    def fake_driver(self):
+        body = ("import os, sys, time\nT = os.environ['T']\nos.setsid()\n"
+                "name = 'other' if os.environ.get('PI_SESSION_ID', '').startswith('another-run') else 'own' if '--socket' in sys.argv else 'shared'\n"
+                "open(os.path.join(T, name + '.started'), 'w').write('started')\ntime.sleep(120)\n")
+        drv = self.t / "drv"
+        drv.mkdir(exist_ok=True)
+        for verb in ("serve", "call"):
+            (drv / verb).write_text(body)
+        (self.t / "bin" / "cua-driver").write_text(
+            f"#!{sys.executable}\nimport os, sys\nos.chdir({str(drv)!r})\nos.execv({sys.executable!r}, sys.argv)\n")
+        (self.t / "bin" / "cua-driver").chmod(0o755)
+
+    def daemons(self):
+        self.fake_driver()
+        (self.t / "daemons").touch()
+
+        def live(name):
+            pid = int((self.t / f"{name}-pid").read_text())
+            return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()[:1] not in ("", "Z")
+
+        def reap():
+            for name in ("own", "shared", "other"):
+                try:
+                    os.kill(int((self.t / f"{name}-pid").read_text()), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
+        self.addCleanup(reap)
+        return live
+
+    def test_a_cua_driver_daemon_the_run_started_on_its_own_socket_stops_when_the_run_ends(self):
+        live = self.daemons()
+        sid = f"drv-{os.getpid()}"
+        self.start(sid)
+        self.finished(sid)
+        self.assertFalse(live("own"))
+        self.assertTrue(live("shared"))
+        self.assertTrue(live("other"))
+        self.assertRegex(self.log(sid), r"pi-run: stopped the cua-driver daemon\(s\) the run left serving a private socket: pid \d+\n")
+
+    def test_only_a_cua_driver_serving_a_socket_with_the_runs_id_in_its_environment_matches(self):
+        self.fake_driver()
+        drv = str(self.t / "bin" / "cua-driver")
+        env = {"PATH": "/usr/bin:/bin", "PI_SESSION_ID": f"mine-{os.getpid()}", "T": str(self.t)}
+        cases = [([drv, "serve", "--socket", "s"], True), ([drv, "serve"], False), ([drv, "call", "--socket", "s", "serve"], False),
+                 (["/bin/sh", "-c", f"sleep 120; : {drv} serve --socket s"], False)]
+        procs = [(subprocess.Popen(a, env=env, start_new_session=a[0] == "/bin/sh", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                  want) for a, want in cases]
+        for p, _ in procs:
+            self.addCleanup(p.wait)
+            self.addCleanup(os.killpg, p.pid, signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: all(pr.ps("-o", "args=", "-p", str(p.pid)).startswith(drv + " ") for p, _ in procs[:3])))
+        got = {x[0] for x in pr.run_daemons(f"mine-{os.getpid()}")}
+        self.assertEqual(got & {p.pid for p, _ in procs}, {p.pid for p, want in procs if want})
+        self.assertEqual(pr.run_daemons("someone-else"), [])
+
+    def test_a_lost_runs_collect_stops_the_daemon_its_dead_supervisor_left(self):
+        live = self.daemons()
+        sid = f"drv-lost-{os.getpid()}"
+        self.start(sid, hang=True)
+        self.assertTrue(wait_for(lambda: all((self.t / f"{n}.started").exists() and (self.t / f"{n}-pid").exists()
+                                             for n in ("own", "shared", "other"))))
+        os.killpg(self.run_json(sid)["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == f"{sid} lost attempt=1 rc=None\n"))
+        self.assertTrue(live("own"))
+        r = self.pi_run("collect", sid)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(live("own"))
+        self.assertTrue(live("shared"))
+        self.assertTrue(live("other"))
+        self.assertIn("stopped the cua-driver daemon(s) the run left serving a private socket", r.stderr)
 
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
