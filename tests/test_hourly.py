@@ -425,6 +425,38 @@ class Hourly(unittest.TestCase):
         self.assertIn("started new attempt 1", self.hourly("queue"))
         self.assertIn("hand 5/5", self.hourly())
 
+    def test_a_direct_hand_start_queues_behind_older_queued_hand_runs_unless_it_serves_a_priority(self):
+        local = self.t / "root"
+        (self.t / "hang").touch()
+        self.queued(local, "older", 500)
+        self.queued(local, "later", 100, resume_in=3600)
+        brief = self.t / "new.md"
+        brief.write_text("task new\nrole: coding\nsource: chat\n")
+        r = self.sh("pi-run", "new", "coding", str(brief))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("pi-run: new queued, not started: 1 run(s) already queued in the hand pool start first (older).", r.stdout)
+        self.assertEqual(json.loads((self.review("new") / "run.json").read_text())["state"], "queued")
+        out = self.hourly("queue")
+        self.assertLess(out.index("started older attempt 1"), out.index("started new attempt 1"))
+        prio = self.t / "prio.md"
+        prio.write_text("task prio\nrole: coding\nsource: chat\npriority: Zane, 14 Nov: land the hcompany PRs\n")
+        self.queued(local, "older2", 500)
+        self.assertIn("started prio attempt 1", self.sh("pi-run", "prio", "coding", str(prio)).stdout)
+        auto = self.t / "auto.md"
+        auto.write_text("task auto\nrole: coding\nsource: auto\n")
+        self.assertIn("started auto attempt 1", self.sh("pi-run", "auto", "coding", str(auto)).stdout)
+        self.assertEqual(json.loads((self.review("older2") / "run.json").read_text())["state"], "queued")
+
+    def test_a_peers_older_queued_run_with_the_same_id_still_queues_a_direct_start(self):
+        vm = self.t / "vm-root"
+        peers = self.peer_pkg("test-vm", vm)
+        self.queued(vm, "same", 500)
+        brief = self.t / "same.md"
+        brief.write_text("task same\nrole: coding\nsource: chat\n")
+        r = self.sh("pi-run", "same", "coding", str(brief), ONIGIRI_PEERS=peers)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 run(s) already queued in the hand pool start first (same)", r.stdout)
+
     def test_hourly_launch_waits_while_its_pool_is_full_or_a_host_is_unknown(self):
         (self.t / "hang").touch()
         for i in range(3):
