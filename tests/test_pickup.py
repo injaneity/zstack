@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
-FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+FAKE_PI = ("#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+           "[ -e \"$T/pi-rc\" ] && exit \"$(cat \"$T/pi-rc\")\"\nexit 0\n")
 FAKE_GH = """#!/bin/bash
 [ -e "$T/gh-sleep" ] && sleep 30
 case "$*" in
@@ -30,6 +31,7 @@ errs += [{"type": "RATE_LIMITED", "message": "slow down"}] if os.path.exists(os.
 print(json.dumps({"data": {"repository": {f"p{n}": node(src[n]) if n in src else None for n in ns}}, **({"errors": errs} if errs else {})}))
 sys.exit(1 if errs else 0)' "$*";;
   "pr list"*isDraft*) cat "$T/open.json";;
+  "release list"*) cat "$T/releases.json" 2>/dev/null || echo '[]';;
   "pr view"*) echo '{"headRefOid": "'"$(printf 'f%.0s' $(seq 40))"'", "headRefName": "x"}';;
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
@@ -442,6 +444,67 @@ class Pickup(unittest.TestCase):
         out = self.pickup("--dry", ONIGIRI_HOST="mini")
         self.assertIn("would launch vm cua-10:", out)
         self.assertIn("would launch mini cua-11:", out)
+
+    def releases(self, *tags, draft=()):
+        (self.t / "releases.json").write_text(json.dumps([{"tagName": t, "isDraft": t in draft} for t in tags]))
+
+    def test_the_newest_published_release_past_the_last_benched_one_is_benched_against_it(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12", "cua-driver-rs-v0.49.11", "cua-spaces-v0.40.0",
+                      "cua-driver-rs-v0.50.0", "nightly-cua-driver-rs-v0.49.9-nightly.1", draft=("cua-driver-rs-v0.50.0",))
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch mini release-bench-0.49.13: release https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.49.13", out)
+        self.assertLess(out.index("release-bench-0.49.13"), out.index("cua-10"))
+        (self.t / "hang").touch()
+        self.pickup(ONIGIRI_HOST="mini")
+        brief = (self.root / "review" / "release-bench-0.49.13" / "brief.md").read_text()
+        for line in ("source: auto", "NEW = 0.49.13 and OLD = 0.49.11", "playbooks/release-bench.md"):
+            self.assertIn(line, brief)
+        self.releases("cua-driver-rs-v0.49.15", "cua-driver-rs-v0.49.14", "cua-driver-rs-v0.49.13")
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("skip release-bench-0.49.15: overlap", out)
+        (self.t / "hang").unlink()
+        self.assertTrue(self.wait("release-bench-0.49.13", "exited"))
+        (self.root / "review" / "release-bench-0.49.13" / "report.md").write_text("benched: 0.49.13 against 0.49.11\n")
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch mini release-bench-0.49.15:", out)
+        self.assertNotIn("release-bench-0.49.14", out)
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("NEW = 0.49.15 and OLD = 0.49.13", (self.root / "review" / "release-bench-0.49.15" / "brief.md").read_text())
+
+    def test_a_failed_bench_is_no_baseline_and_an_older_release_is_never_benched(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.12")
+        (self.t / "pi-rc").write_text("1")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.12", "exited"))
+        self.pickup(ONIGIRI_HOST="mini")
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("NEW = 0.49.13 and OLD = 0.49.11", (self.root / "review" / "release-bench-0.49.13" / "brief.md").read_text())
+        self.assertTrue(self.wait("release-bench-0.49.13", "exited"))
+        (self.t / "pi-rc").unlink()
+        self.releases("cua-driver-rs-v0.49.14")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.14", "exited"))
+        (self.root / "review" / "release-bench-0.49.14" / "report.md").write_text("verdict: inconclusive\n")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertEqual(json.loads((self.root / "pickup" / "state.json").read_text())["benched"], [])
+        self.releases("cua-driver-rs-v0.49.15")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("OLD = 0.49.11", (self.root / "review" / "release-bench-0.49.15" / "brief.md").read_text())
+        self.assertTrue(self.wait("release-bench-0.49.15", "exited"))
+        (self.root / "review" / "release-bench-0.49.15" / "report.md").write_text("no regression\n\nbenched: 0.49.15 against 0.49.11\n")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertEqual(json.loads((self.root / "pickup" / "state.json").read_text())["benched"], ["0.49.15"])
+        self.releases("cua-driver-rs-v0.49.14", "cua-driver-rs-v0.49.13")
+        self.assertNotIn("release-bench", self.pickup("--dry", ONIGIRI_HOST="mini"))
+
+    def test_no_release_bench_when_the_newest_release_was_benched(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.11", "cua-driver-rs-v0.49.10")
+        self.assertNotIn("release-bench", self.pickup("--dry", ONIGIRI_HOST="mini"))
 
     def test_an_auto_pause_keeps_picks_off_the_peer_until_its_run_ends(self):
         (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
