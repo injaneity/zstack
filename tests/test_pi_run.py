@@ -724,6 +724,38 @@ class Launcher(unittest.TestCase):
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
 
+    def test_a_one_off_not_logged_in_resumes_once_when_claude_says_it_is_logged_in(self):
+        claude = self.t / "bin" / "claude"
+        claude.write_text('#!/bin/bash\necho "$*" >> "$T/claude-calls"\nrm -f "$T/say"; echo 0 > "$T/rc"\n'
+                          'echo "{\\"loggedIn\\": $(cat "$T/logged-in")}"\n')
+        claude.chmod(0o755)
+        (self.t / "logged-in").write_text("true")
+        (self.t / "say").write_text(pr.LOGGED_OUT + "\n")
+        self.start("lo", rc=1)
+        run = self.finished("lo")
+        self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 0, None))
+        self.assertEqual((self.t / "claude-calls").read_text(), "auth status\n")
+        self.assertIn("resuming the session once", self.log("lo"))
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("lo", pr.RESUME))
+        self.assertNotIn('"kind"', self.log("lo"))
+
+        (self.t / "claude-calls").unlink()
+        claude.write_text('#!/bin/bash\necho "$*" >> "$T/claude-calls"\necho "{\\"loggedIn\\": $(cat "$T/logged-in")}"\n')
+        (self.t / "say").write_text(pr.LOGGED_OUT + "\n")
+        self.start("again", rc=1)
+        run = self.finished("again")
+        self.assertEqual((run["rc"], run["wake"]), (1, "failed"))
+        self.assertEqual((self.t / "claude-calls").read_text(), "auth status\n")
+        self.assertEqual(self.log("again").count("resuming the session once"), 1)
+
+        (self.t / "claude-calls").unlink()
+        (self.t / "logged-in").write_text("false")
+        self.start("out", rc=1)
+        run = self.finished("out")
+        self.assertEqual((run["rc"], run["wake"]), (1, "failed"))
+        self.assertNotIn("resuming", self.log("out"))
+
     def test_an_upstream_that_always_fails_stops_after_three_resumes_and_sends_the_failed_wake(self):
         say = "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"
         (self.t / "say").write_text(say + "\n")

@@ -19,6 +19,7 @@ USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue 
          "PI_RUN_DRY=1 checks a start and changes nothing")
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
                    r"|You have hit your ChatGPT usage limit.*)")
+LOGGED_OUT = "Claude Code is installed but not logged in. Run `claude auth login` and try again."
 STOPPED, STOP_GRACE = "stopped", 30
 RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
           "Carry on with the task from where you stopped.")
@@ -418,29 +419,35 @@ def supervise(d, sid, cmd, env, cap, idle):
         if not r.run or r.run["pid"] != os.getpid():
             os._exit(1)
         print(f"== attempt {r.run['attempt']}" + (" resumed" if r.run.get("resumes") else ""), flush=True)
-    rc = None
-    if not got:
-        try:
-            proc = subprocess.Popen(cmd, cwd=d, env=env)
-        except OSError as e:
-            print(f"pi-run: cannot start pi: {e}", flush=True)
-            rc = 127
-        if got and proc:
-            proc.send_signal(got[0])
-    stalled = 0
-    while rc is None and proc is not None:
-        try:
-            rc = proc.wait(timeout=min(60, max(1, idle // 10)))
-        except subprocess.TimeoutExpired:
-            quiet = time.time() - last_progress(d, sid, since=time.time() - idle)
-            if quiet >= idle and not stalled:
-                stalled = int(quiet // 60)
-                print(f"pi-run: no progress for {stalled} min, past run.idle_min in config/policy.toml: stopping pi", flush=True)
-                proc.send_signal(signal.SIGTERM)
-                try:
-                    rc = proc.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+    rc, stalled, retried = None, 0, False
+    while True:
+        if not got:
+            try:
+                proc = subprocess.Popen(cmd, cwd=d, env=env)
+            except OSError as e:
+                print(f"pi-run: cannot start pi: {e}", flush=True)
+                rc = 127
+            if got and proc:
+                proc.send_signal(got[0])
+        while rc is None and proc is not None:
+            try:
+                rc = proc.wait(timeout=min(60, max(1, idle // 10)))
+            except subprocess.TimeoutExpired:
+                quiet = time.time() - last_progress(d, sid, since=time.time() - idle)
+                if quiet >= idle and not stalled:
+                    stalled = int(quiet // 60)
+                    print(f"pi-run: no progress for {stalled} min, past run.idle_min in config/policy.toml: stopping pi", flush=True)
+                    proc.send_signal(signal.SIGTERM)
+                    try:
+                        rc = proc.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+        if retried or got or stalled or not rc or not spurious_logout(d, env):
+            break
+        retried, rc = True, None
+        print("pi-run: pi said Claude Code is not logged in, but `claude auth status` says it is logged in: "
+              "resuming the session once", flush=True)
+        cmd = [*cmd[:-1], RESUME]
     if rc is None:
         rc = 128 + got[0]
     killed, rc = rc < 0, 128 - rc if rc < 0 else rc
@@ -469,6 +476,17 @@ def supervise(d, sid, cmd, env, cap, idle):
             reaped and print(f"pi-run: {reaped}", flush=True)
         r.write(done)
     os._exit(rc)
+
+
+def spurious_logout(d, env):
+    with Run(d) as r:
+        if last_line(d, r.run["attempt"]) != LOGGED_OUT:
+            return False
+    try:
+        p = subprocess.run(["claude", "auth", "status"], env=env, capture_output=True, text=True, timeout=30)
+        return json.loads(p.stdout).get("loggedIn") is True
+    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
+        return False
 
 
 def report_fields(d, attempt):
