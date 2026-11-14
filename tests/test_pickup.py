@@ -502,6 +502,8 @@ class Pickup(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("<key>StartInterval</key><integer>1800</integer>", r.stdout)
         self.assertIn(f"<string>{self.pkg}/bin/pickup</string>", r.stdout)
+        path = re.search(r"<key>PATH</key><string>([^<]*)</string>", r.stdout)[1].split(":")
+        self.assertTrue({"/usr/bin", "/bin", "/usr/sbin", "/sbin"} <= set(path), path)
         for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):
             self.assertNotIn(banned, r.stdout)
         if shutil.which("plutil"):
