@@ -12,7 +12,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 Every host runs merged main and nothing else. Three things keep it so:
 
-- `bin/pi-run` runs `bin/ensure-package-main` before every launch, and a bare `hosts/vm/merge_job.py` run (cron) runs it before every merge pass and restarts on the new code. It fast-forwards the package checkout to `origin/main` and never stashes, resets or forces, so a checkout it cannot move is fixed by hand.
+- `bin/pi-run` runs `bin/ensure-package-main` before every launch, and a bare `hosts/vm/merge_job.py` run (cron) runs it before every merge pass and restarts on the new code. `bin/pickup` runs it on each peer at the start of every pass, so a peer behind a fresh merge is not reported. It fast-forwards the package checkout to `origin/main` and never stashes, resets or forces, so a checkout it cannot move is fixed by hand.
 - The `subagent` tool loads agents only from the package's `agents/`. Nothing is copied to `<pi agent dir>/agents/`, and a file left there is not read.
 - cua's pre-push hook is a symlink into the package on both hosts, so the patent hold is main's too:
   `ln -sf <zstack>/hosts/vm/pre-push <root>/cua/.git/hooks/pre-push` (`<root>` is `/srv/onigiri` on the VM and `~/onigiri` on the mini). It runs `hosts/vm/patent_push.py`.

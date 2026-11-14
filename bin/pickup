@@ -265,8 +265,21 @@ def taken_ids(hosts):
     return ids
 
 
+def fast_forward(dry):
+    failed = {}
+    for h in hourly.peers():
+        if dry:
+            print(f"would fast-forward {h}'s zstack to origin/main")
+            continue
+        p = hourly.on(h, ["bin/ensure-package-main"])
+        if p.returncode:
+            failed[h] = pr.tail(p, 200)
+    return failed
+
+
 def run_pass(dry):
     state, errors = read_state(), []
+    ff = fast_forward(dry)
     hosts = hourly.all_facts()
     collect(hosts, dry, state, errors)
     merge_errors = []
@@ -274,6 +287,8 @@ def run_pass(dry):
     errors += merge_errors
     lines = drain(dry, waits, merge_errors)
     hosts = hourly.all_facts() if not dry else hosts
+    for h, why in ff.items():
+        hosts.get(h, {}).setdefault("parity", []).insert(0, f"fast-forward failed: {why}")
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
     blind = hourly.unknown(hosts)
     h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds(None)
