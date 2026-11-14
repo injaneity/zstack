@@ -5,6 +5,8 @@ export const state = (v: any) => {
 	return ({
 		"between passes": v.unsent ? "Between passes, outbox not delivered" : "Between passes",
 		collect: "Collecting ended runs into the outbox",
+		prune: "Listing old stopped lume workers",
+		delete: "Deleting the ones only collected runs name",
 		drain: "Draining the queue",
 		pick: "Picking from GitHub",
 		report: "Listing needs-Zane",
@@ -17,6 +19,8 @@ export const step = (action: string, from: any, to: any) => {
 	const steps: Record<string, string | null> = {
 		Lock: "launchd fires, the pass takes the lock",
 		Collect: "every ended run's report to the outbox, then collect",
+		PruneList: "stopped workers past lume_prune_age_h that only collected runs name",
+		PruneDelete: "each still stopped is deleted, every pass",
 		DrainDone: "bin/hourly queue done, free auto slots counted",
 		PickDone: "every candidate launched or skipped by its rule, or no slot left",
 		Report: "needs-Zane and chat items read",

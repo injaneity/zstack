@@ -35,21 +35,29 @@ M = [
     ("collect-before-outbox", "a run collected before its report reached the outbox",
      [("/\\ ended' = FALSE /\\ unsent' = (unsent \\/ ended) /\\ pending' = (pending \\/ ended)",
        "/\\ ended' = FALSE /\\ pending' = (pending \\/ ended)"),
-      ("  /\\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>",
-       "  /\\ UNCHANGED <<blocker, taken, auto, drained, chat, queued, blind, standing, seen, unsent, lock, free, had, failed, woke>>")],
+      ("  /\\ UNCHANGED <<worker, user, listed, blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>",
+       "  /\\ UNCHANGED <<worker, user, listed, blocker, taken, auto, drained, chat, queued, blind, standing, seen, unsent, lock, free, had, failed, woke>>")],
      "NoResultLost"),
     ("foreign-brief-not-taken", "a review dir with another launcher's brief and no run is not taken, so its brief runs as written",
      [("/\\ taken = Foreign\n", "/\\ taken = {}\n")], "ForeignNeverLaunched"),
     ("failed-post-clears-outbox", "a wake whose POST failed empties the outbox",
      [("/\\ woke' = TRUE /\\ unsent' = (unsent \\/ failed)\n", "/\\ woke' = TRUE /\\ unsent' = FALSE\n")], "NoResultLost"),
+    ("prune-only-under-floor", "a pass with disk above the floor prunes nothing, so an old collected worker stays (before this)",
+     [("/\\ listed' = Prunable\n", "/\\ listed' = FALSE\n")], "a temporal property", "Prune"),
+    ("prune-uncollected", "a worker whose run is not collected is deleted",
+     [("Prunable == worker = \"old\" /\\ user = \"collected\"", "Prunable == worker = \"old\"")], "PruneIsSafe", "Prune"),
+    ("delete-without-recheck", "a worker listed stopped is deleted after it booted again",
+     [("/\\ worker' = (IF listed /\\ worker = \"old\" THEN \"gone\" ELSE worker)", "/\\ worker' = (IF listed THEN \"gone\" ELSE worker)")],
+     "PruneIsSafe", "Prune"),
 ]
 
 
 def main(jar, java, scratch):
     src = open(os.path.join(HERE, "Pickup.tla")).read()
-    cfg = open(os.path.join(HERE, "Small.cfg")).read()
     bad = 0
-    for name, why, edits, rule in M:
+    for name, why, edits, rule, *conf in M:
+        conf = conf[0] if conf else "Small"
+        cfg = open(os.path.join(HERE, f"{conf}.cfg")).read()
         s = src
         for old, new in edits:
             if s.count(old) != 1:
@@ -61,9 +69,9 @@ def main(jar, java, scratch):
             d = os.path.join(scratch, name)
             os.makedirs(d, exist_ok=True)
             open(os.path.join(d, "Pickup.tla"), "w").write(s)
-            open(os.path.join(d, "Small.cfg"), "w").write(cfg)
+            open(os.path.join(d, f"{conf}.cfg"), "w").write(cfg)
             out = subprocess.run([java, "-XX:+UseParallelGC", "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir",
-                                  os.path.join(d, "meta"), "-config", "Small.cfg", "Pickup.tla"],
+                                  os.path.join(d, "meta"), "-config", f"{conf}.cfg", "Pickup.tla"],
                                  cwd=d, capture_output=True, text=True, timeout=900).stdout
             m = re.search(r"Invariant (\w+) is violated|Action property (\w+) is violated|(Temporal properties were violated)"
                           r"|(not completely specified|Deadlock)", out)
