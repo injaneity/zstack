@@ -251,6 +251,19 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 
 const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
 
+function apiFields(w: string[]): { key: string; value: string; file: boolean }[] {
+	const out: { key: string; value: string; file: boolean }[] = [];
+	for (let i = 2; i < w.length; i++) {
+		const m = w[i].match(/^(-f|-F|--raw-field|--field)(?:=(.*)|(.+))?$/s);
+		if (!m || (m[3] !== undefined && m[1].startsWith("--"))) continue;
+		const kv = m[2] ?? m[3] ?? w[++i] ?? "";
+		const eq = kv.indexOf("=");
+		const value = eq < 0 ? "" : kv.slice(eq + 1);
+		out.push({ key: eq < 0 ? kv : kv.slice(0, eq), value, file: /^(-F|--field)$/.test(m[1]) && value.startsWith("@") });
+	}
+	return out;
+}
+
 function closeTarget(w: string[]): { n?: number; what: string } | undefined {
 	if ((w[1] === "issue" || w[1] === "pr") && w[2] === "close" && !w.includes("--help") && !w.includes("-h")) {
 		const a = operands(w.slice(3), GH_VALUE_OPTS)[0] ?? "";
@@ -259,13 +272,14 @@ function closeTarget(w: string[]): { n?: number; what: string } | undefined {
 	}
 	if (w[1] !== "api" || !ghApiWrites(w)) return undefined;
 	const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
-	const fromFile = (k: string) => w.some((a, i) => new RegExp(`^${k}=@`).test(a) && /^(-F|--field)$/.test(w[i - 1] ?? "") || new RegExp(`^(-F|--field=)${k}=@`).test(a));
+	const fields = apiFields(w);
+	const input = w.some((a) => /^--input(=|$)/.test(a));
 	if (ops[0] === "graphql")
 		return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } :
-			fromFile("query") ? { what: "a GraphQL query read from a file, which may close" } : undefined;
+			input || fields.some((f) => f.key === "query" && f.file) ? { what: "a GraphQL query read from a file or stdin, which may close" } : undefined;
 	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/(\d+)\/?$/);
-	if (!m || !(fromFile("state") || w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a) || /^--input(=|$)/.test(a)))) return undefined;
-	return { n: Number(m[1]), what: "a close through `gh api`" };
+	const closes = input || fields.some((f) => f.key === "state" && (f.file || /^closed$/i.test(f.value))) || w.some((a) => /"state"\s*:\s*"closed"/i.test(a));
+	return m && closes ? { n: Number(m[1]), what: "a close through `gh api`" } : undefined;
 }
 
 function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined {
