@@ -332,7 +332,12 @@ def prune_lume(dry, state):
         print(f"lume prune: a lume-e2e run holds {LUME_RUN_LOCK}; {len(todo)} worker(s) wait for the next pass")
         return chat
     try:
+        late = runs_naming({rid for rid, _, _ in todo}, start)
         for rid, name, why in todo:
+            if any(run_state(sid) != "collected" for sid in late.get(rid, ())):
+                state["lume"][rid]["runs"] = sorted(set(state["lume"][rid]["runs"]) | late[rid])
+                write(state_path(), state)
+                continue
             now = hourly.run(["lume", "get", name, "--format", "json"])
             try:
                 stopped = not now.returncode and json.loads(now.stdout)[0].get("status") == "stopped"

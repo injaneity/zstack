@@ -35,6 +35,21 @@ case "$1" in
   *) echo "fake lume: $*" >&2; exit 1;;
 esac
 """
+LATE_SCAN = """import importlib.machinery, importlib.util, json, os, sys
+loader = importlib.machinery.SourceFileLoader("pickup", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(m)
+scan, d, rid = m.runs_naming, sys.argv[2], sys.argv[3]
+def late(ids, since):
+    got = scan(ids, since)
+    if not os.path.isdir(d):
+        os.makedirs(d)
+        open(os.path.join(d, "run.json"), "w").write(json.dumps({"state": "running", "attempt": 1, "rc": None, "pid": None, "pool": "hand"}))
+        open(os.path.join(d, "notes.txt"), "w").write("run=" + rid + "\\n")
+    return got
+m.runs_naming = late
+print(m.prune_lume(False, m.read_state()))
+"""
 FAKE_WAKE = """#!/usr/bin/env python3
 import json, os, sys
 open(os.path.join(os.environ["T"], "wakes"), "a").write(json.dumps(sys.argv[1:]) + "\\n")
@@ -522,6 +537,17 @@ class Pickup(unittest.TestCase):
         self.run_dir("done", "collected", [name[8:]])
         self.lume([(name, "stopped")])
         self.pickup()
+        self.assertEqual(self.vms(), [name])
+
+    def test_a_run_that_names_a_worker_during_the_pass_keeps_it(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000fe"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        (self.t / "late.py").write_text(LATE_SCAN)
+        r = subprocess.run(["python3", str(self.t / "late.py"), str(self.bin / "pickup"), str(self.root / "review" / "late"), name[8:]],
+                           capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.root / "review" / "late" / "notes.txt").exists())
         self.assertEqual(self.vms(), [name])
 
     def test_no_delete_while_a_lume_e2e_run_holds_its_lock(self):
