@@ -39,7 +39,7 @@ def gh(errors, *args):
 
 
 def holds(text):
-    h = {"hold": set(), "skip": set(), "review_only": set()}
+    h = {"hold": set(), "skip": set(), "review_only": set(), "read": text is not None}
     for line in (text or "").splitlines():
         f = [x.strip() for x in line.split("|")]
         if line.lstrip().startswith("#") or len(f) < 2:
@@ -47,7 +47,7 @@ def holds(text):
         if f[0] == "hold" and f[1].lstrip("#").isdigit():
             h["hold"].add(int(f[1].lstrip("#")))
         elif f[0] in ("skip-author", "review-only"):
-            h["skip" if f[0] == "skip-author" else "review_only"].add(f[1])
+            h["skip" if f[0] == "skip-author" else "review_only"].add(f[1].lower())
     return h
 
 
@@ -86,7 +86,8 @@ def launch_host(hosts, needs=None):
 
 
 def rule(c, h, prs, live, zane, hosts):
-    if hourly.bot(c["author"]) or c["author"]["login"] in h["skip"] or "hold" in c["labels"] or (c["kind"] != "issue" and c["n"] in h["hold"]):
+    if hourly.bot(c["author"]) or c["author"]["login"].lower() in h["skip"] or "hold" in c["labels"] \
+            or (c["kind"] != "issue" and c["n"] in h["hold"]):
         return "held", None
     if any(n in h["hold"] for n in c["linked"]):
         return "held", None
@@ -113,8 +114,8 @@ def source_prs(errors, numbers):
     out = {}
     for i in range(0, len(numbers), SOURCES_PER_QUERY):
         chunk = numbers[i:i + SOURCES_PER_QUERY]
-        fields = " ".join(f"p{n}: pullRequest(number: {n}) {{ number state closingIssuesReferences(first: 100) {{ nodes {{ number state }} }} }}"
-                          for n in chunk)
+        fields = " ".join(f"p{n}: pullRequest(number: {n}) {{ number state author {{ login }} "
+                          "closingIssuesReferences(first: 100) { nodes { number state author { login } } } }" for n in chunk)
         p = hourly.run(["gh", "api", "graphql", "-f", f'query=query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'])
         try:
             got = json.loads(p.stdout or "null") or {}
@@ -141,6 +142,7 @@ def salvage_check(errors, h):
     named = [(p, list(dict.fromkeys(int(x) for x in src_rx.findall(p["body"] or "")))) for p in ours]
     sources = source_prs(errors, sorted({n for _, ns in named for n in ns}))
     items = []
+    teammate = lambda x: ((x.get("author") or {}).get("login") or "").lower() in h["review_only"]  # noqa: E731
     for p, ns in named:
         for n in ns:
             src = sources.get(n)
@@ -153,10 +155,10 @@ def salvage_check(errors, h):
                     items.append([f"salvage-fixes:{p['number']}:{n}", f"salvage cua#{p['number']} of cua#{n} lacks "
                                   + ", ".join(f"`{ISSUES['fixes'].format(issue=x['number'])}`" for x in want) + " in its body: add it"])
                 continue
-            for i in (x["number"] for x in want if x.get("state") == "OPEN"):
+            for i in (x["number"] for x in want if x.get("state") == "OPEN" and h["read"] and not teammate(x)):
                 items.append([f"issue-open:{p['number']}:{i}", f"cua#{i} is still open: our merged salvage cua#{p['number']} fixed it "
                               f"but lacked `{ISSUES['fixes'].format(issue=i)}`; close it with a comment naming cua#{p['number']}"])
-            if src["state"] == "OPEN" and n not in h["hold"]:
+            if src["state"] == "OPEN" and n not in h["hold"] and h["read"] and not teammate(src):
                 items.append([f"salvaged-open:{n}:{p['number']}", f"cua#{n} is still open after its salvage cua#{p['number']} "
                               f"merged: close it with a comment naming cua#{p['number']} (playbooks/hourly.md step 7)"])
     return items
@@ -171,7 +173,7 @@ def task(c, h):
         return (f"trycua/cua#{c['n']}{head}: {c['url']}\n\nKind: unstick our PR. The merge job waits on a session: {c['why']}. "
                 "Update it from main, fix the cause, push, and have the verifier check the new head. "
                 "If main or another PR already has its change, close it instead and say what replaced it.\n")
-    who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"] in h["review_only"] else \
+    who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"].lower() in h["review_only"] else \
         "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
     frm, fixes = salvage_lines(c["n"])
     return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
@@ -271,7 +273,7 @@ def run_pass(dry):
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
     waits = hourly.merge_waits(errors)
     blind = hourly.unknown(hosts)
-    h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds("")
+    h = holds((hosts.get(mh) or {}).get("holds")) if mh else holds(None)
     if mh and "holds" not in hosts.get(mh, {}):
         errors.append(f"no holds file read on the merge host {mh}: nothing is picked this pass")
     def branch_of(n):
@@ -316,7 +318,7 @@ def run_pass(dry):
         if rc == 0:
             free -= 1
             if c["kind"] == "review":
-                state["authors"][c["id"]] = "teammate" if c["author"]["login"] in h["review_only"] else "outside"
+                state["authors"][c["id"]] = "teammate" if c["author"]["login"].lower() in h["review_only"] else "outside"
                 write(state_path(), state)
         else:
             errors.append(f"launch {c['id']} on {there} failed")

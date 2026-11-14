@@ -22,8 +22,9 @@ case "$*" in
 import json, os, re, sys
 src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
 ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
-node = lambda p: {"number": p["number"], "state": p["state"], "closingIssuesReferences": {"nodes": [
-    {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED"} for i in p["closingIssuesReferences"]]}}
+node = lambda p: {"number": p["number"], "state": p["state"], "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
+    {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED", "author": {"login": i.get("login", "someone")}}
+    for i in p["closingIssuesReferences"]]}}
 errs = [{"type": "NOT_FOUND", "message": f"no pull request {n}"} for n in ns if n not in src]
 errs += [{"type": "RATE_LIMITED", "message": "slow down"}] if os.path.exists(os.path.join(os.environ["T"], "graphql-partial")) else []
 print(json.dumps({"data": {"repository": {f"p{n}": node(src[n]) if n in src else None for n in ns}}, **({"errors": errs} if errs else {})}))
@@ -243,6 +244,25 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("error:", report)
         self.pickup()
         self.assertEqual(len(self.wakes()), 1)
+
+    def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
+        self.peer(holds="review-only | F-Trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": n, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": f"Salvaged from #{src}",
+             "closingIssuesReferences": []} for n, src in ((7147, 7030), (4560, 4468), (4561, 4469))]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 7030, "state": "OPEN", "login": "f-trycuA", "closingIssuesReferences": []},
+            {"number": 4468, "state": "OPEN", "login": "ddupont808", "closingIssuesReferences": [{"number": 20, "login": "f-trycua"}]},
+            {"number": 4469, "state": "OPEN", "login": "CMGS", "closingIssuesReferences": [{"number": 22, "login": "CMGS"}]}]))
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
+            "- cua#22 is still open: our merged salvage cua#4561 fixed it but lacked `Fixes #22`; close it with a comment naming cua#4561",
+            "- cua#4469 is still open after its salvage cua#4561 merged: close it with a comment naming cua#4561 (playbooks/hourly.md step 7)"]))
+        self.assertNotIn("cua#7030", report)
+        self.assertNotIn("cua#4468", report)
+        self.assertNotIn("cua#20 ", report)
 
     def test_salvage_sources_are_read_in_one_query_per_fifty_whatever_the_salvage_count(self):
         self.peer(at_main=True)
