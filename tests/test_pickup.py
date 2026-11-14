@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,11 +16,18 @@ FAKE_GH = """#!/bin/bash
 [ -e "$T/gh-sleep" ] && sleep 30
 case "$*" in
   "issue list"*) cat "$T/issues.json";;
-  "issue view "*) jq -n --arg n "$3" '{state: (if ($n | tonumber) % 2 == 0 then "OPEN" else "CLOSED" end)}';;
   *review-requested*) cat "$T/reviews.json";;
   "pr list"*in:body*) cat "$T/salvages.json" 2>/dev/null || echo '[]';;
-  "pr view "*closingIssuesReferences*) jq -e --argjson n "$3" '.[] | select(.number == $n)' "$T/sources.json" 2>/dev/null \
-    || { echo "no pull request $3" >&2; exit 1; };;
+  "api graphql"*) echo "$*" >> "$T/graphql"; python3 -c '
+import json, os, re, sys
+src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
+ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
+node = lambda p: {"number": p["number"], "state": p["state"], "closingIssuesReferences": {"nodes": [
+    {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED"} for i in p["closingIssuesReferences"]]}}
+errs = [{"type": "NOT_FOUND", "message": f"no pull request {n}"} for n in ns if n not in src]
+errs += [{"type": "RATE_LIMITED", "message": "slow down"}] if os.path.exists(os.path.join(os.environ["T"], "graphql-partial")) else []
+print(json.dumps({"data": {"repository": {f"p{n}": node(src[n]) if n in src else None for n in ns}}, **({"errors": errs} if errs else {})}))
+sys.exit(1 if errs else 0)' "$*";;
   "pr list"*isDraft*) cat "$T/open.json";;
   "pr view"*) echo '{"headRefOid": "'"$(printf 'f%.0s' $(seq 40))"'", "headRefName": "x"}';;
   *) echo "fake gh: $*" >&2; exit 1;;
@@ -235,6 +243,32 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("error:", report)
         self.pickup()
         self.assertEqual(len(self.wakes()), 1)
+
+    def test_salvage_sources_are_read_in_one_query_per_fifty_whatever_the_salvage_count(self):
+        self.peer(at_main=True)
+        n = 120
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 2000 + i, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": f"Salvaged from #{1000 + i}",
+             "closingIssuesReferences": []} for i in range(n)]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 1000 + i, "state": "CLOSED", "closingIssuesReferences": [{"number": 2 * i + 1}]} for i in range(n)]))
+        self.pickup()
+        queries = (self.t / "graphql").read_text().splitlines()
+        self.assertEqual(len(queries), 3)
+        self.assertEqual(sorted(int(x) for q in queries for x in re.findall(r"pullRequest\(number: (\d+)\)", q)),
+                         list(range(1000, 1000 + n)))
+        self.assertEqual(self.wakes(), [])
+
+    def test_a_partial_graphql_answer_is_an_error_and_its_good_parts_still_count(self):
+        self.peer(at_main=True)
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 703, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": "Salvaged from #603", "closingIssuesReferences": []}]))
+        (self.t / "sources.json").write_text(json.dumps([{"number": 603, "state": "OPEN", "closingIssuesReferences": []}]))
+        (self.t / "graphql-partial").touch()
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        self.assertIn("error: gh api graphql for 1 salvage source PRs, partial answer: slow down", report)
+        self.assertIn("cua#603 is still open after its salvage cua#703 merged", report)
 
     def test_a_review_brief_asks_a_salvage_for_its_fixes_lines(self):
         self.github(reviews=[review(310, "2026-10-06T00:00:00Z", login="CMGS")])
