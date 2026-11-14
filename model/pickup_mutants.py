@@ -30,7 +30,7 @@ M = [
     ("kill-is-silent", "a pass killed at its deadline ends with no wake (the parent dies with its child)",
      [("/\\ pc' = [pc EXCEPT ![p] = \"wake\"] /\\ failed' = TRUE /\\ had' = News",
        "/\\ pc' = [pc EXCEPT ![p] = \"off\"] /\\ failed' = TRUE /\\ had' = News /\\ lock' = NoPass"),
-      ("                 lock, free, woke, rows>>\nWakeOk(p)", "                 free, woke, rows>>\nWakeOk(p)")],
+      ("                 lock, free, woke, rows, reads>>\nWakeOk(p)", "                 free, woke, rows, reads>>\nWakeOk(p)")],
      "WakeIffOutputOrFailure"),
     ("collect-before-outbox", "a run collected before its report reached the outbox",
      [("/\\ ended' = FALSE /\\ unsent' = (unsent \\/ ended) /\\ pending' = (pending \\/ ended)",
@@ -42,6 +42,12 @@ M = [
      [("/\\ taken = Foreign\n", "/\\ taken = {}\n")], "ForeignNeverLaunched"),
     ("failed-post-clears-outbox", "a wake whose POST failed empties the outbox",
      [("/\\ woke' = TRUE /\\ unsent' = (unsent \\/ failed)\n", "/\\ woke' = TRUE /\\ unsent' = FALSE\n")], "NoResultLost"),
+    ("merge-job-read-twice", "the queue and the picks each run the merge job's dry run (13 Nov pickup pass)",
+     [("DrainDone(p) == pc[p] = \"drain\" /\\ lock = p /\\ ~CanDrain\n  /\\ pc' = [pc EXCEPT ![p] = \"pick\"] /\\ free' = Free\n",
+       "DrainDone(p) == pc[p] = \"drain\" /\\ lock = p /\\ ~CanDrain\n"
+       "  /\\ pc' = [pc EXCEPT ![p] = \"pick\"] /\\ free' = Free /\\ reads' = reads + 1\n"),
+      ("                 lock, had, failed, woke, rows, reads>>\nPick(p, i)", "                 lock, had, failed, woke, rows>>\nPick(p, i)")],
+     "MergeJobReadOnce"),
 ]
 
 

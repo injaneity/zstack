@@ -27,7 +27,9 @@ USAGE = (
     "  hourly queue                    first reopen the thread that pushed each of our PRs red after the merge job's rerun\n"
     "                                  (bin/pi-run ci on its host), then start every host's queued runs on that host,\n"
     "                                  oldest since= first, while its pool has room: fresh ones, and continuations (a 429's,\n"
-    "                                  a red PR's) in their own session once resume_at has passed (PI_RUN_DRY=1: plan only)\n"
+    "                                  a red PR's) in their own session once resume_at has passed (PI_RUN_DRY=1: plan only).\n"
+    "                                  --waits - takes the merge job's dry run as {\"waits\": [...], \"errors\": [...]} on stdin,\n"
+    "                                  so a pickup pass runs it once\n"
     "  hourly on <host> <package path> [args...]       run this package's file (bin/pi-run, hosts/vm/merge_job.py) there\n"
     "  hourly report <id>              the run's report.md, else the end of its run.log, with TOKEN lines dropped\n"
     "  hourly facts [--runs] | recv <id> [--drain]  what a peer is asked for over `on`: this host's facts as JSON; a brief on\n"
@@ -406,7 +408,7 @@ def launch(sid, host, reason, send=True, drain=False):
     return p.returncode
 
 
-def drain():
+def drain(waits, errors):
     dry = bool(os.environ.get("PI_RUN_DRY"))
     if not dry:
         os.makedirs(root(), exist_ok=True)
@@ -417,8 +419,7 @@ def drain():
             pr.die(3, "queue: another hourly queue pass is running; nothing launched")
         slots_lock()
     hosts = all_facts()
-    errors = []
-    reopen(hosts, merge_waits(errors), dry)
+    reopen(hosts, waits, dry)
     for e in errors:
         print(f"error: {e}: no red PR was reopened this pass")
     hosts = all_facts() if not dry else hosts
@@ -499,8 +500,18 @@ def main(argv):
         return p.returncode
     if cmd == "launch" and len(rest) >= 3 and pr.ID.fullmatch(rest[0]):
         return launch(rest[0], rest[1], " ".join(rest[2:]))
-    if cmd == "queue" and not rest:
-        return drain()
+    if cmd == "queue" and rest in ([], ["--waits", "-"]):
+        if not rest:
+            errors = []
+            return drain(merge_waits(errors), errors)
+        try:
+            got = json.loads(sys.stdin.read())
+        except ValueError:
+            got = None
+        if not (isinstance(got, dict) and all(isinstance(got.get(k), list) and all(isinstance(x, str) for x in got[k])
+                                              for k in ("waits", "errors"))):
+            pr.die(2, 'queue --waits -: stdin is not {"waits": [str], "errors": [str]}')
+        return drain(got["waits"], got["errors"])
     if cmd == "recv" and len(rest) in (1, 2) and pr.ID.fullmatch(rest[0]) and rest[1:] in ([], ["--drain"]):
         d = os.path.join(root(), "review", rest[0])
         brief, text = os.path.join(d, "brief.md"), sys.stdin.read()
