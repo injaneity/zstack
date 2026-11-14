@@ -25,6 +25,16 @@ case "$*" in
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
 """
+FAKE_LUME = """#!/bin/bash
+echo "$*" >> "$T/lume.log"
+case "$1" in
+  ls) [ -e "$T/lume-ls-fails" ] && { echo "lume: daemon down" >&2; exit 1; }; cat "$T/lume.json";;
+  get) [ -e "$T/booted-$2" ] && st=running || st=stopped
+       jq -e --arg n "$2" --arg st "$st" '[.[] | select(.name == $n) | .status = $st] | select(length > 0)' "$T/lume.json";;
+  delete) jq --arg n "$2" '[.[] | select(.name != $n)]' "$T/lume.json" > "$T/lume.tmp" && mv "$T/lume.tmp" "$T/lume.json";;
+  *) echo "fake lume: $*" >&2; exit 1;;
+esac
+"""
 FAKE_WAKE = """#!/usr/bin/env python3
 import json, os, sys
 open(os.path.join(os.environ["T"], "wakes"), "a").write(json.dumps(sys.argv[1:]) + "\\n")
@@ -165,6 +175,25 @@ class Pickup(unittest.TestCase):
         self.assertEqual([r[1] for r in self.rows("launch")], ["cua-5"])
         self.assertIn("#6561", (self.root / "review" / "cua-4" / "brief.md").read_text())
         self.assertFalse((self.root / "review" / "cua-4" / "run.json").exists())
+
+    def lume(self, workers, seed="seed-vm"):
+        (self.t / "bin" / "lume").write_text(FAKE_LUME)
+        (self.t / "bin" / "lume").chmod(0o755)
+        home = self.t / ".local" / "share" / "cua-lume-e2e"
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.json").write_text(json.dumps({"seed": seed}))
+        vms = [{"name": n, "status": st, "diskSize": {"allocated": 20 * 2**30}} for n, st in workers]
+        (self.t / "lume.json").write_text(json.dumps(vms))
+
+    def vms(self):
+        return sorted(v["name"] for v in json.loads((self.t / "lume.json").read_text()))
+
+    def run_dir(self, sid, state, names=(), where="notes.txt"):
+        d = self.root / "review" / sid
+        (d / os.path.dirname(where)).mkdir(parents=True, exist_ok=True)
+        run = {"state": state, "attempt": 1, "rc": 0 if state != "running" else None, "pool": "hand", "pid": None}
+        (d / "run.json").write_text(json.dumps({**run, **(live() if state == "running" else {})}))
+        (d / where).write_text("".join(f"run={n}\n" for n in names))
 
     def wait(self, sid, state, secs=10):
         end = time.time() + secs
@@ -411,6 +440,71 @@ class Pickup(unittest.TestCase):
         if shutil.which("plutil"):
             (self.t / "p.plist").write_text(r.stdout)
             self.assertEqual(subprocess.run(["plutil", "-lint", str(self.t / "p.plist")], capture_output=True).returncode, 0)
+
+    def test_every_pass_prunes_old_stopped_workers_only_collected_runs_name(self):
+        old = lambda h, tag: f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - h * 3600))}-{tag}"  # noqa: E731
+        gone, young, live_, unnamed, running, booted, seed, marked = (
+            old(30, "0000000a"), old(2, "0000000b"), old(30, "0000000c"), old(30, "0000000d"), old(30, "0000000e"),
+            old(30, "0000000f"), old(30, "00000010"), old(30, "00000011"))
+        self.lume([(gone, "stopped"), (young, "stopped"), (live_, "stopped"), (unnamed, "stopped"), (running, "running"),
+                   (booted, "stopped"), (seed, "stopped"), (marked, "stopped"), ("rmb-bench", "stopped"),
+                   ("onigiri-linux", "running")], seed=seed)
+        (self.t / ".local" / "share" / "cua-lume-e2e" / "unresolved").mkdir()
+        (self.t / ".local" / "share" / "cua-lume-e2e" / "unresolved" / marked).write_text("x\n")
+        (self.t / f"booted-{booted}").touch()
+        ids = lambda *n: [x[8:] for x in n]  # noqa: E731
+        self.run_dir("done-a", "collected", ids(gone, young, running, booted, seed, marked), where="scratch/lume.log")
+        self.run_dir("done-b", "collected", ids(live_))
+        self.run_dir("still-going", "running", ids(live_))
+        self.assertGreaterEqual(free_gb(self.root), policy_floor())
+        out = self.pickup()
+        self.assertIn(f"prune {gone}:", out)
+        self.assertEqual(self.vms(), sorted([young, live_, unnamed, running, booted, seed, marked, "rmb-bench", "onigiri-linux"]))
+        self.assertEqual([r[:2] for r in self.rows("prune")], [["prune", gone]])
+        self.assertIn("done-a collected", self.rows("prune")[0][2])
+        self.assertIn(f"lume worker {booted} not pruned: it is no longer stopped", "".join(map(str, self.wakes())))
+        (self.root / "review" / "still-going" / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "rc": 0, "pid": None, "pool": "hand"}))
+        self.assertIn(f"prune {live_}:", self.pickup())
+        self.assertNotIn(live_, self.vms())
+
+    def test_a_run_that_named_a_worker_keeps_it_after_its_file_is_gone(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000aa"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.run_dir("going", "running", [name[8:]])
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+        (self.root / "review" / "going" / "notes.txt").unlink()
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+
+    def test_lume_failing_prunes_nothing_and_tells_the_chat_once(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000bb"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        (self.t / "lume-ls-fails").touch()
+        self.pickup()
+        self.pickup()
+        self.assertEqual(self.vms(), [name])
+        self.assertEqual(len(self.wakes()), 1)
+        self.assertIn("lume workers not pruned this pass: lume ls failed", self.wakes()[0][1])
+
+    def test_dry_lists_the_prune_and_deletes_nothing(self):
+        name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000cc"
+        self.lume([(name, "stopped")])
+        self.run_dir("done", "collected", [name[8:]])
+        self.assertIn(f"would prune {name}:", self.pickup("--dry"))
+        self.assertEqual(self.vms(), [name])
+        self.assertNotIn("delete", (self.t / "lume.log").read_text())
+
+
+def free_gb(p):
+    return shutil.disk_usage(p).free // 2**30
+
+
+def policy_floor():
+    return int(subprocess.run([str(PKG / "bin" / "policy"), "get", "hourly.floor_gb"], capture_output=True, text=True,
+                              check=True).stdout)
 
 
 if __name__ == "__main__":
