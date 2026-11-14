@@ -160,7 +160,8 @@ def salvage_check(errors, h):
                               f"but lacked `{ISSUES['fixes'].format(issue=i)}`; close it with a comment naming cua#{p['number']}"])
             if src["state"] == "OPEN" and n not in h["hold"] and h["read"] and not teammate(src):
                 items.append([f"salvaged-open:{n}:{p['number']}", f"cua#{n} is still open after its salvage cua#{p['number']} "
-                              f"merged: close it with a comment naming cua#{p['number']} (playbooks/hourly.md step 7)"])
+                              f"merged: close it only after its approved thank-you is posted, given that comment's URL; "
+                              f"until then post nothing on it (playbooks/hourly.md step 7)"])
     return items
 
 
