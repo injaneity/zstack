@@ -4,7 +4,7 @@ This is how Zane's deployment runs zstack. It is one example, not a requirement:
 
 ## Machines
 
-- **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key. Its ssh wrapper is `hosts/mini/vm`, and `~/onigiri-vm/vm` is a symlink to it.
+- **The box** runs the chat orchestrator. **The VM** (onigiri-linux) runs every pi session and the merge job. The relay Mac holds the VM's key. Its ssh wrapper is `hosts/mini/vm`, and `~/onigiri-vm/vm` is a symlink to it. The VM sits on the local vmnet bridge, so macOS Local Network privacy applies. That privacy check is made against the responsible process, which for a launchd job is the oldest non-Apple binary in its chain (the micromamba `python3` for the pickup). A Local Network rule that denies that binary would cut the pickup off from the VM while interactive shells, whose responsible process is the terminal or relay, still reach it. So the wrapper starts `ssh` with `posix_spawn` and `responsibility_spawnattrs_setdisclaim`, which makes the Apple-signed `/usr/bin/ssh` responsible for itself. `tests/vm-launchd.sh` replays that case in a throwaway launchd job.
 - Reach the VM from the box with `HOME=/home/box /srv/onigiri/tools/cua-main-88e6d9f do --no-record shell '~/onigiri-vm/vm "..."'`. For anything longer than a line, base64 a script over and run it as `bash /tmp/x.sh`. If the VM is unreachable, stop and ask Zane. Never do the work in the chat instead.
 - `pi list` on the VM shows `git:github.com/injaneity/zstack`, checked out at `/home/box/.pi/agent/git/github.com/injaneity/zstack`. `/home/box/.pi/agent/skills/` is empty by design.
 

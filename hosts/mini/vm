@@ -1,3 +1,29 @@
-#!/bin/sh
-exec ssh -i "$HOME/.ssh/onigiri_vm_ed25519" -o UserKnownHostsFile="$HOME/onigiri-vm/known_hosts" \
-  -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 box@192.168.64.142 "$@"
+#!/usr/bin/python3
+import ctypes
+import os
+import sys
+
+SSH = "/usr/bin/ssh"
+POSIX_SPAWN_SETEXEC = 0x0040
+home = os.path.expanduser("~")
+args = [SSH, "-i", f"{home}/.ssh/onigiri_vm_ed25519", "-o", f"UserKnownHostsFile={home}/onigiri-vm/known_hosts",
+        "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30",
+        "box@192.168.64.142", *sys.argv[1:]]
+
+
+def check(step, rc):
+    if rc:
+        sys.exit(f"vm: {step}: {os.strerror(rc)}")
+
+
+def cstrings(xs):
+    return (ctypes.c_char_p * (len(xs) + 1))(*map(os.fsencode, xs), None)
+
+
+libc = ctypes.CDLL(None, use_errno=True)
+attr = ctypes.c_void_p()
+check("posix_spawnattr_init", libc.posix_spawnattr_init(ctypes.byref(attr)))
+check("posix_spawnattr_setflags", libc.posix_spawnattr_setflags(ctypes.byref(attr), ctypes.c_short(POSIX_SPAWN_SETEXEC)))
+check("responsibility_spawnattrs_setdisclaim", libc.responsibility_spawnattrs_setdisclaim(ctypes.byref(attr), 1))
+check(f"posix_spawn {SSH}", libc.posix_spawn(None, os.fsencode(SSH), None, ctypes.byref(attr), cstrings(args),
+                                             cstrings([f"{k}={v}" for k, v in os.environ.items()])))
