@@ -197,7 +197,8 @@ def task(c, h):
         new = c["id"][len("release-bench-"):]
         return (f"Release bench: {RB['repo']} {RB['tag_prefix']}{new} against {RB['tag_prefix']}{c['why']}.\n{c['url']}\n\n"
                 "Kind: release bench, picked by the pickup when the release was published. Run onigiri-mode's "
-                "playbooks/release-bench.md with NEW = " + new + " and OLD = " + c["why"] + ".\n")
+                "playbooks/release-bench.md with NEW = " + new + " and OLD = " + c["why"] + ". Only when both lanes "
+                f"finished, end report.md with the line `benched: {new} against {c['why']}`.\n")
     head = f" at head {c['head']}" if c["head"] else ""
     if c["kind"] == "issue":
         return (f"trycua/cua#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in trycua/cua, picked from the issues assigned to "
@@ -273,7 +274,8 @@ def collect(hosts, dry, state, errors):
                 print(f"would collect {h} {sid}: rc={r.get('rc')}, prs {len(res['prs'])}")
                 continue
             state["authors"].pop(sid, None)
-            if (m := RB_ID.fullmatch(sid)) and r["state"] == "exited" and str(r.get("rc")) == "0":
+            if (m := RB_ID.fullmatch(sid)) and r["state"] == "exited" and str(r.get("rc")) == "0" and \
+                    re.search(rf"^benched: {re.escape(m[1])} against \d+(\.\d+)*\s*$", rep.stdout, re.M):
                 state["benched"] = sorted({*state["benched"], m[1]}, key=version)
             write(state_path(), state)
             p = hourly.on(h, ["bin/pi-run", "collect", sid])

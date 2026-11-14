@@ -119,8 +119,8 @@ label_hosts = { Linux = "vm", macOS = "mini" }
 # The release bench (skills/onigiri-mode/playbooks/release-bench.md; Zane, 14 Nov 2026 23:33 SGT: "lets bench releases
 # instead of each individual pr, since it takes too long. we can just be aggressive with reverting our own prs"). Each
 # pickup pass (bin/pickup) reads `repo`'s published (non-draft) releases whose tag starts with `tag_prefix`. The last
-# one benched is the newest of `benched` and the releases whose `release-bench-<version>` run exited 0 (pickup/state.json
-# `benched`). When no release bench is live on any host and the newest release is newer than that and has no
+# one benched is the newest of `benched` and the releases whose `release-bench-<version>` run exited 0 with a
+# `benched: <version> against <old>` line in its report (pickup/state.json `benched`). When no release bench is live on any host and the newest release is newer than that and has no
 # `release-bench-<version>` run yet, it launches that run on `host`, in the auto pool, against the last one benched.
 # Releases that land while a bench runs are skipped, and a bench that failed is not a baseline: the next pass benches the
 # newest one against the last one benched. `benched` is the last release benched by hand before the pickup took over

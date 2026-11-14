@@ -155,7 +155,7 @@ host = "mini"
 format = "json"
 writer = "bin/pickup"
 readers = ["bin/pickup"]
-schema = "{seen, unsent, failures, authors, benched}: the outbox, what a delivered wake carried, and the releases whose release-bench run exited 0"
+schema = "{seen, unsent, failures, authors, benched}: the outbox, what a delivered wake carried, and the releases whose release-bench run exited 0 with a `benched: <version> against <old>` line in its report"
 
 [file.pickup-lock]
 path = "pickup/pickup.lock"
