@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import calendar
 import fcntl
 import importlib.machinery
 import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,6 +27,12 @@ REPO, ME = hourly.REPO, hourly.ME
 RULES = ("held", "pr", "overlap", "zane", "host")
 URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 SECTIONS = ("follow-ups", "questions", "drafts")
+LUME_CONFIG = os.path.expanduser("~/.local/share/cua-lume-e2e/config.json")
+LUME_UNRESOLVED = os.path.expanduser("~/.local/share/cua-lume-e2e/unresolved")
+LUME_RUN_LOCK = os.path.expanduser("~/.local/share/cua-lume-e2e/run.lock")
+WORKER = re.compile(r"cua-e2e-(\d{8}T\d{6}Z-[0-9a-f]{8})")
+RUN_ID = re.compile(rb"run=(\d{8}T\d{6}Z-[0-9a-f]{8})")
+PRUNE_AGE_S = hourly._policy["hourly"]["lume_prune_age_h"] * 3600
 
 
 
@@ -183,7 +191,7 @@ def task(c, h):
 
 
 
-EMPTY = {"seen": {}, "unsent": [], "failures": [], "authors": {}}
+EMPTY = {"seen": {}, "unsent": [], "failures": [], "authors": {}, "lume": {}}
 
 
 def state_path():
@@ -244,6 +252,134 @@ def collect(hosts, dry, state, errors):
             hourly.log(h, "collect", sid, f"rc={r.get('rc')}; prs {' '.join(res['prs']) or 'none'}; to the outbox")
 
 
+def old_workers():
+    p = hourly.run(["lume", "ls", "--format", "json"])
+    try:
+        vms = json.loads(p.stdout) if not p.returncode else None
+    except ValueError:
+        vms = None
+    try:
+        seed = json.load(open(LUME_CONFIG))["seed"]
+    except (OSError, ValueError, KeyError, TypeError):
+        seed = None
+    if vms is None or not seed:
+        return None, None, f"lume ls failed: {pr.tail(p, 150)}" if vms is None else f"no seed in {LUME_CONFIG}"
+    marks = set(os.listdir(LUME_UNRESOLVED)) if os.path.isdir(LUME_UNRESOLVED) else set()
+    old, alive = {}, {}
+    for v in vms:
+        m = WORKER.fullmatch(v.get("name") or "")
+        if not m:
+            continue
+        alive[m[1]] = born = calendar.timegm(time.strptime(m[1][:16], "%Y%m%dT%H%M%SZ"))
+        if v["name"] not in (seed, *marks) and v.get("status") == "stopped" and time.time() - born >= PRUNE_AGE_S:
+            old[m[1]] = (v, born)
+    return old, alive, None
+
+
+def runs_naming(ids, since):
+    review, named = os.path.join(hourly.root(), "review"), {}
+    for sid in sorted(os.listdir(review)) if os.path.isdir(review) else []:
+        d = os.path.join(review, sid)
+        if not os.path.isdir(d):
+            continue
+        files, blind = pr.session_files(d, sid), []
+        for top, dirs, names in os.walk(d, onerror=blind.append):
+            dirs[:] = [x for x in dirs if not (top == d and x.startswith("wt")) and x not in (".git", "target", "node_modules")]
+            files += [os.path.join(top, x) for x in names]
+        if blind:
+            named.update({rid: named.get(rid, set()) | {sid} for rid in ids})
+        for f in files:
+            try:
+                st = os.lstat(f)
+                if not os.path.isfile(f) or os.path.islink(f) or max(st.st_mtime, st.st_ctime) < since:
+                    continue
+                with open(f, "rb") as fh:
+                    data = fh.read(8192)
+                    if b"\0" in data:
+                        continue
+                    data += fh.read()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                data = b"".join(b"run=" + x.encode() for x in ids)
+            for rid in {x.decode() for x in RUN_ID.findall(data)} & ids:
+                named.setdefault(rid, set()).add(sid)
+    return named
+
+
+def run_state(sid):
+    p = os.path.join(hourly.root(), "review", sid, "run.json")
+    try:
+        return (pr.read_json(p) or {}).get("state", "no run")
+    except (OSError, ValueError):
+        return "unreadable"
+
+
+def prune_lume(dry, state):
+    if not shutil.which("lume"):
+        return []
+    old, alive, why = old_workers()
+    if why:
+        return [["lume-prune", f"lume workers not pruned this pass: {why}"]]
+    seen = {rid: x for rid, x in state["lume"].items() if rid in alive}
+    start = time.time()
+    since = min((seen[rid]["scanned"] if rid in seen else born for rid, born in alive.items()), default=start)
+    named = runs_naming(set(alive), since)
+    for rid in alive:
+        seen[rid] = {"runs": sorted(set(seen.get(rid, {}).get("runs", [])) | named.get(rid, set())), "scanned": start}
+    if not dry:
+        state["lume"] = seen
+        write(state_path(), state)
+    chat, todo = [], []
+    for rid, (v, born) in sorted(old.items()):
+        runs = {sid: run_state(sid) for sid in seen[rid]["runs"]}
+        if not runs or any(s != "collected" for s in runs.values()):
+            continue
+        gb = ((v.get("diskSize") or {}).get("allocated") or 0) / 2**30
+        why = (f"stopped lume worker {(time.time() - born) // 3600:.0f}h old, run(s) {' '.join(sorted(runs))} collected; "
+               f"{gb:.1f}G allocated")
+        if dry:
+            print(f"would prune {v['name']}: {why}")
+        else:
+            todo.append((rid, v["name"], why))
+    if not todo:
+        return chat
+    try:
+        lock = os.open(LUME_RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        return chat + [["lume-prune", f"lume workers not pruned this pass: {LUME_RUN_LOCK}: {e}"]]
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(lock)
+        print(f"lume prune: a lume-e2e run holds {LUME_RUN_LOCK}; {len(todo)} worker(s) wait for the next pass")
+        return chat
+    try:
+        late = runs_naming({rid for rid, _, _ in todo}, start)
+        for rid, name, why in todo:
+            if any(run_state(sid) != "collected" for sid in late.get(rid, ())):
+                state["lume"][rid]["runs"] = sorted(set(state["lume"][rid]["runs"]) | late[rid])
+                write(state_path(), state)
+                continue
+            now = hourly.run(["lume", "get", name, "--format", "json"])
+            try:
+                stopped = not now.returncode and json.loads(now.stdout)[0].get("status") == "stopped"
+            except (ValueError, IndexError, KeyError, AttributeError):
+                stopped = False
+            rm = hourly.run(["lume", "delete", name, "--force"]) if stopped else None
+            if rm is None or rm.returncode:
+                chat.append([f"lume-prune:{name}", f"lume worker {name} not pruned: "
+                             + ("it is no longer stopped" if rm is None else f"lume delete failed: {pr.tail(rm, 150)}")])
+                continue
+            print(f"prune {name}: {why}")
+            hourly.log(hourly.SELF, "prune", name, why)
+            state["lume"].pop(rid, None)
+            write(state_path(), state)
+    finally:
+        os.close(lock)
+    return chat
+
+
 def drain(dry):
     p = hourly.run([os.path.join(PKG, "bin", "hourly"), "queue"], env={**os.environ, **({"PI_RUN_DRY": "1"} if dry else {})})
     out = p.stdout + (f"queue: not drained (exit {p.returncode}): {p.stderr.strip().splitlines()[-1] if p.stderr.strip() else ''}\n"
@@ -266,6 +402,7 @@ def run_pass(dry):
     state, errors = read_state(), []
     hosts = hourly.all_facts()
     collect(hosts, dry, state, errors)
+    pruned = prune_lume(dry, state)
     lines = drain(dry)
     hosts = hourly.all_facts() if not dry else hosts
     mh = hourly.HOST[0].get("ONIGIRI_MERGE_HOST")
@@ -323,7 +460,7 @@ def run_pass(dry):
             break
     salvages = salvage_check(errors, h)
     out = report(hosts, waits, lines, errors)
-    out["chat"] += salvages
+    out["chat"] += salvages + pruned
     return {**out, **({"unsent": state["unsent"]} if dry else {})}
 
 

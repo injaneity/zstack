@@ -12,36 +12,44 @@ stateDiagram-v2
   class lg2 yellow
   s0: Between passes
   s1: Collecting ended runs into the outbox
-  s2: Draining the queue
+  s2: Listing old stopped lume workers
   s3: Pass killed at its deadline
-  s4: Picking from GitHub
-  s5: Between passes, outbox not delivered
-  s6: Listing needs-Zane
-  s7: Nothing new
-  s8: Has news for the chat
+  s4: Deleting the ones only collected runs name
+  s5: Draining the queue
+  s6: Between passes, outbox not delivered
+  s7: Picking from GitHub
+  s8: Listing needs-Zane
+  s9: Nothing new
+  s10: Has news for the chat
   [*] --> s0
   s0 --> s1: launchd fires, the pass takes the lock
   s1 --> s2: every ended run's report to the outbox, then collect
   s1 --> s3: deadline_s passes: the pass is killed
   s2 --> s3: deadline_s passes: the pass is killed
-  s2 --> s4: bin/hourly queue done, free auto slots counted
+  s2 --> s4: stopped workers past lume_prune_age_h that only collected runs name
   s4 --> s3: deadline_s passes: the pass is killed
+  s4 --> s5: none to delete, or a lume-e2e run holds run.lock
   s3 --> s0: wake delivered, lock freed
-  s3 --> s5: wake not delivered: outbox kept, lock freed
-  s4 --> s6: every candidate launched or skipped by its rule, or no slot left
-  s6 --> s3: deadline_s passes: the pass is killed
-  s6 --> s7: needs-Zane and chat items read
-  s5 --> s1: launchd fires, the pass takes the lock
-  s7 --> s0: nothing new: no wake, lock freed
-  s6 --> s8: needs-Zane and chat items read
-  s8 --> s0: wake delivered, lock freed
-  s8 --> s5: wake not delivered: outbox kept, lock freed
+  s3 --> s6: wake not delivered: outbox kept, lock freed
+  s5 --> s3: deadline_s passes: the pass is killed
+  s5 --> s7: bin/hourly queue done, free auto slots counted
+  s7 --> s3: deadline_s passes: the pass is killed
+  s6 --> s1: launchd fires, the pass takes the lock
+  s7 --> s8: every candidate launched or skipped by its rule, or no slot left
+  s8 --> s3: deadline_s passes: the pass is killed
+  s8 --> s9: needs-Zane and chat items read
+  s9 --> s0: nothing new: no wake, lock freed
+  s8 --> s10: needs-Zane and chat items read
+  s10 --> s0: wake delivered, lock freed
+  s10 --> s6: wake not delivered: outbox kept, lock freed
   class s0 blue
   class s1 teal
   class s2 teal
   class s3 yellow
   class s4 teal
-  class s5 blue
-  class s6 teal
-  class s7 yellow
-  class s8 yellow
+  class s5 teal
+  class s6 blue
+  class s7 teal
+  class s8 teal
+  class s9 yellow
+  class s10 yellow

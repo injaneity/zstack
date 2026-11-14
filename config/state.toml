@@ -155,7 +155,7 @@ host = "mini"
 format = "json"
 writer = "bin/pickup"
 readers = ["bin/pickup"]
-schema = "{seen, unsent, failures, authors}: the outbox and what a delivered wake carried"
+schema = "{seen, unsent, failures, authors, lume}: the outbox, what a delivered wake carried, and each old lume worker's naming runs"
 
 [file.pickup-lock]
 path = "pickup/pickup.lock"
