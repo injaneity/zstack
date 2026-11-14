@@ -516,6 +516,11 @@ test("a PR or issue a review-only teammate opened is never closed, by the author
 	refuse('gh pr close 9999 -R trycua/cua -c "Replaced by #7587"', host, /could not tell/);
 	refuse('gh pr close -R trycua/cua -c "Replaced by #7587"', host, /without a number/);
 	refuse(`gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`, host, /GraphQL close/);
+	for (const c of ["gh api graphql -F query=@close.graphql", "gh api graphql --field=query=@q.graphql -F id=X"]) refuse(c, host, /GraphQL query read from a file/);
+	for (const c of ["gh api -X PATCH repos/trycua/cua/pulls/7030 -F state=@state.txt", "gh api -X PATCH repos/trycua/cua/pulls/7030 --field=state=@s"])
+		refuse(c, host, /, a review-only teammate\. /);
+	ok("gh api graphql -f query='query { viewer { login } }'");
+	ok("gh api -X PATCH repos/trycua/cua/pulls/7030 -F title=@t.txt");
 	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
 	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
 });

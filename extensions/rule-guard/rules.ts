@@ -259,9 +259,12 @@ function closeTarget(w: string[]): { n?: number; what: string } | undefined {
 	}
 	if (w[1] !== "api" || !ghApiWrites(w)) return undefined;
 	const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
-	if (ops[0] === "graphql") return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } : undefined;
+	const fromFile = (k: string) => w.some((a, i) => new RegExp(`^${k}=@`).test(a) && /^(-F|--field)$/.test(w[i - 1] ?? "") || new RegExp(`^(-F|--field=)${k}=@`).test(a));
+	if (ops[0] === "graphql")
+		return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } :
+			fromFile("query") ? { what: "a GraphQL query read from a file, which may close" } : undefined;
 	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/(\d+)\/?$/);
-	if (!m || !w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a) || /^--input(=|$)/.test(a))) return undefined;
+	if (!m || !(fromFile("state") || w.some((a) => /^state=closed$/i.test(a) || /"state"\s*:\s*"closed"/i.test(a) || /^--input(=|$)/.test(a)))) return undefined;
 	return { n: Number(m[1]), what: "a close through `gh api`" };
 }
 
@@ -270,7 +273,7 @@ function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined 
 	const t = closeTarget(c.words);
 	if (!t) return undefined;
 	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (bin/policy dump failed)`;
-	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\``;
+	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\`, or pass the query inline`;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${t.what} where the target repo can't be told, so its author can't be checked`;
 	const repo = repos.find((r) => issues.has(r as string));
