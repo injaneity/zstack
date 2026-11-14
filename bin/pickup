@@ -117,12 +117,17 @@ def source_prs(errors, numbers):
                           for n in chunk)
         p = hourly.run(["gh", "api", "graphql", "-f", f'query=query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'])
         try:
-            repo = (json.loads(p.stdout or "null") or {}).get("data", {}).get("repository")
+            got = json.loads(p.stdout or "null") or {}
+            repo, errs = (got.get("data") or {}).get("repository"), got.get("errors") or []
         except (ValueError, AttributeError):
-            repo = None
+            repo, errs = None, []
         if not isinstance(repo, dict):
             errors.append(f"gh api graphql for {len(chunk)} salvage source PRs: " + pr.tail(p, 150))
             continue
+        bad = [e.get("message", str(e)) for e in errs if not (isinstance(e, dict) and e.get("type") == "NOT_FOUND")]
+        if bad or (p.returncode and not errs):
+            errors.append(f"gh api graphql for {len(chunk)} salvage source PRs, partial answer: "
+                          + ("; ".join(bad) or pr.tail(p, 150))[:150])
         out.update({n: repo[f"p{n}"] for n in chunk if isinstance(repo.get(f"p{n}"), dict)})
     return out
 
