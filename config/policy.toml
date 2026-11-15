@@ -97,7 +97,8 @@ idle_min = 150
 # merge job's `last-run` older than this is `stale` (step 0): its 15-minute cron interval plus its 40-minute kill
 # (docs/HOST.md, The merge job). `batch_hour`: the daily preapprove batch is due from this hour SGT (step 9).
 # `file_cap`: follow-up issues the chat files per pass, oldest first (step 6). `lume_prune_age_h`: a stopped
-# `cua-e2e-*` lume VM whose run is collected is pruned once this old (step 3; the 11 Nov retro).
+# `cua-e2e-*` lume VM whose run is collected is pruned once this old (step 3; the 11 Nov retro), by every pickup pass
+# on the mini whatever its free disk.
 [hourly]
 floor_gb = 20
 merge_stale_min = 55
