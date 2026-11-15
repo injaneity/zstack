@@ -83,6 +83,7 @@ Each is `playbooks/<name>.md`. Read the matched one in full, and list its number
 - **Diagnose** (`diagnose`). A read-only question or unexplained behavior. The deliverable is a cited answer, not a fix.
 - **Change** (`change`). A bug fix, a feature, or a refactor, through to an open PR.
 - **Measure** (`measure`). Improve a number, once or in a loop, against a frozen harness.
+- **Release bench** (`release-bench`). Bench a published cua-driver release against the last one benched, and revert our own PR that regressed it. The pickup starts it; no PR waits on a bench.
 - **Pull requests** (`pull-requests`). Open a PR at the end of every change. On request, land one or verify someone else's.
 - **Resume** (`resume`). Pick up prior work, or pause so it can be picked up.
 - **Hourly** (`hourly`). The pickup: `bin/pickup` on the mini's schedule, and the chat's judgment steps with `bin/hourly`. Never a pi session.

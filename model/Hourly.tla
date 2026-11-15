@@ -17,6 +17,7 @@ VARIABLES
   blind,
   pause,
   strayed,
+  jumped,
   qhand,
   qauto,
   ended,
@@ -27,8 +28,8 @@ VARIABLES
   pc,
   rows
 
-vars == <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, dirty, fair, free, pc, rows>>
-World == <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, fair>>
+vars == <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, dirty, fair, free, pc, rows>>
+World == <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, fair>>
 
 SeenAuto == auto + (IF blind THEN 0 ELSE peer)
 CodeFree == Sub(Auto, SeenAuto)
@@ -43,43 +44,44 @@ Handled(i) == \E r \in Rules \cup {"launch"} : <<i, r>> \in rows
 
 Init == todo \in SUBSET Issues /\ blocker \in [Issues -> Rules \cup {"none"}]
   /\ auto = 0 /\ peer = 0 /\ hand = 0 /\ quick = 0 /\ blind = FALSE /\ pause \in BOOLEAN
-  /\ strayed = FALSE /\ qhand = 0 /\ qauto = 0
+  /\ strayed = FALSE /\ jumped = FALSE /\ qhand = 0 /\ qauto = 0
   /\ ended = FALSE /\ stalled = FALSE /\ dirty = TRUE /\ fair = TRUE /\ free = 0 /\ pc = "idle" /\ rows = {}
 
 Changes(i, b) == pc = "idle" /\ blocker[i] # b /\ blocker' = [blocker EXCEPT ![i] = b]
   /\ dirty' = (dirty \/ blocker[i] \in Seen \/ b \in Seen)
-  /\ UNCHANGED <<todo, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, fair, free, pc, rows>>
 Files(i) == pc = "idle" /\ i \notin todo /\ todo' = todo \cup {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, fair, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, fair, free, pc, rows>>
 Moves(i) == pc = "idle" /\ i \in todo /\ todo' = todo \ {i} /\ dirty' = TRUE
-  /\ UNCHANGED <<blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, fair, free, pc, rows>>
+  /\ UNCHANGED <<blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, fair, free, pc, rows>>
 RunEnds == pc # "drain" /\ ended' = TRUE /\ dirty' = TRUE
   /\ \/ auto > 0 /\ auto' = auto - 1 /\ UNCHANGED <<peer, hand, quick>>
      \/ peer > 0 /\ peer' = peer - 1 /\ UNCHANGED <<auto, hand, quick>>
      \/ hand > 0 /\ hand' = hand - 1 /\ UNCHANGED <<auto, peer, quick>>
      \/ quick > 0 /\ quick' = quick - 1 /\ UNCHANGED <<auto, peer, hand>>
   /\ stalled' \in {FALSE, stalled /\ auto' + peer' + hand' + quick' > 0}
-  /\ UNCHANGED <<todo, blocker, blind, pause, strayed, qhand, qauto, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, blind, pause, strayed, jumped, qhand, qauto, fair, free, pc, rows>>
 RunStalls == pc = "idle" /\ ~stalled /\ auto + peer + hand + quick > 0 /\ stalled' = TRUE /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, fair, free, pc, rows>>
 SeenStalled == stalled
 ChatQueues == pc # "drain" /\ qhand + qauto < MaxQueued
   /\ \/ qhand' = qhand + 1 /\ qauto' = qauto
      \/ qauto' = qauto + 1 /\ qhand' = qhand
   /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, ended, stalled, fair, free, pc, rows>>
-HandStarts(onVm) == pc # "drain"
-  /\ \/ ~HandWaits(onVm \/ blind) /\ hand' = hand + 1 /\ UNCHANGED <<qhand, fair>>
-     \/ HandWaits(onVm \/ blind) /\ qhand + qauto < MaxQueued /\ qhand' = qhand + 1 /\ UNCHANGED hand
-        /\ WaitIsFair(onVm \/ blind, hand >= Hand)
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, ended, stalled, fair, free, pc, rows>>
+HandStarts(onVm, prio) == pc # "drain"
+  /\ \/ ~HandWaits(onVm \/ blind) /\ (qhand = 0 \/ prio) /\ hand' = hand + 1 /\ UNCHANGED <<qhand, fair>>
+        /\ jumped' = (jumped \/ (qhand > 0 /\ ~prio))
+     \/ (HandWaits(onVm \/ blind) \/ (qhand > 0 /\ ~prio)) /\ qhand + qauto < MaxQueued /\ qhand' = qhand + 1
+        /\ UNCHANGED <<hand, jumped>> /\ WaitIsFair(onVm \/ blind, hand >= Hand \/ qhand > 0)
   /\ dirty' = TRUE
   /\ UNCHANGED <<todo, blocker, auto, peer, quick, blind, pause, strayed, qauto, ended, stalled, free, pc, rows>>
 ChatStartsNow == pc # "drain" /\ quick < MaxQuick /\ quick' = quick + 1 /\ dirty' = TRUE
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, blind, pause, strayed, qhand, qauto, ended, stalled, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, fair, free, pc, rows>>
 PeerFlips == pc \in {"idle", "collect"} /\ blind' = ~blind /\ dirty' = TRUE
-  /\ UNCHANGED <<pause, strayed, todo, blocker, auto, peer, hand, quick, qhand, qauto, ended, stalled, fair, free, pc, rows>>
+  /\ UNCHANGED <<pause, strayed, jumped, todo, blocker, auto, peer, hand, quick, qhand, qauto, ended, stalled, fair, free, pc, rows>>
 PauseFlips == pc \in {"idle", "pick"} /\ pause' = ~pause
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, strayed, qhand, qauto, ended, stalled, dirty, fair, free, pc, rows>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, strayed, jumped, qhand, qauto, ended, stalled, dirty, fair, free, pc, rows>>
 
 Acts == ended \/ SeenStalled \/ qhand + qauto > 0 \/ blind \/ (Free > 0 /\ todo # {})
 PassStarts == pc = "idle"
@@ -88,24 +90,24 @@ PassStarts == pc = "idle"
   /\ UNCHANGED <<World, dirty>>
 Collects == pc = "collect" /\ pc' = "drain" /\ ended' = FALSE
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, stalled, dirty, fair, free>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, stalled, dirty, fair, free>>
 CanDrainHand == qhand > 0 /\ ~HandWaits(blind)
 CanDrainAuto(there) == qauto > 0 /\ ~AutoWaits(blind) /\ (there => ~pause)
 Drains == pc = "drain" /\ rows' = rows \cup {<<"run", "launch">>}
-  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto, peer, strayed>>
-     \/ \E there \in BOOLEAN : CanDrainAuto(there) /\ qauto' = qauto - 1 /\ UNCHANGED <<qhand, hand>>
+  /\ \/ CanDrainHand /\ qhand' = qhand - 1 /\ hand' = hand + 1 /\ UNCHANGED <<qauto, auto, peer, strayed, jumped>>
+     \/ \E there \in BOOLEAN : CanDrainAuto(there) /\ qauto' = qauto - 1 /\ UNCHANGED <<qhand, hand, jumped>>
         /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
         /\ strayed' = (strayed \/ (there /\ pause))
   /\ UNCHANGED <<todo, blocker, quick, blind, pause, ended, stalled, dirty, fair, free, pc>>
 DrainDone == pc = "drain" /\ ~CanDrainHand /\ ~CanDrainAuto(FALSE) /\ pc' = "pick" /\ free' = Free
   /\ rows' = (IF qhand + qauto > 0 THEN rows \cup {<<"run", "wait">>} ELSE rows)
   /\ fair' = (fair /\ (qhand > 0 => (blind \/ hand >= Hand)) /\ (qauto > 0 => (blind \/ auto + peer >= Auto)))
-  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, qhand, qauto, ended, stalled, dirty>>
+  /\ UNCHANGED <<todo, blocker, auto, peer, hand, quick, blind, pause, strayed, jumped, qhand, qauto, ended, stalled, dirty>>
 Picks(i, there) == pc = "pick" /\ Eligible(i) /\ free > 0 /\ (there => ~blind /\ ~pause)
   /\ strayed' = (strayed \/ (there /\ pause))
   /\ todo' = todo \ {i} /\ rows' = rows \cup {<<i, "launch">>} /\ free' = free - 1
   /\ peer' = (IF there THEN peer + 1 ELSE peer) /\ auto' = (IF there THEN auto ELSE auto + 1)
-  /\ UNCHANGED <<blocker, hand, quick, blind, pause, qhand, qauto, ended, stalled, dirty, fair, pc>>
+  /\ UNCHANGED <<jumped, blocker, hand, quick, blind, pause, qhand, qauto, ended, stalled, dirty, fair, pc>>
 Skips(i, r) == pc = "pick" /\ i \in todo /\ ~Handled(i) /\ free > 0 /\ r \in Rules /\ blocker[i] = r
   /\ rows' = rows \cup {<<i, r>>}
   /\ UNCHANGED <<World, dirty, free, pc>>
@@ -120,7 +122,7 @@ PassSteps == PassStarts \/ Collects \/ Drains \/ DrainDone \/ PickDone \/ Done \
   \/ (\E i \in Issues : (\E there \in BOOLEAN : Picks(i, there)) \/ \E r \in Rules : Skips(i, r))
 Next == PassSteps
   \/ (\E i \in Issues, b \in Rules \cup {"none"} : Changes(i, b)) \/ (\E i \in Issues : Files(i) \/ Moves(i))
-  \/ RunEnds \/ RunStalls \/ ChatQueues \/ (\E onVm \in BOOLEAN : HandStarts(onVm)) \/ ChatStartsNow \/ PeerFlips \/ PauseFlips
+  \/ RunEnds \/ RunStalls \/ ChatQueues \/ (\E onVm, prio \in BOOLEAN : HandStarts(onVm, prio)) \/ ChatStartsNow \/ PeerFlips \/ PauseFlips
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(PassSteps)
 
@@ -134,6 +136,7 @@ QuickNotCounted == fair
 HeldOrZaneNeverPicked == \A i \in Issues : <<i, "launch">> \in rows => blocker[i] \notin {"held", "zane"}
 EveryPassEnds == [](pc \notin {"idle"} => <>(pc = "idle"))
 NoAutoOnPausedPeer == ~strayed
+NoJumpAhead == ~jumped
 NoSilentPassWhileStalled == pc = "skipped" => ~stalled
 EveryPassLogs == pc \in {"skipped", "end"} => <<"pass", "candidates">> \in rows
 

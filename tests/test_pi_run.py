@@ -34,6 +34,12 @@ ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake"
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
 [ -e "$T/say" ] && cat "$T/say"
+if [ -e "$T/daemons" ]; then
+  "$T/bin/cua-driver" serve --socket "$T/own.sock" & echo $! > "$T/own-pid"
+  "$T/bin/cua-driver" serve & echo $! > "$T/shared-pid"
+  PI_SESSION_ID=another-run-$$ "$T/bin/cua-driver" serve --socket "$T/other.sock" & echo $! > "$T/other-pid"
+  for f in own shared other; do while ! grep -q started "$T/$f.started" 2>/dev/null; do sleep 0.05; done; done
+fi
 while [ -e "$T/hang" ]; do sleep 0.05; done
 exit $(cat "$T/rc" 2>/dev/null || echo 0)
 """
@@ -264,6 +270,19 @@ class OneConfigPerProcess(unittest.TestCase):
             self.assertIn(f"{seat['provider']} {seat['model']}", out.getvalue())
 
 
+class QueueAhead(unittest.TestCase):
+    def test_a_launch_waits_only_for_runs_the_drain_would_start_before_it(self):
+        t = "2026-11-14T10:00:00Z"
+        queued = {"hand": [[t, "mini", "a"], [t, "mini", "c"], [t, "vm", "b"], ["2026-11-14T10:00:01Z", "mini", "d"]], "auto": [],
+                  "quick": []}
+        self.assertEqual(pr.queue_ahead("hand", queued, [t, "mini", "c"], ""), "1 run(s) already queued in the hand pool start first (a)")
+        self.assertEqual(pr.queue_ahead("hand", queued, [t, "mini", "a"], ""), "")
+        self.assertIn("(a, c, b, d)", pr.queue_ahead("hand", queued, ["~", "mini", "new"], ""))
+        self.assertIn("(a, c, b, d)", pr.queue_ahead("hand", queued, ["~", "mini", "b"], ""))
+        self.assertEqual(pr.queue_ahead("hand", queued, ["~", "mini", "new"], "priority: Zane, 14 Nov\n"), "")
+        self.assertEqual(pr.queue_ahead("auto", queued, ["~", "mini", "new"], ""), "")
+
+
 class Launcher(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
@@ -448,6 +467,77 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.pi_run("collect", "oom").stdout, "oom attempt=1 lost\n")
         self.assertEqual(self.run_json("oom")["wake"], "failed")
 
+    def fake_driver(self):
+        body = ("import os, sys, time\nT = os.environ['T']\nos.setsid()\n"
+                "name = 'other' if os.environ.get('PI_SESSION_ID', '').startswith('another-run') else 'own' if '--socket' in sys.argv else 'shared'\n"
+                "open(os.path.join(T, name + '.started'), 'w').write('started')\ntime.sleep(120)\n")
+        drv = self.t / "drv"
+        drv.mkdir(exist_ok=True)
+        for verb in ("serve", "call"):
+            (drv / verb).write_text(body)
+        (self.t / "bin" / "cua-driver").write_text(
+            f"#!{sys.executable}\nimport os, sys\nos.chdir({str(drv)!r})\nos.execv({sys.executable!r}, sys.argv)\n")
+        (self.t / "bin" / "cua-driver").chmod(0o755)
+
+    def daemons(self):
+        self.fake_driver()
+        (self.t / "daemons").touch()
+
+        def live(name):
+            pid = int((self.t / f"{name}-pid").read_text())
+            return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()[:1] not in ("", "Z")
+
+        def reap():
+            for name in ("own", "shared", "other"):
+                try:
+                    os.kill(int((self.t / f"{name}-pid").read_text()), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
+        self.addCleanup(reap)
+        return live
+
+    def test_a_cua_driver_daemon_the_run_started_on_its_own_socket_stops_when_the_run_ends(self):
+        live = self.daemons()
+        sid = f"drv-{os.getpid()}"
+        self.start(sid)
+        self.finished(sid)
+        self.assertFalse(live("own"))
+        self.assertTrue(live("shared"))
+        self.assertTrue(live("other"))
+        self.assertRegex(self.log(sid), r"pi-run: stopped the cua-driver daemon\(s\) the run left serving a private socket: pid \d+\n")
+
+    def test_only_a_cua_driver_serving_a_socket_with_the_runs_id_in_its_environment_matches(self):
+        self.fake_driver()
+        drv = str(self.t / "bin" / "cua-driver")
+        env = {"PATH": "/usr/bin:/bin", "PI_SESSION_ID": f"mine-{os.getpid()}", "T": str(self.t)}
+        cases = [([drv, "serve", "--socket", "s"], True), ([drv, "serve"], False), ([drv, "call", "--socket", "s", "serve"], False),
+                 (["/bin/sh", "-c", f"sleep 120; : {drv} serve --socket s"], False)]
+        procs = [(subprocess.Popen(a, env=env, start_new_session=a[0] == "/bin/sh", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                  want) for a, want in cases]
+        for p, _ in procs:
+            self.addCleanup(p.wait)
+            self.addCleanup(os.killpg, p.pid, signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: all(pr.ps("-o", "args=", "-p", str(p.pid)).startswith(drv + " ") for p, _ in procs[:3])))
+        got = {x[0] for x in pr.run_daemons(f"mine-{os.getpid()}")}
+        self.assertEqual(got & {p.pid for p, _ in procs}, {p.pid for p, want in procs if want})
+        self.assertEqual(pr.run_daemons("someone-else"), [])
+
+    def test_a_lost_runs_collect_stops_the_daemon_its_dead_supervisor_left(self):
+        live = self.daemons()
+        sid = f"drv-lost-{os.getpid()}"
+        self.start(sid, hang=True)
+        self.assertTrue(wait_for(lambda: all((self.t / f"{n}.started").exists() and (self.t / f"{n}-pid").exists()
+                                             for n in ("own", "shared", "other"))))
+        os.killpg(self.run_json(sid)["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == f"{sid} lost attempt=1 rc=None\n"))
+        self.assertTrue(live("own"))
+        r = self.pi_run("collect", sid)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(live("own"))
+        self.assertTrue(live("shared"))
+        self.assertTrue(live("other"))
+        self.assertIn("stopped the cua-driver daemon(s) the run left serving a private socket", r.stderr)
+
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
         wait_for(lambda: (self.t / "pi-pid").exists())
@@ -631,7 +721,7 @@ class Launcher(unittest.TestCase):
                          ("i4", "Error: Incomplete Claude Code upstream response (status 529, capture incomplete)")):
             (self.t / "say").write_text(say + "\n")
             before = time.time()
-            self.start(sid, rc=1)
+            self.start(sid, rc=1, PI_RUN_COUNTED="1")
             self.assertTrue(wait_for(lambda sid=sid: (self.run_json(sid) or {}).get("state") == "queued"), (sid, self.run_json(sid)))
             run = self.run_json(sid)
             self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 1, None), sid)
@@ -646,6 +736,38 @@ class Launcher(unittest.TestCase):
         self.assertEqual(self.finished("i1")["attempt"], 1)
         args = (self.t / "args").read_text().splitlines()
         self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("i1", pr.RESUME))
+
+    def test_a_one_off_not_logged_in_resumes_once_when_claude_says_it_is_logged_in(self):
+        claude = self.t / "bin" / "claude"
+        claude.write_text('#!/bin/bash\necho "$*" >> "$T/claude-calls"\nrm -f "$T/say"; echo 0 > "$T/rc"\n'
+                          'echo "{\\"loggedIn\\": $(cat "$T/logged-in")}"\n')
+        claude.chmod(0o755)
+        (self.t / "logged-in").write_text("true")
+        (self.t / "say").write_text(pr.LOGGED_OUT + "\n")
+        self.start("lo", rc=1)
+        run = self.finished("lo")
+        self.assertEqual((run["attempt"], run["rc"], run["wake"]), (1, 0, None))
+        self.assertEqual((self.t / "claude-calls").read_text(), "auth status\n")
+        self.assertIn("resuming the session once", self.log("lo"))
+        args = (self.t / "args").read_text().splitlines()
+        self.assertEqual((args[args.index("--session-id") + 1], args[-1]), ("lo", pr.RESUME))
+        self.assertNotIn('"kind"', self.log("lo"))
+
+        (self.t / "claude-calls").unlink()
+        claude.write_text('#!/bin/bash\necho "$*" >> "$T/claude-calls"\necho "{\\"loggedIn\\": $(cat "$T/logged-in")}"\n')
+        (self.t / "say").write_text(pr.LOGGED_OUT + "\n")
+        self.start("again", rc=1)
+        run = self.finished("again")
+        self.assertEqual((run["rc"], run["wake"]), (1, "failed"))
+        self.assertEqual((self.t / "claude-calls").read_text(), "auth status\n")
+        self.assertEqual(self.log("again").count("resuming the session once"), 1)
+
+        (self.t / "claude-calls").unlink()
+        (self.t / "logged-in").write_text("false")
+        self.start("out", rc=1)
+        run = self.finished("out")
+        self.assertEqual((run["rc"], run["wake"]), (1, "failed"))
+        self.assertNotIn("resuming", self.log("out"))
 
     def test_an_upstream_that_always_fails_stops_after_three_resumes_and_sends_the_failed_wake(self):
         say = "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"
@@ -683,9 +805,12 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertIn("once that has passed", r.stderr)
 
-    def cargo_target(self, sid, rel, mb=2):
+    def cargo_target(self, sid, rel, mb=2, git=True):
         t = self.t / "root" / "review" / sid / rel
         (t / "debug").mkdir(parents=True)
+        top = self.t / "root" / "review" / sid / rel.split("/")[0]
+        if git and not (top / ".git").exists():
+            (top / ".git").write_text(f"gitdir: /elsewhere/.git/worktrees/{top.name}\n")
         (t / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
         (t / "debug" / "blob").write_bytes(os.urandom(mb * 1_000_000))
         return t
@@ -696,12 +821,13 @@ class Launcher(unittest.TestCase):
         d = self.t / "root" / "review" / "pr1"
         idle = self.cargo_target("pr1", "wt/libs/x/target", mb=3)
         idle2 = self.cargo_target("pr1", "wt2/target")
+        base = self.cargo_target("pr1", "verify-1-base/libs/x/target")
         held = self.cargo_target("pr1", "wt3/target")
         src = d / "wt" / "libs" / "x" / "src.rs"
         src.write_text("fn main() {}\n")
         notcargo = d / "wt" / "web" / "target"
         notcargo.mkdir(parents=True)
-        outside = self.cargo_target("pr1", "scratch/target")
+        outside = self.cargo_target("pr1", "scratch/target", git=False)
         other = self.cargo_target("other", "wt/target")
         (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")
         (d / "wt3" / "src").mkdir()
@@ -710,11 +836,11 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("collect", "pr1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "pr1 attempt=1 rc=0\n")
-        self.assertFalse(idle.exists() or idle2.exists())
+        self.assertFalse(idle.exists() or idle2.exists() or base.exists())
         for kept in (held, src, notcargo, outside, other):
             self.assertTrue(kept.exists(), kept)
         line = next(x for x in r.stderr.splitlines() if x.startswith("pi-run: pr1: "))
-        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted wt/libs/x/target wt2/target; kept wt3/target ")
+        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted verify-1-base/libs/x/target wt/libs/x/target wt2/target; kept wt3/target ")
         self.assertIn("pi-run collect: freed ", self.log("pr1"))
 
     def test_collect_deletes_nothing_when_lsof_gives_no_answer_or_the_run_is_live(self):
@@ -742,7 +868,7 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("collect", "pr3")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((t / "CACHEDIR.TAG").exists())
-        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir() if x.name != ".git"), ["target"])
         self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
 
     def test_a_build_started_after_the_second_lsof_gets_a_fresh_target_that_prune_never_deletes(self):
@@ -757,7 +883,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")
         self.assertFalse((t / "debug" / "blob").exists())
-        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir() if x.name != ".git"), ["target"])
 
     def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
         self.start("pr4")

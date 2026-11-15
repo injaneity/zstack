@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { holdsPaths, isHoldsPath } from "./holds.ts";
-import { checkBash, checkWrite, type Host, issuesOwned, mergeOwned, readyAllowed } from "./rules.ts";
+import { checkBash, checkWrite, type Host, issuesOwned, mergeOwned, readyAllowed, reviewOnlyLogins } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -25,7 +25,17 @@ const POLICY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..
 const dump = () => execFileSync("python3", ["-I", POLICY, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
 const owned = mergeOwned(dump);
 const issues = issuesOwned(dump);
-const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), get ghRepo() { return process.env.GH_REPO || undefined; } };
+function authorOf(repo: string, n: number): string | undefined {
+	try {
+		const login = execFileSync("gh", ["api", `repos/${repo}/issues/${n}`, "--jq", ".user.login"], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+		return /^[\w.\[\]/-]+$/.test(login) ? login : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+const reviewOnly = () => reviewOnlyLogins(holds.map((p) => { try { return fs.readFileSync(home(p), "utf8"); } catch { return undefined; } }));
+const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export default function (pi: ExtensionAPI) {
 	const ready = readyAllowed();

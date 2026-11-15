@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,17 +11,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent
-FAKE_PI = "#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+FAKE_PI = ("#!/bin/bash\n[ \"$1\" = --list-models ] && echo claude-code m && exit 0\nwhile [ -e \"$T/hang\" ]; do sleep 0.05; done\n"
+           "[ -e \"$T/pi-rc\" ] && exit \"$(cat \"$T/pi-rc\")\"\nexit 0\n")
 FAKE_GH = """#!/bin/bash
 [ -e "$T/gh-sleep" ] && sleep 30
 case "$*" in
   "issue list"*) cat "$T/issues.json";;
-  "issue view "*) jq -n --arg n "$3" '{state: (if ($n | tonumber) % 2 == 0 then "OPEN" else "CLOSED" end)}';;
   *review-requested*) cat "$T/reviews.json";;
   "pr list"*in:body*) cat "$T/salvages.json" 2>/dev/null || echo '[]';;
-  "pr view "*closingIssuesReferences*) jq -e --argjson n "$3" '.[] | select(.number == $n)' "$T/sources.json" 2>/dev/null \
-    || { echo "no pull request $3" >&2; exit 1; };;
+  "api graphql"*) echo "$*" >> "$T/graphql"; python3 -c '
+import json, os, re, sys
+src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
+ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
+node = lambda p: {"number": p["number"], "state": p["state"], "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
+    {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED", "author": {"login": i.get("login", "someone")}}
+    for i in p["closingIssuesReferences"]]}}
+errs = [{"type": "NOT_FOUND", "message": f"no pull request {n}"} for n in ns if n not in src]
+errs += [{"type": "RATE_LIMITED", "message": "slow down"}] if os.path.exists(os.path.join(os.environ["T"], "graphql-partial")) else []
+print(json.dumps({"data": {"repository": {f"p{n}": node(src[n]) if n in src else None for n in ns}}, **({"errors": errs} if errs else {})}))
+sys.exit(1 if errs else 0)' "$*";;
   "pr list"*isDraft*) cat "$T/open.json";;
+  "release list"*) cat "$T/releases.json" 2>/dev/null || echo '[]';;
   "pr view"*) echo '{"headRefOid": "'"$(printf 'f%.0s' $(seq 40))"'", "headRefName": "x"}';;
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
@@ -117,8 +128,12 @@ class Pickup(unittest.TestCase):
         facts = {"sha": "s", "at_main": at_main, "parity": [], "free_gb": 25, "runs": runs or {}, "ids": list(ids),
                  "pushed": {}, "merge_last": last, "holds": holds}
         p = self.t / "vm"
-        p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) printf '%s\\n' " + " ".join(f"'dry-run {w}'" for w in waits)
-                     + " ;;\n*) cat " + str(self.t / "vm-facts.json") + ";; esac\n")
+        p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) echo x >> \"$T/merge-dry-runs\"; printf '%s\\n' "
+                     + " ".join(f"'dry-run {w}'" for w in waits)
+                     + " ;;\n*ensure-package-main*) echo x >> \"$T/ff\"; [ -e \"$T/ff-fails\" ] && "
+                     "{ echo 'ensure-package-main: main has commits not on origin/main; not a fast-forward' >&2; exit 1; }; "
+                     "sed -i.bak 's/\"at_main\": false/\"at_main\": true/' \"$T/vm-facts.json\";;\n"
+                     "*) cat " + str(self.t / "vm-facts.json") + ";; esac\n")
         p.chmod(0o755)
         (self.t / "vm-facts.json").write_text(json.dumps(facts))
         self.env.update(ONIGIRI_PEERS=f"vm={p}", ONIGIRI_MERGE_HOST="vm")
@@ -233,6 +248,7 @@ class Pickup(unittest.TestCase):
                              review(303, "2026-10-08T00:00:00Z"),
                              review(304, "2026-10-09T00:00:00Z", login="f-trycua")],
                     open_=[{"number": 900, "isDraft": False}])
+        (self.t / "ff-fails").touch()
         self.pickup()
         self.assertEqual(self.rows("skip"), [
             ["skip", "cua-101", "held; https://github.com/trycua/cua/issues/101"],
@@ -275,16 +291,79 @@ class Pickup(unittest.TestCase):
         self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
             "- salvage cua#701 of cua#601 lacks `Fixes #10`, `Fixes #11` in its body: add it",
             "- cua#14 is still open: our merged salvage cua#703 fixed it but lacked `Fixes #14`; close it with a comment naming cua#703",
-            "- cua#603 is still open after its salvage cua#703 merged: close it with a comment naming cua#703 (playbooks/hourly.md step 7)"]))
+            "- cua#603 is still open after its salvage cua#703 merged: close it only after its approved thank-you is posted, "
+            "given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
         self.assertNotIn("error:", report)
         self.pickup()
         self.assertEqual(len(self.wakes()), 1)
+
+    def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
+        self.peer(holds="review-only | F-Trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": n, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": f"Salvaged from #{src}",
+             "closingIssuesReferences": []} for n, src in ((7147, 7030), (4560, 4468), (4561, 4469))]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 7030, "state": "OPEN", "login": "f-trycuA", "closingIssuesReferences": []},
+            {"number": 4468, "state": "OPEN", "login": "ddupont808", "closingIssuesReferences": [{"number": 20, "login": "f-trycua"}]},
+            {"number": 4469, "state": "OPEN", "login": "CMGS", "closingIssuesReferences": [{"number": 22, "login": "CMGS"}]}]))
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
+            "- cua#22 is still open: our merged salvage cua#4561 fixed it but lacked `Fixes #22`; close it with a comment naming cua#4561",
+            "- cua#4469 is still open after its salvage cua#4561 merged: close it only after its approved thank-you is posted, "
+            "given that comment's URL; until then post nothing on it (playbooks/hourly.md step 7)"]))
+        self.assertNotIn("cua#7030", report)
+        self.assertNotIn("cua#4468", report)
+        self.assertNotIn("cua#20 ", report)
+
+    def test_salvage_sources_are_read_in_one_query_per_fifty_whatever_the_salvage_count(self):
+        self.peer(at_main=True)
+        n = 120
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 2000 + i, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": f"Salvaged from #{1000 + i}",
+             "closingIssuesReferences": []} for i in range(n)]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 1000 + i, "state": "CLOSED", "closingIssuesReferences": [{"number": 2 * i + 1}]} for i in range(n)]))
+        self.pickup()
+        queries = (self.t / "graphql").read_text().splitlines()
+        self.assertEqual(len(queries), 3)
+        self.assertEqual(sorted(int(x) for q in queries for x in re.findall(r"pullRequest\(number: (\d+)\)", q)),
+                         list(range(1000, 1000 + n)))
+        self.assertEqual(self.wakes(), [])
+
+    def test_a_partial_graphql_answer_is_an_error_and_its_good_parts_still_count(self):
+        self.peer(at_main=True)
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 703, "state": "MERGED", "mergedAt": "2026-11-13T09:00:00Z", "body": "Salvaged from #603", "closingIssuesReferences": []}]))
+        (self.t / "sources.json").write_text(json.dumps([{"number": 603, "state": "OPEN", "closingIssuesReferences": []}]))
+        (self.t / "graphql-partial").touch()
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        self.assertIn("error: gh api graphql for 1 salvage source PRs, partial answer: slow down", report)
+        self.assertIn("cua#603 is still open after its salvage cua#703 merged", report)
 
     def test_a_review_brief_asks_a_salvage_for_its_fixes_lines(self):
         self.github(reviews=[review(310, "2026-10-06T00:00:00Z", login="CMGS")])
         self.pickup()
         brief = (self.root / "review" / "cua-310-review-136aaaa" / "brief.md").read_text()
         self.assertIn("A salvage PR's body carries `Salvaged from #310` and a `Fixes #<issue>` line for each issue #310 fixes", brief)
+
+    def test_a_peer_behind_main_is_fast_forwarded_and_flagged_only_when_that_fails(self):
+        self.peer(at_main=False)
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        self.assertIn("would fast-forward vm's zstack to origin/main", self.pickup("--dry"))
+        self.assertFalse((self.t / "ff").exists())
+        self.pickup()
+        self.assertEqual((self.t / "ff").read_text(), "x\n")
+        self.assertEqual([r[0:2] for r in self.rows("launch")], [["launch", "cua-10"]])
+        self.assertNotIn("not at main", "".join(w[1] for w in self.wakes()))
+        self.peer(at_main=False)
+        (self.t / "ff-fails").touch()
+        self.pickup()
+        self.assertEqual((self.t / "ff").read_text(), "x\nx\n")
+        self.assertIn("host vm not at main: fast-forward failed: ensure-package-main: main has commits not on origin/main; "
+                      "not a fast-forward", self.wakes()[-1][1])
 
     def test_no_pick_while_a_host_is_unreachable_or_github_fails(self):
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
@@ -410,6 +489,67 @@ class Pickup(unittest.TestCase):
         self.assertIn("would launch vm cua-10:", out)
         self.assertIn("would launch mini cua-11:", out)
 
+    def releases(self, *tags, draft=()):
+        (self.t / "releases.json").write_text(json.dumps([{"tagName": t, "isDraft": t in draft} for t in tags]))
+
+    def test_the_newest_published_release_past_the_last_benched_one_is_benched_against_it(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12", "cua-driver-rs-v0.49.11", "cua-spaces-v0.40.0",
+                      "cua-driver-rs-v0.50.0", "nightly-cua-driver-rs-v0.49.9-nightly.1", draft=("cua-driver-rs-v0.50.0",))
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch mini release-bench-0.49.13: release https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.49.13", out)
+        self.assertLess(out.index("release-bench-0.49.13"), out.index("cua-10"))
+        (self.t / "hang").touch()
+        self.pickup(ONIGIRI_HOST="mini")
+        brief = (self.root / "review" / "release-bench-0.49.13" / "brief.md").read_text()
+        for line in ("source: auto", "NEW = 0.49.13 and OLD = 0.49.11", "playbooks/release-bench.md"):
+            self.assertIn(line, brief)
+        self.releases("cua-driver-rs-v0.49.15", "cua-driver-rs-v0.49.14", "cua-driver-rs-v0.49.13")
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("skip release-bench-0.49.15: overlap", out)
+        (self.t / "hang").unlink()
+        self.assertTrue(self.wait("release-bench-0.49.13", "exited"))
+        (self.root / "review" / "release-bench-0.49.13" / "report.md").write_text("benched: 0.49.13 against 0.49.11\n")
+        out = self.pickup("--dry", ONIGIRI_HOST="mini")
+        self.assertIn("would launch mini release-bench-0.49.15:", out)
+        self.assertNotIn("release-bench-0.49.14", out)
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("NEW = 0.49.15 and OLD = 0.49.13", (self.root / "review" / "release-bench-0.49.15" / "brief.md").read_text())
+
+    def test_a_failed_bench_is_no_baseline_and_an_older_release_is_never_benched(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.12")
+        (self.t / "pi-rc").write_text("1")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.12", "exited"))
+        self.pickup(ONIGIRI_HOST="mini")
+        self.releases("cua-driver-rs-v0.49.13", "cua-driver-rs-v0.49.12")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("NEW = 0.49.13 and OLD = 0.49.11", (self.root / "review" / "release-bench-0.49.13" / "brief.md").read_text())
+        self.assertTrue(self.wait("release-bench-0.49.13", "exited"))
+        (self.t / "pi-rc").unlink()
+        self.releases("cua-driver-rs-v0.49.14")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertTrue(self.wait("release-bench-0.49.14", "exited"))
+        (self.root / "review" / "release-bench-0.49.14" / "report.md").write_text("verdict: inconclusive\n")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertEqual(json.loads((self.root / "pickup" / "state.json").read_text())["benched"], [])
+        self.releases("cua-driver-rs-v0.49.15")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertIn("OLD = 0.49.11", (self.root / "review" / "release-bench-0.49.15" / "brief.md").read_text())
+        self.assertTrue(self.wait("release-bench-0.49.15", "exited"))
+        (self.root / "review" / "release-bench-0.49.15" / "report.md").write_text("no regression\n\nbenched: 0.49.15 against 0.49.11\n")
+        self.pickup(ONIGIRI_HOST="mini")
+        self.assertEqual(json.loads((self.root / "pickup" / "state.json").read_text())["benched"], ["0.49.15"])
+        self.releases("cua-driver-rs-v0.49.14", "cua-driver-rs-v0.49.13")
+        self.assertNotIn("release-bench", self.pickup("--dry", ONIGIRI_HOST="mini"))
+
+    def test_no_release_bench_when_the_newest_release_was_benched(self):
+        (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
+        self.releases("cua-driver-rs-v0.49.11", "cua-driver-rs-v0.49.10")
+        self.assertNotIn("release-bench", self.pickup("--dry", ONIGIRI_HOST="mini"))
+
     def test_an_auto_pause_keeps_picks_off_the_peer_until_its_run_ends(self):
         (self.pkg / "hosts" / "mini" / "host.sh").write_text("")
         self.github(issues=[issue(10, "2026-10-01T00:00:00Z"), issue(11, "2026-10-02T00:00:00Z", labels=["Linux"])])
@@ -437,6 +577,27 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("would launch", out)
         self.assertIn("skip cua-10: host", out)
 
+    def test_a_pass_runs_the_merge_job_dry_run_once_and_the_queue_and_picks_share_it(self):
+        self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate"])
+        out = self.pickup()
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+        self.assertIn("red cua#7229 fffffffff: no run pushed this head; file an unstick", out)
+        self.assertEqual([r[1] for r in self.rows("launch")], ["cua-7229-unstick-4ef9df0"])
+        (self.t / "merge-dry-runs").unlink()
+        self.pickup("--dry")
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+
+    def test_a_failed_merge_job_dry_run_is_reported_by_the_queue_and_blocks_the_picks(self):
+        p = self.t / "vm"
+        self.peer()
+        p.write_text(p.read_text().replace("*merge_job.py*) ", "*merge_job.py*) echo x >> \"$T/merge-dry-runs\"; echo boom >&2; exit 1;; *never*) "))
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup()
+        self.assertEqual((self.t / "merge-dry-runs").read_text().splitlines(), ["x"])
+        self.assertIn("error: merge job dry run on vm: boom: no red PR was reopened this pass", out)
+        self.assertIn("no picks: merge job dry run on vm: boom", out)
+        self.assertEqual(self.rows("launch"), [])
+
     def test_an_unstick_is_picked_only_for_a_red_pr_no_thread_owns(self):
         self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate",
                          "cua#6975 f454fce4b wait who=session: ci-gate FAILURE; merge conflict"])
@@ -450,6 +611,8 @@ class Pickup(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("<key>StartInterval</key><integer>1800</integer>", r.stdout)
         self.assertIn(f"<string>{self.pkg}/bin/pickup</string>", r.stdout)
+        path = re.search(r"<key>PATH</key><string>([^<]*)</string>", r.stdout)[1].split(":")
+        self.assertTrue({"/usr/bin", "/bin", "/usr/sbin", "/sbin"} <= set(path), path)
         for banned in ("KeepAlive", "RunAtLoad", "StartCalendarInterval", "WatchPaths"):
             self.assertNotIn(banned, r.stdout)
         if shutil.which("plutil"):

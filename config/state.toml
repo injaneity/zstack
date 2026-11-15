@@ -155,7 +155,7 @@ host = "mini"
 format = "json"
 writer = "bin/pickup"
 readers = ["bin/pickup"]
-schema = "{seen, unsent, failures, authors, lume}: the outbox, what a delivered wake carried, and each old lume worker's naming runs"
+schema = "{seen, unsent, failures, authors, benched, lume}: the outbox, what a delivered wake carried, the releases whose release-bench run exited 0 with a `benched: <version> against <old>` line in its report, and each old lume worker's naming runs"
 
 [file.pickup-lock]
 path = "pickup/pickup.lock"

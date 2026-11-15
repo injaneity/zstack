@@ -21,9 +21,9 @@ M = [
      [("/\\ WF_vars(Resume) ", "")], "a temporal property"),
     ("pause-wakes", "a 429 sends a failed wake",
      [("/\\ why' = \"limit\" /\\ limits' = limits + 1\n"
-       "  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes, spent, stuck, stopped>>",
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, wake, reopened, by, fixes, spent, stuck, stopped, daemon>>",
        "/\\ why' = \"limit\" /\\ limits' = limits + 1 /\\ wake' = \"failed\"\n"
-       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes, spent, stuck, stopped>>")], "PauseIsSilent"),
+       "  /\\ UNCHANGED <<ended, killed, collects, finish, reopened, by, fixes, spent, stuck, stopped, daemon>>")], "PauseIsSilent"),
     ("resume-uncapped", "an upstream limit resumes a run on every drain, past config/policy.toml resume.cap (before the cap)",
      [("/\\ state = \"running\" /\\ live /\\ ~stuck /\\ ~stopped /\\ limits < ResumeCap",
        "/\\ state = \"running\" /\\ live /\\ ~stuck /\\ ~stopped /\\ limits <= ResumeCap")],
@@ -46,6 +46,18 @@ M = [
      [("wake' = IF stopped THEN \"none\" ELSE IF ~ok", "wake' = IF ~ok")], "StopIsSilent"),
     ("stopped-lost-wakes", "the collect of a stopped run that was lost sends the failed wake",
      [("IF Lost /\\ ~stopped THEN \"failed\" ELSE IF Lost", "IF Lost THEN \"failed\" ELSE IF Lost")], "StopIsSilent"),
+    ("exit-leaves-daemon", "a run's private cua-driver daemon outlives its pi (cua-4243's daemon, 13 Nov)",
+     [("/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE /\\ daemon' = FALSE\n"
+       "  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
+       "/\\ state' = \"exited\" /\\ live' = FALSE /\\ ended' = TRUE\n"
+       "  /\\ UNCHANGED <<cont, killed, collects, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
+     "DaemonEndsWithTheRun"),
+    ("lost-collect-leaves-daemon", "a lost run's collect leaves the daemon its dead supervisor never stopped",
+     [("ELSE IF Lost THEN \"none\" ELSE wake) /\\ daemon' = FALSE\n"
+       "  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped>>",
+       "ELSE IF Lost THEN \"none\" ELSE wake)\n"
+       "  /\\ UNCHANGED <<cont, live, ended, killed, finish, reopened, by, why, fixes, limits, spent, stuck, stopped, daemon>>")],
+     "DaemonEndsWithTheRun"),
 ]
 
 

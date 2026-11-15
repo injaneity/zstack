@@ -30,8 +30,20 @@ export interface Host {
 	repoAt(dir: string): string | null | undefined;
 	isHolds(p: string): boolean;
 	ghRepo?: string;
+	authorOf?(repo: string, n: number): string | undefined;
+	reviewOnly?(): ReadonlySet<string> | null;
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
+
+export function reviewOnlyLogins(texts: (string | undefined)[]): ReadonlySet<string> | null {
+	if (!texts.some((t) => t !== undefined)) return null;
+	const out = new Set<string>();
+	for (const line of texts.join("\n").split("\n")) {
+		const f = line.split("|").map((x) => x.trim());
+		if (!line.trimStart().startsWith("#") && f[0] === "review-only" && f[1]) out.add(f[1].toLowerCase());
+	}
+	return out;
+}
 
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
@@ -237,6 +249,57 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	return hit ? `${act} in ${hit}` : undefined;
 }
 
+const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
+
+function apiFields(w: string[]): { key: string; value: string; file: boolean }[] {
+	const out: { key: string; value: string; file: boolean }[] = [];
+	for (let i = 2; i < w.length; i++) {
+		const m = w[i].match(/^(-f|-F|--raw-field|--field)(?:=(.*)|(.+))?$/s);
+		if (!m || (m[3] !== undefined && m[1].startsWith("--"))) continue;
+		const kv = m[2] ?? m[3] ?? w[++i] ?? "";
+		const eq = kv.indexOf("=");
+		const value = eq < 0 ? "" : kv.slice(eq + 1);
+		out.push({ key: eq < 0 ? kv : kv.slice(0, eq), value, file: /^(-F|--field)$/.test(m[1]) && value.startsWith("@") });
+	}
+	return out;
+}
+
+function closeTarget(w: string[]): { n?: number; what: string } | undefined {
+	if ((w[1] === "issue" || w[1] === "pr") && w[2] === "close" && !w.includes("--help") && !w.includes("-h")) {
+		const a = operands(w.slice(3), GH_VALUE_OPTS)[0] ?? "";
+		const m = a.match(/^#?(\d+)$/) ?? a.match(/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/(\d+)/);
+		return { n: m ? Number(m[1]) : undefined, what: `\`gh ${w[1]} close\`` };
+	}
+	if (w[1] !== "api" || !ghApiWrites(w)) return undefined;
+	const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
+	const fields = apiFields(w);
+	const input = w.some((a) => /^--input(=|$)/.test(a));
+	if (ops[0] === "graphql")
+		return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } :
+			input || fields.some((f) => f.key === "query" && f.file) ? { what: "a GraphQL query read from a file or stdin, which may close" } : undefined;
+	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/(\d+)\/?$/);
+	const closes = input || fields.some((f) => f.key === "state" && (f.file || /^closed$/i.test(f.value))) || w.some((a) => /"state"\s*:\s*"closed"/i.test(a));
+	return m && closes ? { n: Number(m[1]), what: "a close through `gh api`" } : undefined;
+}
+
+function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined {
+	if (c.words[0] !== "gh" || (issues && !issues.size)) return undefined;
+	const t = closeTarget(c.words);
+	if (!t) return undefined;
+	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (bin/policy dump failed)`;
+	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\`, or pass the query inline`;
+	const repos = targetRepos(c, host);
+	if (repos.includes(undefined)) return `${t.what} where the target repo can't be told, so its author can't be checked`;
+	const repo = repos.find((r) => issues.has(r as string));
+	if (!repo) return undefined;
+	if (t.n === undefined) return `${t.what} in ${repo} without a number or URL, so its author can't be checked against the review-only teammates; name it`;
+	const team = host.reviewOnly?.() ?? null;
+	if (!team) return `${t.what} of ${repo}#${t.n} while no hold-prs.txt could be read, so the review-only teammates are unknown`;
+	const who = host.authorOf?.(repo, t.n);
+	if (who === undefined) return `${t.what} of ${repo}#${t.n} whose author \`gh api repos/${repo}/issues/${t.n}\` could not tell`;
+	return team.has(who.toLowerCase()) ? `${t.what} of ${repo}#${t.n}, which ${who} opened, a review-only teammate` : undefined;
+}
+
 function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -287,6 +350,8 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 		const close = ghIssueClose(c, issues, host);
 		if (close) return `blocked: ${close}. ${CLOSE_WAY}`;
+		const mate = ghTeammateClose(c, issues, host);
+		if (mate) return `blocked: ${mate}. ${TEAMMATE_WAY}`;
 	}
 	return undefined;
 }

@@ -34,7 +34,7 @@ const steps: Record<string, string | null> = {
   Moves: "a Todo leaves Todo",
   RunEnds: "a run exits",
   ChatQueues: "the chat queues a run",
-  HandStarts: "the chat starts a hand run, or queues it when the hand pool is full",
+  HandStarts: "the chat starts a hand run, or queues it when the hand pool is full or older hand runs are queued",
   ChatStartsNow: "the chat starts a quick-check run (in no pool)",
   PeerFlips: "the peer stops or starts answering",
   PauseFlips: "an auto pause on the peer is set or lifts",

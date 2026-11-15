@@ -25,6 +25,7 @@ VARIABLES
   had,
   failed,
   woke,
+  reads,
   rows,
   worker,
   user,
@@ -33,8 +34,8 @@ VARIABLES
   checked
 
 vars == <<blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending, lock, pc, free, had,
-          failed, woke, rows, worker, user, listed, vmlock, checked>>
-PassVars == <<lock, pc, free, had, failed, woke, rows>>
+          failed, woke, reads, rows, worker, user, listed, vmlock, checked>>
+PassVars == <<lock, pc, free, had, failed, woke, reads, rows>>
 
 Free == IF blind THEN 0 ELSE Sub(Auto, auto)
 Eligible(i) == i \notin taken /\ blocker[i] = "none"
@@ -44,7 +45,7 @@ News == unsent \/ (standing /\ ~seen)
 Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = Foreign
   /\ auto = Sub(Auto, 1) /\ drained = Sub(Hand, 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
   /\ standing = FALSE /\ seen = FALSE /\ unsent = FALSE /\ pending = FALSE
-  /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ rows = {}
+  /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ reads = 0 /\ rows = {}
   /\ worker \in Workers /\ user \in (IF worker = "gone" THEN {"none"} ELSE {"none", "running"}) /\ listed = FALSE /\ vmlock = "none" /\ checked = FALSE
 
 Changes(i, b) == lock = NoPass /\ blocker[i] # b /\ blocker' = [blocker EXCEPT ![i] = b]
@@ -65,20 +66,20 @@ StandingFlips == lock = NoPass /\ standing' = ~standing /\ seen' = (seen /\ stan
 
 Fire(p) == pc[p] = "off" /\ pc' = [pc EXCEPT ![p] = "trying"]
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, free, had, failed, woke, rows>>
+                 lock, free, had, failed, woke, rows, reads>>
 Lock(p) == pc[p] = "trying" /\ lock = NoPass
   /\ lock' = p /\ pc' = [pc EXCEPT ![p] = "collect"] /\ rows' = {<<"pass", "start">>}
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending, free, had,
-                 failed, woke>>
+                 failed, woke, reads>>
 Locked(p) == pc[p] = "trying" /\ lock # NoPass /\ lock # p /\ pc' = [pc EXCEPT ![p] = "off"]
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, free, had, failed, woke, rows>>
-Collect(p) == pc[p] = "collect" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "prune"]
+                 lock, free, had, failed, woke, rows, reads>>
+Collect(p) == pc[p] = "collect" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "prune"] /\ reads' = reads + 1
   /\ ended' = FALSE /\ unsent' = (unsent \/ ended) /\ pending' = (pending \/ ended)
   /\ rows' = (IF ended THEN rows \cup {<<"run", "collect">>} ELSE rows)
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, standing, seen, lock, free, had, failed, woke>>
 Others == <<blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending, lock, free, had,
-            failed, woke, rows>>
+            failed, woke, reads, rows>>
 Prunable == worker = "old" /\ user = "collected"
 PruneList(p) == pc[p] = "prune" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "delete"] /\ listed' = Prunable
   /\ UNCHANGED <<worker, user, vmlock, checked>> /\ UNCHANGED Others
@@ -97,40 +98,40 @@ UserCollected == worker # "gone" /\ user = "running" /\ user' = "collected" /\ U
 CanDrain == queued /\ ~blind /\ drained < Hand
 Drain(p) == pc[p] = "drain" /\ lock = p /\ CanDrain /\ queued' = FALSE /\ drained' = drained + 1
   /\ rows' = rows \cup {<<"run", "launch">>}
-  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, chat, blind, ended, standing, seen, unsent, pending, lock, pc, free, had, failed, woke>>
+  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, chat, blind, ended, standing, seen, unsent, pending, lock, pc, free, had, failed, woke, reads>>
 DrainDone(p) == pc[p] = "drain" /\ lock = p /\ ~CanDrain
   /\ pc' = [pc EXCEPT ![p] = "pick"] /\ free' = Free
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, had, failed, woke, rows>>
+                 lock, had, failed, woke, rows, reads>>
 Pick(p, i) == pc[p] = "pick" /\ lock = p /\ free > 0 /\ Eligible(i)
   /\ taken' = taken \cup {i} /\ auto' = auto + 1 /\ free' = free - 1
   /\ rows' = rows \cup {<<i, "launch">>}
-  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, drained, chat, queued, blind, ended, standing, seen, unsent, pending, lock, pc, had, failed, woke>>
+  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, drained, chat, queued, blind, ended, standing, seen, unsent, pending, lock, pc, had, failed, woke, reads>>
 Skip(p, i, r) == pc[p] = "pick" /\ lock = p /\ free > 0 /\ i \notin taken /\ ~Handled(i) /\ blocker[i] = r
   /\ rows' = rows \cup {<<i, r>>}
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, pc, free, had, failed, woke>>
+                 lock, pc, free, had, failed, woke, reads>>
 PickDone(p) == pc[p] = "pick" /\ lock = p /\ (free = 0 \/ \A i \in Items \ taken : Handled(i))
   /\ pc' = [pc EXCEPT ![p] = "report"]
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, free, had, failed, woke, rows>>
+                 lock, free, had, failed, woke, rows, reads>>
 Report(p) == pc[p] = "report" /\ lock = p /\ pc' = [pc EXCEPT ![p] = "wake"] /\ had' = News
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, free, failed, woke, rows>>
+                 lock, free, failed, woke, rows, reads>>
 Kill(p) == pc[p] \in {"collect", "prune", "delete", "remove", "drain", "pick", "report"} /\ lock = p /\ listed' = FALSE
   /\ checked' = FALSE /\ vmlock' = (IF vmlock = "prune" THEN "none" ELSE vmlock)
   /\ pc' = [pc EXCEPT ![p] = "wake"] /\ failed' = TRUE /\ had' = News
   /\ UNCHANGED <<worker, user, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending,
-                 lock, free, woke, rows>>
+                 lock, free, woke, rows, reads>>
 WakeOk(p) == pc[p] = "wake" /\ lock = p /\ (had \/ failed) /\ ~woke
   /\ woke' = TRUE /\ unsent' = FALSE /\ pending' = FALSE /\ seen' = (seen \/ (~failed /\ standing))
-  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, lock, pc, free, had, failed, rows>>
+  /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, lock, pc, free, had, failed, rows, reads>>
 WakeFails(p) == pc[p] = "wake" /\ lock = p /\ (had \/ failed) /\ ~woke
   /\ woke' = TRUE /\ unsent' = (unsent \/ failed)
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, pending, lock, pc, free, had,
-                 failed, rows>>
+                 failed, rows, reads>>
 End(p) == pc[p] = "wake" /\ lock = p /\ (woke \/ ~(had \/ failed))
-  /\ pc' = [pc EXCEPT ![p] = "off"] /\ lock' = NoPass /\ rows' = {} /\ free' = 0 /\ had' = FALSE /\ failed' = FALSE /\ woke' = FALSE
+  /\ pc' = [pc EXCEPT ![p] = "off"] /\ lock' = NoPass /\ rows' = {} /\ free' = 0 /\ had' = FALSE /\ failed' = FALSE /\ woke' = FALSE /\ reads' = 0
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, blocker, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending>>
 
 PassStep(p) == Lock(p) \/ Locked(p) \/ Collect(p) \/ PruneList(p) \/ PruneLocked(p) \/ PruneCheck(p) \/ PruneDelete(p) \/ Drain(p) \/ DrainDone(p) \/ PickDone(p) \/ Report(p) \/ End(p)
@@ -152,6 +153,7 @@ WakeIffOutputOrFailure == [][\A p \in Passes : pc[p] \in Active /\ pc'[p] = "off
 NoResultLost == pending => unsent
 ResultReachesChat == pending ~> ~pending
 ForeignNeverLaunched == \A i \in Foreign : <<i, "launch">> \notin rows
+MergeJobReadOnce == reads <= 1
 PruneIsSafe == [][worker # "gone" /\ worker' = "gone" => worker = "old" /\ user = "collected"]_vars
 OldCollectedWorkerPruned == <>[](vmlock # "e2e") /\ <>[][\A p \in Passes : ~Kill(p)]_vars => (Prunable ~> worker = "gone")
 EveryPassEnds == \A p \in Passes : pc[p] \in Active ~> pc[p] = "off"
@@ -161,5 +163,5 @@ PassSym == Permutations(Passes)
 TypeOK == worker \in {"old", "running", "gone"} /\ user \in {"none", "running", "collected"} /\ listed \in BOOLEAN
   /\ vmlock \in {"none", "e2e", "prune"} /\ checked \in BOOLEAN
   /\ taken \subseteq Items /\ lock \in Passes \cup {NoPass} /\ auto \in Nat /\ chat \in 0..MaxChat
-  /\ pc \in [Passes -> {"off", "trying"} \cup Active] /\ free \in Nat
+  /\ pc \in [Passes -> {"off", "trying"} \cup Active] /\ free \in Nat /\ reads \in Nat
 ====
