@@ -61,7 +61,7 @@ M = [
     ("ci-fix-uncapped", "red CI reopens the thread past config/policy.toml ci.fix_attempts",
      [("~fixing /\\ fixes < FixAttempts\n", "~fixing /\\ fixes <= FixAttempts\n")], "FixesCapped"),
     ("conflict-asks-zane", "a deep PR with a merge conflict waited on Zane's preapproval before a session unstuck it (cua#7637, 15 Nov)",
-     [("/\\ tier = \"deep\" /\\ ~pre /\\ ~conflict /\\ ci # \"red\" /\\ pre' = TRUE", "/\\ tier = \"deep\" /\\ ~pre /\\ ci # \"red\" /\\ pre' = TRUE")],
+     [("/\\ ~pre /\\ ~conflict /\\ ci # \"red\" /\\ pre' = TRUE", "/\\ ~pre /\\ ci # \"red\" /\\ pre' = TRUE")],
      "AskedOnlyWhenUnstuck"),
     ("reopened-thread-holds-no-slot", "the drain reopens a thread without counting its slot",
      [("/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = TRUE", "/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = FALSE")],
