@@ -60,6 +60,9 @@ M = [
      "FailedExitWoke"),
     ("ci-fix-uncapped", "red CI reopens the thread past config/policy.toml ci.fix_attempts",
      [("~fixing /\\ fixes < FixAttempts\n", "~fixing /\\ fixes <= FixAttempts\n")], "FixesCapped"),
+    ("conflict-asks-zane", "a deep PR with a merge conflict waited on Zane's preapproval before a session unstuck it (cua#7637, 15 Nov)",
+     [("/\\ tier = \"deep\" /\\ ~pre /\\ ~conflict /\\ ci # \"red\" /\\ pre' = TRUE", "/\\ tier = \"deep\" /\\ ~pre /\\ ci # \"red\" /\\ pre' = TRUE")],
+     "AskedOnlyWhenUnstuck"),
     ("reopened-thread-holds-no-slot", "the drain reopens a thread without counting its slot",
      [("/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = TRUE", "/\\ fixing' = TRUE /\\ fixes' = fixes + 1 /\\ slot' = FALSE")],
      "SlotOnlyWhileRunning"),
@@ -89,12 +92,13 @@ def main(jar, java, scratch):
             open(os.path.join(d, "Zstack.cfg"), "w").write(cfg)
             out = subprocess.run([java, "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, "meta"),
                                   "-config", "Zstack.cfg", "Zstack.tla"], cwd=d, capture_output=True, text=True, timeout=600).stdout
-            m = re.search(r"Invariant (\w+) is violated|(Temporal properties were violated)|(not completely specified|Deadlock)", out)
-            got = m and (m.group(1) or (m.group(2) and "a temporal property"))
+            m = re.search(r"Invariant (\w+) is violated|Action property (\w+) is violated|(Temporal properties were violated)"
+                          r"|(not completely specified|Deadlock)", out)
+            got = m and (m.group(1) or m.group(2) or (m.group(3) and "a temporal property"))
             if got and (got == rule or got == "a temporal property" and rule in TEMPORAL):
                 print(f"killed   {name}: {why} -> {rule if got != rule else got} breaks")
             else:
-                print(f"SURVIVED {name}: {why} -> {got or (m and 'model error: ' + m.group(3)) or 'no error'} (expected {rule})")
+                print(f"SURVIVED {name}: {why} -> {got or (m and 'model error: ' + m.group(4)) or 'no error'} (expected {rule})")
                 bad = 1
     return bad
 

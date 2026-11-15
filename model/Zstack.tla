@@ -105,7 +105,7 @@ Ready == phase \in PRopen /\ draft /\ draft' = FALSE
 ZaneHolds == phase \in PRopen /\ held' = ~held
   /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
   /\ UNCHANGED RunVars
-ZanePreapproves == phase \in PRopen /\ tier = "deep" /\ ~pre /\ pre' = TRUE
+ZanePreapproves == phase \in PRopen /\ tier = "deep" /\ ~pre /\ ~conflict /\ ci # "red" /\ pre' = TRUE
   /\ UNCHANGED <<phase, draft, ci, reran, tier, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
   /\ UNCHANGED RunVars
 
@@ -170,6 +170,8 @@ FixesCapped == fixes <= FixAttempts
 ReopenedThreadEnds == [](fixing => <>~fixing)
 EveryOtherMergeWakes == [](by = "other" => <>alerted)
 EveryJobMergeLogged == [](JobMerged => <>logged)
+
+AskedOnlyWhenUnstuck == [][~pre /\ pre' => ~conflict /\ ci # "red"]_vars
 
 HeldIsNeverMergedStrict == JobMerged => ~atMerge.held
 

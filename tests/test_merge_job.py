@@ -168,6 +168,14 @@ class NextAction(unittest.TestCase):
             self.assertEqual(verdict(held)[:2], ("wait", "zane"))
         self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
 
+    def test_a_conflicting_deep_pr_with_no_preapproval_is_the_sessions_first(self):
+        p = pr(number=7637, body="risk: deep\n", mergeable="CONFLICTING", statusCheckRollup=[cr("ci-gate")])
+        self.assertEqual(verdict(p), ("wait", "session", "declared deep: needs Zane (no preapprove row); merge conflict"))
+        self.assertEqual(verdict(dict(p, mergeable="MERGEABLE"))[:2], ("wait", "zane"))
+        for held in (dict(p, number=5675), dict(p, files=["never.rs"])):
+            self.assertEqual(verdict(held)[:2], ("wait", "zane"))
+        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
+
     def test_pending_waits(self):
         pending = pr(statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None), cr("x", conclusion="FAILURE")])
         self.assertEqual(verdict(pending), ("wait", "ci-gate PENDING"))
@@ -1105,7 +1113,7 @@ class Cli(unittest.TestCase):
         self.assertIn("gate: fail", text)
         self.assertIn("gate [risk] declared deep", text)
         self.assertIn("blocker [conflict] merge conflict", text)
-        self.assertIn("next action: wait who=zane: ", text)
+        self.assertIn("next action: wait who=session: ", text)
 
 
 class PatentPush(unittest.TestCase):
