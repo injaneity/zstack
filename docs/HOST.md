@@ -46,7 +46,7 @@ Tools come from each host's install (`pi`, `gh`, `git`, `python3` 3.9 or newer, 
 
 ## Disk
 
-`df -h /` must show well over 30G free. A run that hits ENOSPC dies mid-task. Nothing guards the disk on a schedule. The hourly routine records free space with every pickup decision. The hourly prunes finished sessions' build output and caches on either host without asking (Zane, 11 Nov). Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
+`df -h /` must show well over 30G free. A run that hits ENOSPC dies mid-task. Nothing guards the disk on a schedule. The hourly routine records free space with every pickup decision. The hourly prunes finished sessions' build output and caches on either host without asking (Zane, 11 Nov). A worktree prune counts a run dir with no `run.json` (one from before `bin/pi-run` wrote it) as finished once nothing in it changed for 2 days and no process has a file under it open (`lsof`) and its session has ended: no `pi` process runs with `--session-id <id>` (`bin/pi-run` starts every session that way, `ps -axo command`). Idle time and open files alone never prove a session ended. Task dirs under `/home/box/sand-data/onigiri/cua/.git/onigiri/v2/` can hold unpushed work even when their `pid` is dead, so deleting one is data deletion. List the candidates and ask Zane first.
 
 ## The merge job
 
