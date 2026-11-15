@@ -661,7 +661,7 @@ def build_dirs(d):
     real, found = os.path.realpath(d), []
     for wt in sorted(os.listdir(d)):
         top = os.path.join(d, wt)
-        if not wt.startswith("wt") or os.path.islink(top) or not os.path.isdir(top):
+        if os.path.islink(top) or not os.path.exists(os.path.join(top, ".git")):
             continue
         for root, dirs, _ in os.walk(top):
             dirs[:] = [x for x in dirs if x not in (".git", "node_modules") and not os.path.islink(os.path.join(root, x))]

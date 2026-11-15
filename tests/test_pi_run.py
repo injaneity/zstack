@@ -805,9 +805,12 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertIn("once that has passed", r.stderr)
 
-    def cargo_target(self, sid, rel, mb=2):
+    def cargo_target(self, sid, rel, mb=2, git=True):
         t = self.t / "root" / "review" / sid / rel
         (t / "debug").mkdir(parents=True)
+        top = self.t / "root" / "review" / sid / rel.split("/")[0]
+        if git and not (top / ".git").exists():
+            (top / ".git").write_text(f"gitdir: /elsewhere/.git/worktrees/{top.name}\n")
         (t / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
         (t / "debug" / "blob").write_bytes(os.urandom(mb * 1_000_000))
         return t
@@ -818,12 +821,13 @@ class Launcher(unittest.TestCase):
         d = self.t / "root" / "review" / "pr1"
         idle = self.cargo_target("pr1", "wt/libs/x/target", mb=3)
         idle2 = self.cargo_target("pr1", "wt2/target")
+        base = self.cargo_target("pr1", "verify-1-base/libs/x/target")
         held = self.cargo_target("pr1", "wt3/target")
         src = d / "wt" / "libs" / "x" / "src.rs"
         src.write_text("fn main() {}\n")
         notcargo = d / "wt" / "web" / "target"
         notcargo.mkdir(parents=True)
-        outside = self.cargo_target("pr1", "scratch/target")
+        outside = self.cargo_target("pr1", "scratch/target", git=False)
         other = self.cargo_target("other", "wt/target")
         (d / "wt4").symlink_to(self.t / "root" / "review" / "other" / "wt")
         (d / "wt3" / "src").mkdir()
@@ -832,11 +836,11 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("collect", "pr1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "pr1 attempt=1 rc=0\n")
-        self.assertFalse(idle.exists() or idle2.exists())
+        self.assertFalse(idle.exists() or idle2.exists() or base.exists())
         for kept in (held, src, notcargo, outside, other):
             self.assertTrue(kept.exists(), kept)
         line = next(x for x in r.stderr.splitlines() if x.startswith("pi-run: pr1: "))
-        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted wt/libs/x/target wt2/target; kept wt3/target ")
+        self.assertRegex(line, r"^pi-run: pr1: freed 0\.[0-9] GB: deleted verify-1-base/libs/x/target wt/libs/x/target wt2/target; kept wt3/target ")
         self.assertIn("pi-run collect: freed ", self.log("pr1"))
 
     def test_collect_deletes_nothing_when_lsof_gives_no_answer_or_the_run_is_live(self):
@@ -864,7 +868,7 @@ class Launcher(unittest.TestCase):
         r = self.pi_run("collect", "pr3")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((t / "CACHEDIR.TAG").exists())
-        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir() if x.name != ".git"), ["target"])
         self.assertIn("freed 0.0 GB: deleted no target/ dir; kept wt/target", r.stderr)
 
     def test_a_build_started_after_the_second_lsof_gets_a_fresh_target_that_prune_never_deletes(self):
@@ -879,7 +883,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((t / "debug" / "fresh").read_text(), "new\n")
         self.assertFalse((t / "debug" / "blob").exists())
-        self.assertEqual(sorted(x.name for x in t.parent.iterdir()), ["target"])
+        self.assertEqual(sorted(x.name for x in t.parent.iterdir() if x.name != ".git"), ["target"])
 
     def test_a_target_a_died_prune_left_aside_goes_at_the_next_collect(self):
         self.start("pr4")
