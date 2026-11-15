@@ -175,6 +175,8 @@ class NextAction(unittest.TestCase):
         for held in (dict(p, number=5675), dict(p, files=["never.rs"])):
             self.assertEqual(verdict(held)[:2], ("wait", "zane"))
         self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
+        for body in ("risk: light\n", "risk: deep\n"):
+            self.assertEqual(verdict(dict(p, author="someone", body=body))[:2], ("wait", "zane"), body)
 
     def test_pending_waits(self):
         pending = pr(statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None), cr("x", conclusion="FAILURE")])

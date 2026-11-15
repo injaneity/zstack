@@ -195,7 +195,7 @@ def next_action(reasons, notes, pr, rerun_head=None):
         return "merge", "none", "green, " + ", ".join(notes)
     if "draft" in codes:
         return "wait", "none", why
-    stuck = "conflict" in codes or ("ci" in codes and check_state(pr.get("statusCheckRollup"))[0] == "red")
+    stuck = ("conflict" in codes and pr.get("author", ME) == ME) or ("ci" in codes and check_state(pr.get("statusCheckRollup"))[0] == "red")
     if codes & ZANE_CODES and not (codes & ZANE_CODES == {"risk"} and stuck):
         return "wait", "zane", why
     if codes & SESSION_CODES:
