@@ -99,6 +99,9 @@ def has_spdx(sha, path, cwd):
     return rc == 0 and SPDX in "\n".join(text.splitlines()[:10])
 
 
+TOOLS = r"claude|anthropic|openai|codex|chatgpt|gpt-|copilot|cursor|gemini|grok|devin|aider|\[bot\]"
+
+
 def lint(sha, cwd=None):
     rc, base = git("merge-base", sha, "refs/remotes/origin/main", cwd=cwd)
     rc1, status = git("diff", "--name-status", "--no-renames", "--no-color", base.strip(), sha, cwd=cwd) if rc == 0 and base.strip() else (1, "")
@@ -128,8 +131,8 @@ def lint(sha, cwd=None):
     for entry in log.split("\x01") if rc3 == 0 else []:
         c, _, rest = entry.strip().partition("\x00")
         who, _, body = rest.partition("\x00")
-        if c and who == me and re.search(r"^co-authored-by:", body, re.I | re.M):
-            out.append(f"commit {c[:12]} carries a Co-authored-by trailer (Hard rules, text-no-trailers)")
+        if c and who == me and re.search(rf"^co-authored-by:.*({TOOLS})", body, re.I | re.M):
+            out.append(f"commit {c[:12]} carries a Co-authored-by trailer for a model, agent or tool (Hard rules, text-no-trailers)")
     return list(dict.fromkeys(out))[:8]
 
 
@@ -195,4 +198,4 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv, sys.stdin))
+    sys.exit(main(sys.argv[1:], sys.stdin))

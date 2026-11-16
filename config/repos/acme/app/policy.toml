@@ -40,6 +40,7 @@ preapproved_labels = ["preapproved"]
 # PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.
 [issues]
 fixes = "Fixes #{issue}"
+refs = "Refs #{issue}"
 salvaged_from = "Salvaged from #{pr}"
 
 # What a review of an outside contributor's PR does with a fixable one: `salvage` it as a new PR of ours that credits

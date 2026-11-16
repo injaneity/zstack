@@ -138,6 +138,7 @@ class Policy(unittest.TestCase):
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
+            ('refs = "Refs #{issue}"', 'refs = "Refs #{n}"', "issues.refs must be one line with {issue} once"),
             ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
             ('url = "https://example.invalid/wake"', 'url = "http://example.invalid/wake"', "wake.url must be an https URL"),
             ('owner = "Robin"', "", "missing people.owner"),

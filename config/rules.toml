@@ -49,7 +49,7 @@ title = '''Commits and PR text'''
 
 [[section.rule]]
 id = "text-no-trailers"
-text = '''No `Co-authored-by` trailers of any kind. No model, agent or tool names in commit messages, PR titles or PR bodies.'''
+text = '''No `Co-authored-by` trailers for models, agents or tools. A salvage keeps the contributor's commits as authored; if none survive, add `Co-authored-by: <contributor name> <their GitHub noreply or commit email>` for the source PR's author. No model, agent or tool names in commit messages, PR titles or PR bodies.'''
 
 [[section.rule]]
 id = "text-upstream-commits"
@@ -65,7 +65,7 @@ text = '''New files carry the repository's SPDX/FSL header where neighbouring fi
 
 [[section.rule]]
 id = "salvage-fixes"
-text = '''A salvage PR's body says `{issues.salvaged_from}` and, on a line of its own, `{issues.fixes}` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges.'''
+text = '''A salvage PR's body says `{issues.salvaged_from}` and, on a line of its own, `{issues.fixes}` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges. Take those issues from the salvaged PR's own body, not from GitHub's closingIssuesReferences, which links any issue after a closing word even when the body says it does not fix it. An issue the body names but says it does not fix gets `{issues.refs}` instead, because an issue closes only when our merged PR fixed it.'''
 
 [[section.rule]]
 id = "text-pr-body"

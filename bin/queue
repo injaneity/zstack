@@ -156,10 +156,12 @@ def task(c, h, pol):
         return text
     frm = iss["salvaged_from"].format(pr=c["n"])
     return (f"{text}\nA salvage PR's body carries `{frm}` and a `{iss['fixes'].format(issue='<n>')}` line for each issue "
-            f"#{c['n']} fixes or was opened for, so the forge closes them when the salvage merges.\n"
+            f"#{c['n']} fixes or was opened for, so the forge closes them when the salvage merges. Take those issues from "
+            f"#{c['n']}'s own body; an issue it names but says it does not fix gets `{iss['refs'].format(issue='<n>')}` instead.\n"
             f"A salvage keeps {c['author']['login']}'s commits as authored: cherry-pick or rebase their commits, then put our "
-            "fixes on top as separate commits. Never re-author their work or squash it into our commit. If no code of theirs "
-            f"survives, the body's `{frm}` line is what credits them.")
+            "fixes on top as separate commits. Never re-author their work or squash it into our commit. If none of their "
+            "commits survive, add `Co-authored-by: <their name> <their GitHub noreply or commit email>` for them to our "
+            f"commit; the body still says `{frm}`.")
 
 
 def item(kind, n, source, priority, text, title, preapproved=False):

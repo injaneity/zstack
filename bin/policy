@@ -81,6 +81,8 @@ REPO = {
     "issues": {
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
                    "one line with {issue} once and no other placeholder"),
+        "refs": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
+                 "one line with {issue} once and no other placeholder"),
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5],
                            "one line ending in ` #{pr}`, with no other placeholder"),
     },

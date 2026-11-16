@@ -207,7 +207,7 @@ class PatentPush(unittest.TestCase):
 
     def test_a_push_that_commits_config_build_output_or_a_trailer_is_refused_with_each_reason(self):
         for name, text, msg, why in ((".onigiri.json", "{}\n", "x", "scope-no-config"), ("crates/a/target/debug/x", "bin\n", "x", "checks-target"),
-                                     ("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: A <a@b.c>", "text-no-trailers")):
+                                     ("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: Claude <noreply@anthropic.com>", "text-no-trailers")):
             with self.subTest(why=why), tempfile.TemporaryDirectory() as tmp:
                 g, pub, work, root = self.repo(tmp)
                 g("checkout", "-qb", "onigiri/z", cwd=work)
