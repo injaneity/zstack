@@ -318,8 +318,8 @@ class Pickup(unittest.TestCase):
         (self.t / "salvages.json").write_text(json.dumps([
             {"number": 711, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #611\n\nFixes #30\nFixes #31\nFixes #33\n",
              "closingIssuesReferences": ref(30, 31, 33)},
-            {"number": 712, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #612\n\nFixes #32\nFixes #39\n",
-             "closingIssuesReferences": ref(32, 39)},
+            {"number": 712, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #612\n\nFixes #32\nFixes #36\nFixes #39\n",
+             "closingIssuesReferences": ref(32, 36, 39)},
             {"number": 713, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #613\n\nFixes #34\nFixes #35\n",
              "closingIssuesReferences": ref(34, 35)},
             {"number": 714, "state": "MERGED", "mergedAt": "2026-11-14T09:00:00Z", "body": "Salvaged from #614\n\nFixes #37\n",
