@@ -15,8 +15,9 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wake  # noqa: E402  the urgent webhook's URL, key file and POST
+from wake import SGT, now, sha  # noqa: E402
 
-ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
+ROOT = wake.root()
 DIR = f"{ROOT}/tick"
 EVENTS, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/hold-prs.txt"
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
@@ -39,15 +40,10 @@ FLOOR_GB = POLICY["hourly"]["floor_gb"]
 WATCH_LIMIT = 500
 WATCH_OVERLAP_S = 6 * 3600
 MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5
-SGT = ZoneInfo("Asia/Singapore")
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", os.environ.get("PATH") or "/usr/bin:/bin"])}
 
 Reason = namedtuple("Reason", "code text")
-
-
-def now():
-    return datetime.now(SGT).isoformat(timespec="seconds")
 
 
 def read(path):
@@ -149,7 +145,7 @@ def gate(pr, holds, notes=None):
     R, n, head = [], pr.get("number"), pr["headRefOid"]
     ci = [conclusion(c) for c in latest_checks(pr.get("statusCheckRollup")) if check_name(c) == GATE_CHECK]
     if ci and all(s == "SUCCESS" for s in ci):
-        notes.append("ci-gate SUCCESS")
+        notes.append(f"{GATE_CHECK} SUCCESS")
     else:
         R.append(Reason("ci", f"{GATE_CHECK} {'/'.join(sorted(set(ci))) or 'missing'}"))
     if holds is None:
@@ -358,10 +354,6 @@ def post_webhook(kind, ident, reason):
     m = re.search(r"#(\d+)$", ident or "")
     return wake.send({"kind": kind, "pr": int(m.group(1)) if m else None, "id": ident, "reason": reason, "time": now()},
                      attempts=1, timeout=8)
-
-
-def sha():
-    return subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
 
 
 def free_gb():
@@ -647,10 +639,10 @@ class Job:
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="merge_job.py", add_help=False, allow_abbrev=False,
-                                description="trycua/cua merge job. A bare run is one real run (cron, under flock).")
+                                description=f"{REPO} merge job. A bare run is one real run (cron, under flock).")
     m = p.add_mutually_exclusive_group()
     m.add_argument("--dry-run", action="store_true", help="decide everything, change nothing, write nothing")
-    m.add_argument("--explain", type=int, metavar="N", help="every reason for trycua/cua#N; read-only")
+    m.add_argument("--explain", type=int, metavar="N", help=f"every reason for {REPO}#N; read-only")
     m.add_argument("--webhook-test", action="store_true", help="one wiring-test POST")
     p.error = lambda msg: (p.print_help(sys.stderr), p.exit(2, f"merge_job.py: error: {msg}\n"))
     a = p.parse_args(sys.argv[1:] if argv is None else argv)

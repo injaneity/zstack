@@ -5,11 +5,11 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
 
 const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
-const ISSUES = issuesOwned(DUMP);
+const ISSUES = OWNED;
 const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
 const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
 const TEAM = reviewOnlyLogins(["review-only    | f-trycua      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
@@ -489,8 +489,6 @@ test("closing a trycua/cua issue by hand needs a comment naming the PR that fixe
 	no("gh issue close 12", "/tmp/x");
 	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
 	assert.equal(checkBash("gh issue close 6853 -R trycua/cua", OWNED, host, "/zs", false, new Set()), undefined);
-	assert.equal(issuesOwned(() => "{}"), null);
-	assert.equal(issuesOwned(() => { throw new Error("x"); }), null);
 });
 
 test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {

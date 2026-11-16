@@ -93,7 +93,7 @@ def activity_min(d, sid):
     return max(0, int((time.time() - pr.last_progress(d, sid)) // 60))
 
 
-NUM = re.compile(r"(?:cua#|trycua/cua/(?:pull|issues)/|#)(\d{3,6})\b")
+NUM = re.compile(rf"(?:{re.escape(REPO.split('/')[1])}#|{re.escape(REPO)}/(?:pull|issues)/|#)(\d{{3,6}})\b")
 
 
 def foreign_briefs(review, known):

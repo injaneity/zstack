@@ -13,15 +13,6 @@ export function mergeOwned(dump: () => string): Owned {
 	}
 }
 
-export function issuesOwned(dump: () => string): Owned {
-	try {
-		const repo = JSON.parse(dump())?.issues?.repo;
-		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
-	} catch {
-		return null;
-	}
-}
-
 export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
 	return env === "1";
 }
@@ -208,7 +199,10 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 }
 
 const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const CLOSE_WAY = "Close a trycua/cua issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment \"Fixed by #<pr>.\"` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.";
+const closeWay = (issues: Owned) => {
+	const repo = issues ? [...issues][0] : undefined;
+	return `Close ${repo ? `a ${repo}` : "an"} issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: \`gh issue close <n>${repo ? ` -R ${repo}` : ""} --comment "Fixed by #<pr>."\` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.`;
+};
 
 function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	const w = c.words;
@@ -349,7 +343,7 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 		const close = ghIssueClose(c, issues, host);
-		if (close) return `blocked: ${close}. ${CLOSE_WAY}`;
+		if (close) return `blocked: ${close}. ${closeWay(issues)}`;
 		const mate = ghTeammateClose(c, issues, host);
 		if (mate) return `blocked: ${mate}. ${TEAMMATE_WAY}`;
 	}

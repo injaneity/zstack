@@ -18,6 +18,10 @@ KINDS = ("blocked", "failed", "done")
 FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r".+", "prs": r"\S+"}
 
 
+def root():
+    return os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
+
+
 def now():
     return datetime.now(SGT).isoformat(timespec="seconds")
 

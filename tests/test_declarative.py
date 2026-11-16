@@ -13,7 +13,9 @@ _l.exec_module(policy)
 POLICY, RULES, STATE = policy.load(), policy.rules(), policy.state()
 
 VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/",
-            "skills/cua/")
+            "extras/")
+
+BENCH = "hosts/mini/release-bench/"
 
 
 def tracked(*globs):
@@ -26,10 +28,17 @@ def prose():
             if not f.startswith(VERBATIM)]
 
 
-def restated(text, pol):
+def code():
+    return [f for f in tracked("bin/*", "hosts/*", "hosts/**/*", "extensions/**/*.ts", "hooks/*")
+            if not f.endswith((".tla", ".cfg", ".mmd", ".md")) and f != "bin/policy" and not f.startswith(BENCH)]
+
+
+def restated(text, pol, repo=False):
     hits = []
     words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]],
              "merge.gate_check": [pol["merge"]["gate_check"]], "patent.private_repo": [pol["patent"]["private_repo"]]}
+    if repo:
+        words["merge.repo"] = [pol["merge"]["repo"]]
     for v in pol["models"].values():
         for s in v if isinstance(v, list) else [v]:
             words.setdefault("models", []).append(s["model"])
@@ -117,6 +126,17 @@ class NoRestatedValues(unittest.TestCase):
         found = [f"{f}: {t!r} restates {k}" for f in prose() for k, t in restated((PKG / f).read_text(), POLICY)]
         self.assertEqual(found, [], "name the config/policy.toml key instead of its value")
 
+    def test_code_reads_config_keys_instead_of_values(self):
+        found = [f"{f}: {t!r} restates {k}" for f in code() for k, t in restated((PKG / f).read_text(), POLICY, repo=True)]
+        self.assertEqual(found, [], "read the value from config/policy.toml (bin/policy) instead of writing it again")
+
+    def test_the_code_check_catches_what_the_code_said_before(self):
+        old = {'"Your PR trycua/cua#{pr} is red at {head}"': "merge.repo", 'notes.append("ci-gate SUCCESS")': "merge.gate_check",
+               "the diff touches pairing, Teleport or Keyvault": "patent.held_words"}
+        for line, key in old.items():
+            with self.subTest(line=line):
+                self.assertIn(key, [k for k, _ in restated(line, POLICY, repo=True)])
+
     def test_the_check_catches_what_the_playbook_said_before(self):
         old = {"it has at least 20G free": "hourly.floor_gb", "no progress for 2.5h": "run.idle_min",
                "(none in the last 55 minutes": "hourly.merge_stale_min", "The first pass after 08:00 SGT": "hourly.batch_hour",
@@ -132,6 +152,29 @@ class NoRestatedValues(unittest.TestCase):
         for line in ("Zane, 12 Nov 12:47 SGT", "steps 0 to 5", "8. **Merge", "the 11 Nov retro", "`cua-<n>-review-<head7>`",
                      "(Zane, 10 Nov 19:13)", "repairing"):
             self.assertEqual(restated(line, POLICY), [], line)
+
+
+class Harness(unittest.TestCase):
+    PI = re.compile(r"@earendil-works/|pi-coding-agent")
+    CLAUDE = re.compile(r"CLAUDE_PLUGIN_ROOT|tool_name|tool_input")
+    PI_ADAPTERS = ("extensions/rule-guard/index.ts", "extensions/tool-guard/index.ts", "extensions/subagent/")
+    CLAUDE_ADAPTERS = ("hooks/", ".claude-plugin/")
+
+    def test_only_an_adapter_names_its_harness(self):
+        wrong = []
+        for f in tracked("bin/*", "hosts/*", "hosts/**/*", "extensions/**/*.ts", "hooks/*", "config/*", ".claude-plugin/*"):
+            text = (PKG / f).read_text()
+            if self.PI.search(text) and not f.startswith(self.PI_ADAPTERS):
+                wrong.append(f"{f} imports pi, and is not a pi adapter")
+            if self.CLAUDE.search(text) and not f.startswith(self.CLAUDE_ADAPTERS):
+                wrong.append(f"{f} names Claude Code's hook input, and is not a Claude Code adapter")
+        self.assertEqual(wrong, [])
+
+    def test_each_adapter_calls_the_one_guard(self):
+        for f in ("extensions/rule-guard/index.ts", "hooks/guard.ts"):
+            text = (PKG / f).read_text()
+            self.assertIn("rule-guard/host.ts", text.replace('"./host.ts"', '"rule-guard/host.ts"'), f)
+            self.assertNotIn("checkBash", text, f)
 
 
 class StateFiles(unittest.TestCase):

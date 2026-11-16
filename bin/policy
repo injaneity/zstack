@@ -19,9 +19,11 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, os.path.join(PKG, "vendor"))
     import tomli as tomllib
-PATH = os.path.join(PKG, "config", "policy.toml")
-RULES = os.path.join(PKG, "config", "rules.toml")
-STATE = os.path.join(PKG, "config", "state.toml")
+CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "config"))
+PATH = os.path.join(CONFIG, "policy.toml")
+RULES = os.path.join(CONFIG, "rules.toml")
+STATE = os.path.join(CONFIG, "state.toml")
+RUN_ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 
 
 class PolicyError(Exception):
@@ -59,10 +61,11 @@ SCHEMA = {
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "resume": {"cap": (pos_int, "a positive integer")},
     "run": {"idle_min": (pos_int, "a positive integer")},
+    "skills": {"extra": (lambda v: names(v) and not any(os.path.isabs(x) or ".." in x.split("/") for x in v),
+                         "a list of distinct directories inside the package")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
-        "public_repo": (repo, "owner/name"),
         "private_repo": (repo, "owner/name"),
     },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
@@ -93,7 +96,6 @@ SCHEMA = {
         "host": (lambda v: text(v), "a host name"),
     },
     "issues": {
-        "repo": (repo, "owner/name"),
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
                    "one line with {issue} once and no other placeholder"),
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5],
@@ -119,8 +121,8 @@ def validate(data):
                 raise PolicyError(f"missing {name}.{k}")
             if not check(sec[k]):
                 raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
-    if data["patent"]["public_repo"].lower() == data["patent"]["private_repo"].lower():
-        raise PolicyError("patent.private_repo must differ from patent.public_repo")
+    if data["merge"]["repo"].lower() == data["patent"]["private_repo"].lower():
+        raise PolicyError("patent.private_repo must differ from merge.repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
     if data["pickup"]["deadline_s"] >= data["pickup"]["interval_s"]:
@@ -178,9 +180,9 @@ def validate_rules(data, pol):
             seen[r["id"]] = r["text"]
     iss = pol["issues"]
     need = {"patent-scope": [w for w in pol["patent"]["held_words"]],
-            "issue-close": [f"`{iss['repo']}`"],
+            "issue-close": [f"`{pol['merge']['repo']}`"],
             "salvage-fixes": [f"`{iss['salvaged_from'].format(pr='<pr>')}`", f"`{iss['fixes'].format(issue='<issue>')}`"],
-            "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['patent']['public_repo']}`", f"`{pol['patent']['private_repo']}`"],
+            "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['merge']['repo']}`", f"`{pol['patent']['private_repo']}`"],
             "merge-risk": ["|".join(pol["merge"]["tiers"])],
             "lume-prune": [f"older than {pol['hourly']['lume_prune_age_h']}h"]}
     for rid, words in need.items():

@@ -12,7 +12,6 @@ import time
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
-ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
          "| pi-run stop <id> <why...> "
          "| pi-run list [<state>...]\nexit 0 done, 2 usage, 3 refused by the run's state (bin/PiRun.mmd), 4 setup failed; "
@@ -23,7 +22,7 @@ LOGGED_OUT = "Claude Code is installed but not logged in. Run `claude auth login
 STOPPED, STOP_GRACE = "stopped", 30
 RESUME = ("Your run stopped on an upstream rate limit or an incomplete upstream response and is resumed in the same session. "
           "Carry on with the task from where you stopped.")
-CI_RESUME = ("Your PR trycua/cua#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
+CI_RESUME = ("Your PR {repo}#{pr} is red at {head}, the head you pushed, after the merge job's one rerun: {why}. You own its CI, "
              "so this session is reopened to resolve it (fix {n} of {cap}, ci.fix_attempts in config/policy.toml). Read the failing logs, "
              "fix the cause (update from main when it is not in your diff), push, and have the verifier check the new head. "
              "Rerun a job that failed for a reason outside your diff (cancelled, timed out, a runner network failure) "
@@ -43,6 +42,7 @@ def _load_policy():
 
 
 _POLICY, _CONFIG = _load_policy()
+ID = re.compile(_POLICY.RUN_ID)
 
 
 def policy():
@@ -529,7 +529,7 @@ def launch(sid, role, brief, extra):
     pool = run["pool"] if run else pool_of(open(brief).read(), role)
     if cont:
         role, extra = run.get("role") or role, run.get("extra") or []
-        text = CI_RESUME.format(**run["ci_now"]) if run.get("ci_now") else RESUME
+        text = CI_RESUME.format(repo=conf("merge", "repo"), **run["ci_now"]) if run.get("ci_now") else RESUME
         with open(os.path.join(d, "brief.full.md")) as fh:
             brief_text = fh.read()
     else:

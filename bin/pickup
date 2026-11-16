@@ -209,16 +209,16 @@ def task(c, h):
                 f"finished, end report.md with the line `benched: {new} against {c['why']}`.\n")
     head = f" at head {c['head']}" if c["head"] else ""
     if c["kind"] == "issue":
-        return (f"trycua/cua#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in trycua/cua, picked from the issues assigned to "
+        return (f"{REPO}#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in {REPO}, picked from the issues assigned to "
                 f"{ME}. Read the issue and its thread, fix it with a test, and open a PR whose body says `Fixes #{c['n']}`.\n")
     if c["kind"] == "unstick":
-        return (f"trycua/cua#{c['n']}{head}: {c['url']}\n\nKind: unstick our PR. The merge job waits on a session: {c['why']}. "
+        return (f"{REPO}#{c['n']}{head}: {c['url']}\n\nKind: unstick our PR. The merge job waits on a session: {c['why']}. "
                 "Update it from main, fix the cause, push, and have the verifier check the new head. "
                 "If main or another PR already has its change, close it instead and say what replaced it.\n")
     who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"].lower() in h["review_only"] else \
         "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
     frm, fixes = salvage_lines(c["n"])
-    return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
+    return (f"{REPO}#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
             f"requested of {ME}. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
             "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n"
             f"A salvage PR's body carries `{frm}` and a `{fixes}` line for each issue #{c['n']} fixes or was opened for "

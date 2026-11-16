@@ -75,7 +75,6 @@ class Policy(unittest.TestCase):
             ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),
             ('private_repo = "trycua/cua-staging"', 'private_repo = "trycua/cua"', "patent.private_repo must differ"),
             ('private_repo = "trycua/cua-staging"', 'private_repo = "TryCua/CUA"', "patent.private_repo must differ"),
-            ('public_repo = "trycua/cua"\n', "", "missing patent.public_repo"),
             ('[merge]\nrepo = "trycua/cua"', '[merge]\nrepo = "trycua"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
             ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
@@ -90,7 +89,6 @@ class Policy(unittest.TestCase):
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
             ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
             ('since = "2026-07-22"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
-            ('[issues]\nrepo = "trycua/cua"', '[issues]\nrepo = "cua"', "issues.repo must be owner/name"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):

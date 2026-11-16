@@ -4,7 +4,6 @@ import importlib.util
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -142,6 +141,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sha = subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    print(f"zstack {sha or 'unknown'}", file=sys.stderr)
+    print(f"zstack {mj.sha()}", file=sys.stderr)
     main(sys.argv[1:])

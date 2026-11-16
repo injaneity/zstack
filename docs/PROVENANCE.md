@@ -35,7 +35,7 @@ None of the zstack changes above apply to them. They keep `disable-model-invocat
 
 ## Copied from trycua/cua
 
-`skills/cua/verify-cua-driver` and `skills/cua/verify-cua-spaces` are the Markdown files of trycua/cua's `.cursor/skills/verify-cua-driver` and `.cursor/skills/verify-cua-spaces` at commit `3807b6da9623c2ce3c169120aa361925888c14d2`, byte for byte. That commit includes #6898 and #7343. trycua/cua stays the source of truth, and a change to these skills goes to that repo first. They are here because pi loads skills from the package and from `.pi/skills/` or `.agents/skills/`, never from `.cursor/skills/`, so a session in a cua checkout would not see them otherwise. pi finds `skills/cua/*/SKILL.md` through the package's `skills` entry, which it searches recursively, so a host picks them up on its next launch after `bin/ensure-package-main` fast-forwards the package.
+`extras/cua/verify-cua-driver` and `extras/cua/verify-cua-spaces` are the Markdown files of trycua/cua's `.cursor/skills/verify-cua-driver` and `.cursor/skills/verify-cua-spaces` at commit `3807b6da9623c2ce3c169120aa361925888c14d2`, byte for byte. That commit includes #6898 and #7343. trycua/cua stays the source of truth, and a change to these skills goes to that repo first. They are here because pi loads skills from the package and from `.pi/skills/` or `.agents/skills/`, never from `.cursor/skills/`, so a session in a cua checkout would not see them otherwise. They sit outside the package's `skills` entry, so no install loads them by default. A host that lists the directory under `skills` in pi's settings file (`[skills] extra` in `config/policy.toml`, checked by `bin/check-host`) picks up a refreshed copy on its next launch after `bin/ensure-package-main` fast-forwards the package.
 
 The `scripts/` directories are left out. `verify-linux.sh`, `verify-macos.sh` and `spaces-desk.sh` find the repository root as four directories above themselves, which is only right inside a cua checkout, and the other scripts are called by those. The skills already call them as `.cursor/skills/<skill>/scripts/...` from the checkout root, and `verify-linux.sh` drives the checkout's own `scripts/ci/linux/run-rust-e2e.sh` lane `verify`. So copying the scripts here would not help a checkout that lacks them: a PR head cut before trycua/cua#5832 (24 Oct 2026) has neither the scripts nor that lane. The verifier (`agents/verifier.md`) then runs the lanes on the head merged with current main. The two `../../../libs/` links in `verify-cua-driver/macos-lume.md` don't resolve from this copy, since a link is read from the file's own directory. Resolve them against the checkout's `.cursor/skills/verify-cua-driver/`, which puts them at `libs/cua-driver/tests/runners/macos-lume/README.md` from the checkout root.
 
@@ -43,9 +43,9 @@ zstack's rewrites don't apply to these files. The test workflow checks their fro
 
 ```bash
 for s in verify-cua-driver verify-cua-spaces; do
-  rm -rf "skills/cua/$s"
+  rm -rf "extras/cua/$s"
   git -C "$CUA" ls-tree -r --name-only "$SHA" ".cursor/skills/$s" | grep '\.md$' | while read -r f; do
-    d="skills/cua/${f#.cursor/skills/}"; mkdir -p "$(dirname "$d")"; git -C "$CUA" show "$SHA:$f" > "$d"
+    d="extras/cua/${f#.cursor/skills/}"; mkdir -p "$(dirname "$d")"; git -C "$CUA" show "$SHA:$f" > "$d"
   done
 done
 ```

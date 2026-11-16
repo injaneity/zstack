@@ -21,13 +21,14 @@ except policy.PolicyError as e:
              "the push, push elsewhere or skip the hook; say so in your report.")
 HELD = re.compile(r"(?<![a-z0-9])(" + "|".join(map(re.escape, PATENT["held_words"])) + ")", re.I)
 LOCKFILE = re.compile(r"(^|/)(" + "|".join(map(re.escape, PATENT["skip_lockfiles"])) + ")$")
-PUBLIC, STAGING = PATENT["public_repo"], PATENT["private_repo"]
+PUBLIC, STAGING = POLICY["merge"]["repo"], PATENT["private_repo"]
+WORDS = ", ".join(PATENT["held_words"][:-1]) + " or " + PATENT["held_words"][-1]
 STAGING_URL = f"https://github.com/{STAGING}"
 ZERO = "0" * 40
-ROOT = os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
-SGT = ZoneInfo("Asia/Singapore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wake  # noqa: E402
+
+ROOT = wake.root()
 
 
 def on_github(repo, url):
@@ -111,18 +112,18 @@ def wake_hold(branch, sha, hits, root=ROOT):
             return False
     except OSError:
         pass
-    reason = (f"held for the private repo: the diff touches pairing, Teleport or Keyvault ({'; '.join(hits)[:200]}), "
+    reason = (f"held for the private repo: the diff touches {WORDS} ({'; '.join(hits)[:200]}), "
               f"so it was not pushed to public {PUBLIC}. {STAGING} is not pushable as {ME}, so the branch "
               f"stays local. Zane: grant push on {STAGING} or say where it goes.")
     status = wake.post("blocked", f"{ident} {reason}")
     with open(log, "a") as f:
-        f.write(f"{datetime.now(SGT).isoformat(timespec='seconds')}{mark}{status}: {reason}\n".replace("\r", " "))
+        f.write(f"{wake.now()}{mark}{status}: {reason}\n".replace("\r", " "))
     return status.startswith(("webhook sent", "not sent: dry run"))
 
 
 def record_push(sid, refs, root=ROOT):
     d = os.path.join(root, "review", sid or "")
-    if not refs or not sid or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", sid) or not os.path.isdir(d):
+    if not refs or not sid or not re.fullmatch(policy.RUN_ID, sid) or not os.path.isdir(d):
         return False
     at = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     with open(os.path.join(d, "pushed"), "a") as f:
@@ -152,12 +153,12 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         if act == "staging":
             rc, _ = git("push", STAGING_URL, f"{sha}:refs/heads/{branch}", cwd=cwd)
             if rc == 0:
-                out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault, so it was pushed to the private "
+                out.write(f"patent hold: {branch} touches {WORDS}, so it was pushed to the private "
                           f"repo {STAGING}, not to {url}. Open or update its PR there: gh pr create -R {STAGING} "
                           f"--head {branch}. Never push it to {PUBLIC}.\n")
                 continue
         woke = "Zane has been woken" if wake_hold(branch, sha, hits, root) else "Zane was woken earlier, or the wake failed (events.log)"
-        out.write(f"patent hold: {branch} touches pairing, Teleport or Keyvault and must not go to public "
+        out.write(f"patent hold: {branch} touches {WORDS} and must not go to public "
                   f"{PUBLIC}. It stays local, and {woke}. Do not retry the push, push "
                   f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
     if not refuse and is_public(url):

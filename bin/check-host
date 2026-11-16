@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.machinery
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ USAGE = (
     '  check-host --offline  every check but the `pi -p` calls'
 )
 CLAUDE_PIN = "70abb65186592ca788b29b3db22c3160d629c41f"
+PI_SETTINGS = "settings.json"
 _l = importlib.machinery.SourceFileLoader("pi_run", os.path.join(PKG, "bin", "pi-run"))
 pr = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(pr)
@@ -47,6 +49,19 @@ def seats():
     return out
 
 
+def loaded_skills(env):
+    home = env.get("HOME") or os.path.expanduser("~")
+    agent = env.get("PI_CODING_AGENT_DIR") or os.path.join(home, ".pi", "agent")
+    path = os.path.join(agent, PI_SETTINGS)
+    try:
+        with open(path) as fh:
+            rows = json.load(fh).get("skills") or []
+    except (OSError, ValueError, AttributeError):
+        rows = []
+    full = [os.path.join(home, x[2:]) if x.startswith("~/") else os.path.join(agent, x) for x in rows if isinstance(x, str)]
+    return path, {os.path.realpath(x) for x in full}
+
+
 def main(argv):
     if argv not in ([], ["--offline"]):
         print(USAGE, file=sys.stderr)
@@ -73,6 +88,15 @@ def main(argv):
     except pr.policy().PolicyError as e:
         providers = {}
         say("FAIL", f"policy: {e}")
+    settings, loaded = loaded_skills(env)
+    for extra in (pr.policy().load()["skills"]["extra"] if providers else []):
+        where = os.path.join(PKG, extra)
+        if not os.path.isdir(where):
+            say("FAIL", f"skills {extra}: config/policy.toml [skills] extra names it, but {where} is not a directory")
+        elif os.path.realpath(where) in loaded:
+            say("ok", f"skills {extra}: loaded from {settings}")
+        else:
+            say("FAIL", f"skills {extra}: not loaded on this host; add {json.dumps(where)} to the `skills` list in {settings}")
     listed = run(["pi", "list"], env).stdout
     need = {"npm:@ff-labs/pi-fff": "pi install npm:@ff-labs/pi-fff@0.11.0 (the agents' fffind, ffgrep, fff-multi-grep)"}
     if "claude-code" in providers:
