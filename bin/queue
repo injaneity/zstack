@@ -300,12 +300,18 @@ def pr_view(pol, pr):
 def protected(pol):
     repo, need = pol["merge"]["repo"], {pol["merge"]["gate_check"], pol["merge"]["verified_check"]}
     rc, branch, _ = gh("api", f"repos/{repo}", "--jq", ".default_branch")
-    rc2, out, _ = gh("api", f"repos/{repo}/branches/{branch.strip()}/protection/required_status_checks", "--jq", ".contexts") \
-        if rc == 0 else (1, "", "")
-    try:
-        return rc2 == 0 and need <= set(json.loads(out))
-    except ValueError:
+    if rc:
         return False
+    have = set()
+    for path, jq in ((f"repos/{repo}/branches/{branch.strip()}/protection/required_status_checks", ".contexts"),
+                     (f"repos/{repo}/rules/branches/{branch.strip()}",
+                      '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]')):
+        rc, out, _ = gh("api", path, "--jq", jq)
+        try:
+            have |= set(json.loads(out)) if rc == 0 else set()
+        except ValueError:
+            pass
+    return need <= have
 
 
 def verified(pol, ident, result, said="review"):

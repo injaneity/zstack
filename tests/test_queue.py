@@ -40,8 +40,11 @@ class Forge:
             self.statuses.append((a[3].rsplit("/", 1)[1], [x for x in a if x.startswith("context=")][0]))
             return 0, "{}", ""
         if a[0] == "api" and a[1].endswith("required_status_checks"):
-            checks = [BASE["merge"]["gate_check"], BASE["merge"]["verified_check"]] if self.protected else []
-            return (0, json.dumps(checks), "") if self.protected else (1, "", "Branch not protected")
+            checks = [BASE["merge"]["gate_check"], BASE["merge"]["verified_check"]]
+            return (0, json.dumps(checks), "") if self.protected is True else (1, "", "Branch not protected")
+        if a[0] == "api" and "/rules/branches/" in a[1]:
+            checks = [BASE["merge"]["gate_check"], BASE["merge"]["verified_check"]] if self.protected == "ruleset" else []
+            return 0, json.dumps(checks), ""
         if a[0] == "api":
             return 0, "main\n", ""
         raise AssertionError(a)
@@ -240,6 +243,10 @@ class Merge(Case):
     def test_an_issue_with_a_preapproved_label_enters_preapproved(self):
         self.pick([cand(1, labels=BASE["merge"]["preapproved_labels"]), cand(2), cand(3, "review", labels=BASE["merge"]["preapproved_labels"])])
         self.assertEqual({k: v["preapproved"] for k, v in self.items().items()}, {"app-1": True, "app-2": False, f"app-3-review-{H1[:7]}": False})
+
+    def test_required_checks_named_by_a_ruleset_count_as_branch_protection(self):
+        self.forge.protected = "ruleset"
+        self.assertTrue(self.passed()["armed"])
 
     def test_a_head_that_moved_while_it_was_verified_gets_no_status(self):
         self.add("a")
