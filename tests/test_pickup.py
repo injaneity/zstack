@@ -262,6 +262,17 @@ class Pickup(unittest.TestCase):
         brief = (self.root / "review" / "cua-304-review-130aaaa" / "brief.md").read_text()
         self.assertIn("a teammate (review-only: a first review and nothing else)", brief)
         self.assertIn("`drafts:`", brief)
+        self.assertNotIn("commits as authored", brief)
+
+    def test_an_outside_review_brief_keeps_the_contributors_commits(self):
+        self.peer()
+        self.github(reviews=[review(305, "2026-10-10T00:00:00Z", login="ruicongg")])
+        self.pickup()
+        brief = (self.root / "review" / "cua-305-review-131aaaa" / "brief.md").read_text()
+        self.assertIn("A salvage keeps ruicongg's commits as authored: cherry-pick or rebase their commits, then put our "
+                      "fixes on top as separate commits. Never re-author their work or squash it into our commit.", brief)
+        self.assertIn("If no code of theirs survives, the body's `Salvaged from #305` line is what the release builder "
+                      "credits them from.", brief)
 
     def test_salvage_links_the_pass_lists_for_the_chat(self):
         self.peer(holds="hold | 604 | no | note\n")

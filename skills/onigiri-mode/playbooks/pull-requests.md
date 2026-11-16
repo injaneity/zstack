@@ -8,6 +8,8 @@ Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Har
 
 **Commits.** Commit liberally, then rebase into small ordered commits, each landable. Bodies don't restate the subject.
 
+**Salvage commits.** A salvage keeps the contributor's commits as authored: cherry-pick or rebase their commits, then put our fixes on top as separate commits. Never re-author their work or squash it into our commit. GitHub's squash merge then credits them as co-author. If no code of theirs survives, put `Salvaged from #N` in the body so the release builder credits them.
+
 **Clean the diff.** Remove narrating comments, guards for impossible states, dead compatibility paths, and edits outside the stated scope.
 
 **Verify it cold.** Spawn the `verifier` (onigiri-mode's Subagents). Fix the real findings, and note dismissals with the reason in the description.
