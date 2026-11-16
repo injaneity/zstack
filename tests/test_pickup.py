@@ -318,8 +318,8 @@ class Pickup(unittest.TestCase):
         (self.t / "salvages.json").write_text(json.dumps([
             {"number": 711, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #611\n\nFixes #30\nFixes #31\nFixes #33\n",
              "closingIssuesReferences": ref(30, 31, 33)},
-            {"number": 712, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #612\n\nFixes #32\n",
-             "closingIssuesReferences": ref(32)},
+            {"number": 712, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #612\n\nFixes #32\nFixes #39\n",
+             "closingIssuesReferences": ref(32, 39)},
             {"number": 713, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #613\n\nFixes #34\nFixes #35\n",
              "closingIssuesReferences": ref(34, 35)},
             {"number": 714, "state": "MERGED", "mergedAt": "2026-11-14T09:00:00Z", "body": "Salvaged from #614\n\nFixes #37\n",
@@ -328,7 +328,7 @@ class Pickup(unittest.TestCase):
             {"number": 611, "state": "CLOSED", "closingIssuesReferences": ref(31),
              "body": "Refs #30.\n\nThe rest of #31 follows in a separate PR, and that one will close #31.\n\nFixes #33"},
             {"number": 612, "state": "CLOSED", "closingIssuesReferences": ref(32),
-             "body": "- Fixes #32, trycua/cua#36 and https://github.com/trycua/cua/issues/38"},
+             "body": "- Fixes #32, and trycua/cua#36 and https://github.com/trycua/cua/issues/38\nRefs other/repo#39"},
             {"number": 613, "state": "CLOSED", "closingIssuesReferences": ref(34),
              "body": "This does not claim to fix #34.\nCloses https://github.com/trycua/cua/issues/35"},
             {"number": 614, "state": "CLOSED", "closingIssuesReferences": [], "body": "Refs #37"}]))
