@@ -378,7 +378,7 @@ class Launcher(unittest.TestCase):
             (pkg / f).write_bytes((PKG / f).read_bytes())
             (pkg / f).chmod(0o755)
         shutil.copytree(PKG / "vendor", pkg / "vendor")
-        for text in (None, "  \n", (PKG / "config/rules.toml").read_text().replace("trycua/cua-staging", "trycua/elsewhere")):
+        for text in (None, "  \n", (PKG / "config/rules.toml").read_text().replace("{patent.private_repo}", "{patent.nope}")):
             if text is not None:
                 (pkg / "config/rules.toml").write_text(text)
             r = subprocess.run([sys.executable, str(pkg / "bin/pi-run"), "norules", "coding", str(self.t / "brief.md")],

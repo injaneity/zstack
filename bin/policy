@@ -69,6 +69,11 @@ SCHEMA = {
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
         "private_repo": (repo, "owner/name"),
     },
+    "host": {
+        "clone": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
+        "holds": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
+        "unbuildable": (lambda v: names(v) and bool(v), "a non-empty list of distinct platform names"),
+    },
     "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
     "hourly": {
         "floor_gb": (pos_int, "a positive integer"),
@@ -159,6 +164,34 @@ def keys(where, d, want, optional=()):
             raise PolicyError(f"missing {where}.{k}")
 
 
+def get(data, key):
+    v = data
+    for part in key.split("."):
+        if not isinstance(v, dict) or part not in v:
+            raise PolicyError(f"no key {key}")
+        v = v[part]
+    return v
+
+
+def fill(where, s, pol):
+    def one(m):
+        v, how = get(pol, m.group(1)), m.group(2)
+        if isinstance(v, list) and all(type(x) in (str, int) for x in v) and v and how:
+            v = [str(x) for x in v]
+            return (", ".join(v[:-1]) + f" {how} " + v[-1] if len(v) > 1 else v[0]) if how in ("and", "or") else how.join(v)
+        if type(v) not in (str, int) or how:
+            why = "a list and needs a joiner" if isinstance(v, list) and not how else "not one value"
+            raise PolicyError(f"rules: {where} names {m.group(0)}, which is {why}")
+        return re.sub(r"\{(\w+)\}", r"<\1>", str(v))
+    try:
+        out = re.sub(r"\{([a-z_]+(?:\.[a-z_]+)+)(?::([^{}]+))?\}", one, s)
+    except PolicyError as e:
+        raise PolicyError(e.args[0] if e.args[0].startswith("rules:") else f"rules: {where}: {e.args[0]} in config/policy.toml") from None
+    if "{" in out or "}" in out:
+        raise PolicyError(f"rules: {where} has a brace that names no config/policy.toml key")
+    return out
+
+
 def validate_rules(data, pol):
     keys("rules", data, ("schema", "intro", "section"))
     if type(data["schema"]) is not int or data["schema"] != 1:
@@ -181,18 +214,10 @@ def validate_rules(data, pol):
             if r["id"] in seen:
                 raise PolicyError(f"rules: two rules have the id {r['id']}")
             seen[r["id"]] = r["text"]
-    iss = pol["issues"]
-    need = {"patent-scope": [w for w in pol["patent"]["held_words"]],
-            "issue-close": [f"`{pol['merge']['repo']}`"],
-            "salvage-fixes": [f"`{iss['salvaged_from'].format(pr='<pr>')}`", f"`{iss['fixes'].format(issue='<issue>')}`"],
-            "patent-repo": [w for w in pol["patent"]["held_words"]] + [f"`{pol['merge']['repo']}`", f"`{pol['patent']['private_repo']}`"],
-            "merge-risk": ["|".join(pol["merge"]["tiers"])],
-            "lume-prune": [f"older than {pol['hourly']['lume_prune_age_h']}h"]}
-    for rid, words in need.items():
-        if rid not in seen:
-            raise PolicyError(f"rules: no rule {rid}, which states config/policy.toml's values")
-        if miss := [w for w in words if w.lower() not in seen[rid].lower()]:
-            raise PolicyError(f"rules: {rid} does not name {', '.join(miss)} from config/policy.toml")
+    data["intro"] = fill("intro", data["intro"], pol)
+    for sec in data["section"]:
+        for r in sec["rule"]:
+            r["text"] = fill(r["id"], r["text"], pol)
     return data
 
 
@@ -257,15 +282,6 @@ def model_for(want, data=None):
     if want not in seats:
         raise PolicyError(f"no role {want!r} in {PATH} (roles: {', '.join(seats)})")
     return seats[want]["provider"], seats[want]["model"]
-
-
-def get(data, key):
-    v = data
-    for part in key.split("."):
-        if not isinstance(v, dict) or part not in v:
-            raise PolicyError(f"no key {key}")
-        v = v[part]
-    return v
 
 
 def main(argv):

@@ -111,25 +111,42 @@ class Rules(unittest.TestCase):
     def test_render_of_named_rules_is_one_bullet_each_in_order(self):
         self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",
-                          "- The patent hold decides only which repo a change is pushed to. Work on pairing, Teleport and Keyvault normally."])
+                          "- The patent hold decides only which repo a change is pushed to. Work on teleport, keyvault and pairing normally."])
         with self.assertRaisesRegex(policy.PolicyError, "no rule nope"):
             policy.render(RULES, ["nope"])
 
-    def test_a_patent_or_risk_rule_that_drifts_from_policy_is_refused(self):
-        def bad(rid, old, new):
-            data = json.loads(json.dumps(RULES))
-            r = next(r for s in data["section"] for r in s["rule"] if r["id"] == rid)
-            self.assertIn(old, r["text"])
-            r["text"] = r["text"].replace(old, new)
-            return data
-        for rid, old, new, why in (("issue-close", "`trycua/cua`", "`trycua/other`", "`trycua/cua`"),
-                                   ("salvage-fixes", "`Fixes #<issue>`", "`Closes #<issue>`", "`Fixes #<issue>`"),
-                                   ("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
-                                   ("patent-scope", "Keyvault", "Vault", "keyvault"),
-                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human"),
-                                   ("lume-prune", "older than 24h", "older than 48h", "older than 24h")):
-            with self.subTest(rid=rid), self.assertRaisesRegex(policy.PolicyError, re.escape(why)):
-                policy.validate_rules(bad(rid, old, new), POLICY)
+    def test_a_rule_names_config_keys_and_the_reader_fills_them_in(self):
+        raw = (PKG / "config" / "rules.toml").read_text()
+        body = "\n".join(x for x in raw.splitlines() if not x.startswith("#"))
+        self.assertEqual([f"{t!r} restates {k}" for k, t in restated(body, POLICY, repo=True)], [])
+        for value in (POLICY["host"]["clone"], POLICY["host"]["holds"]):
+            self.assertNotIn(value, body)
+            self.assertIn(value, policy.render(RULES))
+        full = policy.render(RULES)
+        self.assertNotIn("{", full)
+        for want in ("`risk: <light|standard|deep|human>`", "`Salvaged from #<pr>`", "`Fixes #<issue>`", "older than 24h",
+                     "touches teleport, keyvault or pairing is", "Windows and macOS platform crates"):
+            self.assertIn(want, full)
+        pol = json.loads(json.dumps(POLICY))
+        pol["merge"]["tiers"], pol["host"]["unbuildable"], pol["patent"]["held_words"] = ["low", "high"], ["Windows"], ["vault"]
+        got = policy.render(policy.validate_rules(policy.read(policy.RULES), pol))
+        for want in ("`risk: <low|high>`", "- Windows platform crates", "Work on vault normally."):
+            self.assertIn(want, got)
+
+    def test_a_brace_that_names_no_key_is_refused(self):
+        for text, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.tiers}", "needs a joiner"),
+                          ("see {merge.repo:or}", "not one value"), ("see {merge}", "names no config"),
+                          ("a } b", "names no config")):
+            data = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": text}]}]}
+            with self.subTest(text=text), self.assertRaisesRegex(policy.PolicyError, why):
+                policy.validate_rules(data, POLICY)
+
+    def test_merging_is_one_rule_per_job(self):
+        ids = [r["id"] for s in RULES["section"] if s["title"] == "Merging" for r in s["rule"]]
+        self.assertEqual(ids[:5], ["merge-tick", "merge-reruns", "merge-fork-runs", "merge-reverts", "merge-closes"])
+        self.assertEqual(policy.render(RULES, ["merge-closes"]), "- Close only one of our own PRs that main or another PR has replaced.\n")
+
+    def test_a_duplicate_id_is_refused(self):
         dup = json.loads(json.dumps(RULES))
         dup["section"][0]["rule"].append(dict(dup["section"][0]["rule"][0]))
         with self.assertRaisesRegex(policy.PolicyError, "two rules have the id work-path"):
