@@ -13,7 +13,7 @@ _l = importlib.machinery.SourceFileLoader("queue_under_test", str(PKG / "bin" / 
 queue = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(queue)
 BASE = queue.policy.load()
-REPO, TIERS = BASE["merge"]["repo"], BASE["merge"]["tiers"]
+REPO = BASE["merge"]["repo"]
 H1, H2 = "a" * 40, "b" * 40
 
 
@@ -75,8 +75,8 @@ class Case(unittest.TestCase):
         with patch.object(queue, "candidates", return_value=cands), patch.object(queue, "open_prs", return_value=set(prs)):
             return queue.pickup(self.pol, dry, claim=self.forge.claim)
 
-    def add(self, ident, text="do the thing", priority=0):
-        return queue.add(self.pol, ident, text, priority, claim=self.forge.claim)
+    def add(self, ident, text="do the thing", priority=0, preapproved=False):
+        return queue.add(self.pol, ident, text, priority, preapproved, claim=self.forge.claim)
 
     def to_working(self, ident, thread="t-1"):
         queue.step(self.pol, "start", ident)
@@ -153,11 +153,6 @@ class Entry(Case):
         self.pick([cand(1), cand(2, labels=["urgent"])])
         self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "app-2")
 
-    def test_the_tier_is_the_strictest_named_and_the_strictest_of_all_when_none_is(self):
-        self.assertEqual(queue.strictest(TIERS, "light", "deep", "standard"), "deep")
-        self.assertEqual(queue.strictest(TIERS, None, "nope"), TIERS[-1])
-        self.assertEqual(queue.labelled(["risk:deep", "risk:nope", "bug"], TIERS), ["deep"])
-
 
 class Launch(Case):
     def test_the_highest_priority_goes_first_then_the_oldest(self):
@@ -209,21 +204,22 @@ class Merge(Case):
         super().setUp()
         self.pol["run"]["threads"] = 9
 
-    def passed(self, risk="light", labels=(), ident="a", pr=40):
-        self.add(ident)
+    def passed(self, said="auto", labels=(), ident="a", pr=40, preapproved=False):
+        self.add(ident, preapproved=preapproved)
         self.to_working(ident)
         self.to_verifying(ident, pr, labels=labels)
-        return queue.verified(self.pol, ident, "pass", risk)
+        return queue.verified(self.pol, ident, "pass", said)
 
-    def test_a_pass_on_a_low_risk_item_posts_the_status_on_that_head_and_arms_auto_merge(self):
+    def test_a_pass_as_auto_posts_the_status_on_that_head_and_arms_auto_merge(self):
         got = self.passed()
         self.assertEqual((got["state"], got["armed"], got["say"]), ("passed", True, "it merges itself once CI is green"))
         self.assertEqual(self.forge.statuses, [(H1, f"context={BASE['merge']['verified_check']}")])
         self.assertTrue(self.forge.prs[40]["auto"])
 
-    def test_high_risk_a_risk_label_on_the_pr_a_hold_or_no_branch_protection_leaves_it_to_the_owner(self):
-        self.assertEqual(self.passed(risk="deep")["say"], "the owner merges it: its risk is deep")
-        self.assertEqual(self.passed(labels=["risk:human"], ident="b", pr=41)["say"], "the owner merges it: its risk is human")
+    def test_a_pass_as_review_the_review_label_a_hold_or_no_branch_protection_leaves_it_to_the_owner(self):
+        self.assertEqual(self.passed(said="review")["say"], "the owner merges it: it needs a person's review")
+        label = [BASE["merge"]["review_label"]]
+        self.assertEqual(self.passed(labels=label, ident="b", pr=41)["say"], "the owner merges it: it needs a person's review")
         self.holds.write_text("hold | #42 | all | x\n")
         self.assertEqual(self.passed(ident="c", pr=42)["say"], "the owner merges it: it has a hold row")
         self.forge.protected = False
@@ -231,12 +227,26 @@ class Merge(Case):
         self.assertEqual([p.get("auto") for p in self.forge.prs.values()], [None, None, None, None])
         self.assertEqual(len(self.forge.statuses), 4)
 
+    def test_a_preapproved_item_merges_itself_whatever_the_verifier_or_its_thread_says_unless_it_is_held(self):
+        self.assertTrue(self.passed(said="review", preapproved=True)["armed"])
+        self.assertTrue(queue.raise_review(self.pol, "a")["armed"])
+        self.assertTrue(self.forge.prs[40]["auto"])
+        self.holds.write_text(f"preapprove | #41 | no | {H1} | the owner\npreapprove | #42 | no | {H2} | the owner\n")
+        self.assertTrue(self.passed(said="review", ident="b", pr=41)["armed"])
+        self.assertFalse(self.passed(said="review", ident="c", pr=42)["armed"])
+        self.holds.write_text("hold | #43 | all | x\n")
+        self.assertEqual(self.passed(ident="d", pr=43, preapproved=True)["say"], "the owner merges it: it has a hold row")
+
+    def test_an_issue_with_a_preapproved_label_enters_preapproved(self):
+        self.pick([cand(1, labels=BASE["merge"]["preapproved_labels"]), cand(2), cand(3, "review", labels=BASE["merge"]["preapproved_labels"])])
+        self.assertEqual({k: v["preapproved"] for k, v in self.items().items()}, {"app-1": True, "app-2": False, f"app-3-review-{H1[:7]}": False})
+
     def test_a_head_that_moved_while_it_was_verified_gets_no_status(self):
         self.add("a")
         self.to_working("a")
         self.to_verifying("a", 40)
         self.forge.prs[40]["head"] = H2
-        got = queue.verified(self.pol, "a", "pass", "light")
+        got = queue.verified(self.pol, "a", "pass", "auto")
         self.assertEqual((got["state"], self.forge.statuses), ("working", []))
 
     def test_a_failed_verification_goes_back_to_the_thread_until_the_attempts_are_spent(self):
@@ -250,15 +260,15 @@ class Merge(Case):
         with self.assertRaises(queue.Refused):
             queue.step(self.pol, "ready", "a", pr=40)
 
-    def test_raising_the_risk_turns_auto_merge_off_and_a_later_pass_does_not_arm_it(self):
+    def test_asking_for_review_turns_auto_merge_off_and_a_later_pass_does_not_arm_it(self):
         self.passed()
-        got = queue.raise_risk(self.pol, "a")
-        self.assertEqual((got["armed"], got["risk"], self.forge.prs[40]["auto"]), (False, TIERS[-1], False))
+        got = queue.raise_review(self.pol, "a")
+        self.assertEqual((got["armed"], got["review"], self.forge.prs[40]["auto"]), (False, True, False))
         self.add("b")
         self.to_working("b", "t-b")
-        queue.raise_risk(self.pol, "b")
+        queue.raise_review(self.pol, "b")
         self.to_verifying("b", 41)
-        self.assertEqual(queue.verified(self.pol, "b", "pass", "light")["armed"], False)
+        self.assertEqual(queue.verified(self.pol, "b", "pass", "auto")["armed"], False)
 
     def test_sweep_closes_merged_items_sends_a_new_head_back_to_work_and_disarms_a_held_one(self):
         self.passed()
@@ -291,13 +301,15 @@ class Cli(Case):
                 patch("sys.stdout", out):
             self.assertEqual(queue.main(["add", "a", "--priority", "3"], stdin=io.StringIO("task")), 0)
             self.assertEqual(queue.main(["add", "b", "--priority"], stdin=io.StringIO("task")), 2)
+            self.assertEqual(queue.main(["add", "c", "--preapproved", "--priority", "3"], stdin=io.StringIO("task")), 0)
+            self.assertEqual(queue.main(["add", "d", "--preapproved", "--preapproved"], stdin=io.StringIO("task")), 2)
             self.assertEqual(queue.main(["start", "a"]), 0)
             self.assertEqual(queue.main(["claim", "a", "t-1"]), 0)
             self.forge.prs[40] = {"head": H1}
             self.assertEqual(queue.main(["ready", "a", "40"]), 0)
             self.assertEqual(queue.main(["verified", "a", "pass"]), 2)
             self.assertEqual(queue.main(["verified", "a", "pass", "extreme"]), 2)
-            self.assertEqual(queue.main(["verified", "a", "pass", "light"]), 0)
+            self.assertEqual(queue.main(["verified", "a", "pass", "auto"]), 0)
             self.assertEqual(queue.main(["sweep"]), 0)
             self.assertEqual(queue.main(["list"]), 0)
             self.assertEqual(queue.main(["next"]), 0)

@@ -75,8 +75,8 @@ REPO = {
     "merge": {
         "gate_check": (lambda v: text(v), "a check name"),
         "verified_check": (lambda v: text(v), "a status name"),
-        "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
-        "auto_tiers": (words, "a list of distinct lowercase words"),
+        "review_label": (lambda v: text(v), "a label name"),
+        "preapproved_labels": (names, "a list of distinct label names"),
     },
     "issues": {
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
@@ -127,8 +127,8 @@ def validate_repo(name, data):
     sections(name, data, REPO)
     if name.lower() == data["patent"]["private_repo"].lower():
         raise PolicyError("patent.private_repo must differ from merge.repo")
-    if extra := [t for t in data["merge"]["auto_tiers"] if t not in data["merge"]["tiers"]]:
-        raise PolicyError(f"merge.auto_tiers names {', '.join(extra)}, which merge.tiers lacks")
+    if data["merge"]["review_label"] in data["merge"]["preapproved_labels"]:
+        raise PolicyError("merge.review_label cannot also be one of merge.preapproved_labels")
     return data
 
 

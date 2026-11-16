@@ -4,7 +4,7 @@
 # coding session gets, and `bin/policy rules <id>...` only the named rules, which the subagent tool puts where an
 # agents/<name>.md says {{rules: <id>, ...}}.
 # A rule never writes a config value out. It names the key in braces and bin/policy fills it in: `{merge.repo}`
-# for one value, `{patent.held_words:or}` or `:and` for a list read as a phrase, `{merge.tiers:|}` for a list joined by
+# for one value, `{patent.held_words:or}` or `:and` for a list read as a phrase, `{merge.preapproved_labels:|}` for a list joined by
 # the text after the colon. `bin/policy check` refuses an unknown key, a duplicate id and a brace that names no key.
 # Strings are TOML literal strings, so backticks and quotes need no escaping. Never reword a hold, patent or merge rule
 # without the owner's explicit ok.
@@ -145,8 +145,8 @@ id = "merge-no-verify-lines"
 text = '''Do not stamp `verify:` or `verify-ran:` lines in the PR body.'''
 
 [[section.rule]]
-id = "merge-risk"
-text = '''The verifier names the PR's risk when it passes it, one of `{merge.tiers:|}`, mildest first: the further a wrong change would reach and the harder it would be to undo, the stricter the tier. A PR at {merge.auto_tiers:or} merges itself once it is verified and CI is green. Any other tier waits for {people.owner}. If you think the change needs a person whatever the verifier says, run `bin/queue raise <id>`.'''
+id = "merge-review"
+text = '''The verifier passes a PR as `auto` or `review`. It says `review` when a wrong change would reach far or be hard to undo, or when it would not defend merging it unread; otherwise `auto`. An `auto` PR merges itself once it is verified and CI is green. A `review` PR, and any PR labelled `{merge.review_label}`, waits for {people.owner}. A preapproved item merges itself either way: an issue labelled {merge.preapproved_labels:or}, a task the orchestrator added as preapproved, or a `preapprove` row for that head in the holds file. If you think the change needs a person whatever the verifier says, run `bin/queue raise <id>`.'''
 
 [[section.rule]]
 id = "merge-existing"

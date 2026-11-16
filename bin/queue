@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
     "  queue pickup [--dry]             read the repo and queue what this machine takes\n"
-    "  queue add <id> [--priority N]    queue a task from the orchestrator; its text on stdin\n"
+    "  queue add <id> [--priority N] [--preapproved]\n"
+    "                                   queue a task from the orchestrator; its text on stdin\n"
     "  queue next                       what to launch now, what to verify and what to recover, as JSON\n"
     "  queue start <id>                 reserve the next item before launching its thread\n"
     "  queue claim <id> <thread>        the thread now working a started item\n"
     "  queue requeue <id>               a started item whose thread did not start\n"
     "  queue ready <id> <pr>            a working item's PR is open and waits for the verifier\n"
-    "  queue verified <id> pass <tier>  the verifier passed that head and named its risk\n"
+    "  queue verified <id> pass auto    the verifier passed that head and it may merge itself\n"
+    "  queue verified <id> pass review  the verifier passed that head and a person must review it\n"
     "  queue verified <id> fail         the verifier found something: back to its thread\n"
     "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
     "  queue sweep                      close merged items, and send a passed item with a new head back to work\n"
@@ -73,13 +75,15 @@ def read_text(path):
 
 
 def holds(text):
-    h = {"hold": set(), "skip": set(), "review_only": set(), "read": text is not None}
+    h = {"hold": set(), "skip": set(), "review_only": set(), "preapproved": {}, "read": text is not None}
     for line in (text or "").splitlines():
         f = [x.strip() for x in line.split("|")]
         if line.lstrip().startswith("#") or len(f) < 2:
             continue
         if f[0] == "hold" and f[1].lstrip("#").isdigit():
             h["hold"].add(int(f[1].lstrip("#")))
+        elif f[0] == "preapprove" and f[1].lstrip("#").isdigit() and len(f) > 3:
+            h["preapproved"][int(f[1].lstrip("#"))] = f[3]
         elif f[0] in ("skip-author", "review-only"):
             h["skip" if f[0] == "skip-author" else "review_only"].add(f[1].lower())
     return h
@@ -135,15 +139,6 @@ def skip(c, h, prs, items, host):
     return None
 
 
-def strictest(tiers, *named):
-    known = [t for t in named if t in tiers]
-    return max(known, key=tiers.index) if known else tiers[-1]
-
-
-def labelled(labels, tiers):
-    return [x[len("risk:"):] for x in labels if x.startswith("risk:") and x[len("risk:"):] in tiers]
-
-
 def task(c, h, pol):
     repo, me, iss = pol["merge"]["repo"], pol["people"]["me"], pol["issues"]
     if c["kind"] == "issue":
@@ -167,8 +162,8 @@ def task(c, h, pol):
             f"survives, the body's `{frm}` line is what credits them.")
 
 
-def item(kind, n, source, priority, text, title):
-    return {"state": "queued", "kind": kind, "n": n, "source": source, "risk": None, "priority": priority, "raised": False,
+def item(kind, n, source, priority, text, title, preapproved=False):
+    return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved, "review": False,
             "task": text, "title": title, "thread": None, "pr": None, "head": None, "fixes": 0, "armed": False, "at": now()}
 
 
@@ -219,13 +214,14 @@ def pickup(pol, dry, claim=forge_claim):
                 (errors if why.startswith("cannot ") else skipped).append(why if why.startswith("cannot ") else {"id": c["id"], "why": why})
                 continue
             priority = 100 if "urgent" in c["labels"] else 0
-            items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"])
+            pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
+            items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"], pre)
             queued.append({"id": c["id"], "priority": priority})
         return {"queued": queued, "skipped": skipped, "errors": errors}, bool(queued) and not dry
     return locked(pol, go)
 
 
-def add(pol, ident, text, priority, claim=forge_claim):
+def add(pol, ident, text, priority, preapproved=False, claim=forge_claim):
     if not re.fullmatch(ID, ident) or not text.strip():
         raise Refused("an id of letters, digits, . _ - and a task on stdin")
 
@@ -235,7 +231,7 @@ def add(pol, ident, text, priority, claim=forge_claim):
         why = claim(pol["merge"]["repo"], ident)
         if why:
             raise Refused(f"{ident}: {why}")
-        items[ident] = item("task", None, "orchestrator", priority, text.strip(), text.strip().splitlines()[0][:120])
+        items[ident] = item("task", None, "orchestrator", priority, text.strip(), text.strip().splitlines()[0][:120], preapproved)
         return items[ident], True
     return locked(pol, go)
 
@@ -312,7 +308,7 @@ def protected(pol):
         return False
 
 
-def verified(pol, ident, result, said=None):
+def verified(pol, ident, result, said="review"):
     m, h = pol["merge"], holds(read_text(pol["host"]["holds"]))
 
     def go(items):
@@ -331,29 +327,29 @@ def verified(pol, ident, result, said=None):
                         "-f", f"context={m['verified_check']}", "-f", "description=the verifier passed this head")
         if rc:
             raise Refused(f"cannot post {m['verified_check']} on {it['head'][:9]}: {err}")
-        risk = strictest(m["tiers"], said, *labelled([x["name"] for x in live["labels"]], m["tiers"]))
-        risk = m["tiers"][-1] if it["raised"] else risk
-        why = None if risk in m["auto_tiers"] else f"its risk is {risk}"
+        pre = it["preapproved"] or h["preapproved"].get(it["pr"]) == it["head"]
+        review = it["review"] or said != "auto" or m["review_label"] in [x["name"] for x in live["labels"]]
+        why = "it needs a person's review" if review and not pre else None
         why = why or ("it has a hold row" if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"] else None)
         why = why or (None if protected(pol) else f"branch protection does not require {m['gate_check']} and {m['verified_check']}")
         if not why:
             rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--auto", "--squash")
             why = f"auto-merge could not be armed: {err}" if rc else None
-        it.update(state="passed", risk=risk, armed=not why, at=now())
+        it.update(state="passed", armed=not why, at=now())
         return {**it, "say": "it merges itself once CI is green" if not why else f"the owner merges it: {why}"}, True
     return locked(pol, go)
 
 
-def raise_risk(pol, ident):
+def raise_review(pol, ident):
     def go(items):
         it = items.get(ident)
         if not it or it["state"] not in ("working", "verifying", "passed"):
             raise Refused(f"{ident} is {it['state'] if it else 'not queued'}: nothing to raise")
-        if it["armed"]:
+        if it["armed"] and not it["preapproved"]:
             rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--disable-auto")
             if rc:
                 raise Refused(f"cannot disarm auto-merge on {it['pr']}: {err}")
-        it.update(raised=True, armed=False, risk=pol["merge"]["tiers"][-1])
+        it.update(review=True, armed=it["armed"] and it["preapproved"])
         return it, True
     return locked(pol, go)
 
@@ -389,9 +385,10 @@ def main(argv, stdin=sys.stdin):
             out = pickup(pol, len(argv) == 2)
             return say(out) or (1 if out["errors"] else 0)
         if argv[:1] == ["add"] and len(argv) >= 2:
-            opts = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1, 2)}
-            if set(opts) <= {"--priority"} and len(argv) % 2 == 0 and re.fullmatch(r"-?\d+", opts.get("--priority", "0")):
-                return say(add(pol, argv[1], stdin.read(), int(opts.get("--priority", "0"))))
+            rest = [a for a in argv[2:] if a != "--preapproved"]
+            prio = not rest or (len(rest) == 2 and rest[0] == "--priority" and re.fullmatch(r"-?\d+", rest[1]))
+            if argv[2:].count("--preapproved") <= 1 and prio:
+                return say(add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv))
         if argv == ["next"]:
             return say(next_up(pol))
         if len(argv) == 2 and argv[0] in ("start", "requeue"):
@@ -400,10 +397,10 @@ def main(argv, stdin=sys.stdin):
             return say(step(pol, "claim", argv[1], thread=argv[2]))
         if len(argv) == 3 and argv[0] == "ready" and argv[2].isdigit():
             return say(step(pol, "ready", argv[1], pr=int(argv[2])))
-        if argv[:1] == ["verified"] and (argv[2:] == ["fail"] or (len(argv) == 4 and argv[2] == "pass" and argv[3] in pol["merge"]["tiers"])):
-            return say(verified(pol, argv[1], argv[2], argv[3] if argv[2] == "pass" else None))
+        if argv[:1] == ["verified"] and (argv[2:] == ["fail"] or (len(argv) == 4 and argv[2] == "pass" and argv[3] in ("auto", "review"))):
+            return say(verified(pol, argv[1], argv[2], argv[3] if argv[2] == "pass" else "review"))
         if len(argv) == 2 and argv[0] == "raise":
-            return say(raise_risk(pol, argv[1]))
+            return say(raise_review(pol, argv[1]))
         if argv == ["sweep"]:
             return say(sweep(pol))
         if argv == ["list"]:

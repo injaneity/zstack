@@ -106,18 +106,18 @@ class Rules(unittest.TestCase):
             self.assertIn(value, policy.render(RULES))
         full = policy.render(RULES)
         self.assertNotIn("{", full)
-        for want in ("one of `light|standard|deep|human`", "at light or standard merges itself", "`Salvaged from #<pr>`", "`Fixes #<issue>`",
+        for want in ("labelled `needs-review`, waits for Robin", "an issue labelled preapproved, a task", "`Salvaged from #<pr>`", "`Fixes #<issue>`",
                      "touches skyhook, vaultkey or sealing is", "(only real failures go to Robin)"):
             self.assertIn(want, full)
         pol = json.loads(json.dumps(POLICY))
-        pol["merge"].update(tiers=["low", "high"], auto_tiers=["low"])
+        pol["merge"].update(review_label="stop", preapproved_labels=["go", "ship"])
         pol["people"]["owner"], pol["patent"]["held_words"] = "Sam", ["vault"]
         got = policy.render(policy.validate_rules(policy.read(policy.RULES), pol))
-        for want in ("one of `low|high`", "without Sam's explicit ok", "Work on vault normally."):
+        for want in ("labelled `stop`", "labelled go or ship,", "without Sam's explicit ok", "Work on vault normally."):
             self.assertIn(want, got)
 
     def test_a_brace_that_names_no_key_is_refused(self):
-        for text, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.tiers}", "needs a joiner"),
+        for text, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.preapproved_labels}", "needs a joiner"),
                           ("see {merge.repo:or}", "not one value"), ("see {merge}", "names no config"),
                           ("a } b", "names no config")):
             data = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": text}]}]}

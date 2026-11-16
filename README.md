@@ -9,7 +9,7 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 - **The stack** is what every coding thread loads: `skills/`, `agents/`, the Hard rules, and the guard that enforces them. It names no repo. It reaches the rest only through `bin/policy`.
 - **The queue** is one program per machine, `bin/queue`, with its steps model-checked in `model/Queue.tla`. Work enters two ways: the pickup reads the repo for issues assigned to us and reviews requested of us, and the orchestrator above the machines adds a task by hand. Each machine takes the labels its config names, and a claim on the forge keeps two machines off one item. The highest priority goes first.
 - **The dispatcher** is one scheduled thread per machine (`dispatch/playbook.md`). It launches what the queue prints, has the verifier check each PR, and relays the results. It decides nothing.
-- **Merging** is the queue's. The verifier passes a head and names its risk. The queue posts a `verified` status on that head, and a low-risk PR then merges itself once CI is green; a higher tier waits for the owner. A new push clears the status.
+- **Merging** is the queue's. The verifier passes a head as `auto` or `review`. The queue posts a `verified` status on that head. An `auto` PR, or a preapproved one, then merges itself once CI is green; a `review` PR waits for the owner. A new push clears the status.
 - **The services** are not threads: the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and the two checks that keep a machine's checkout at main (`services/ensure-main`, `services/check-parity`).
 
 ## install
@@ -34,7 +34,7 @@ Config has three layers, and `bin/policy` is the one reader of all of them (`che
 
 - **The stack** ships in this package: `config/rules.toml` (the Hard rules) and `config/state.toml` (the state files the services keep).
 - **A machine** is `machines/<hostname>.toml`: the models its roles run on, its thread cap, where it sends a wake, and each repo it works on with its clone, its state folder and the labels this machine picks up. `ZSTACK_MACHINE` names another file; `machines/default.toml` is the fallback.
-- **A repo** is `repos/<owner>/<name>/policy.toml`: its required checks and risk tiers, who "we" are, the patent hold's words, and whether an outside PR is salvaged or sent back. An optional `rules.toml` beside it adds sections to the Hard rules.
+- **A repo** is `repos/<owner>/<name>/policy.toml`: its required checks, the labels that force a review or preapprove a merge, who "we" are, the patent hold's words, and whether an outside PR is salvaged or sent back. An optional `rules.toml` beside it adds sections to the Hard rules.
 
 `config/` ships an example of the last two: a machine working on `acme/app`. Keep your own in a private repo with the same `machines/` and `repos/` folders, clone it on each machine, and point `ZSTACK_CONFIG` at it. A missing or invalid one stops every reader. The repo in play is `ZSTACK_REPO`, else the `origin` of the directory a command runs in, else the machine's only repo.
 
