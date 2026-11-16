@@ -101,6 +101,7 @@ class Hourly(unittest.TestCase):
         rule = subprocess.run([str(BIN / "policy"), "rules", "salvage-fixes"], capture_output=True, text=True).stdout
         self.assertIn(rule[2:].strip(), Path(r.stdout.strip()).read_text().splitlines())
         self.assertIn("`Fixes #<issue>`", rule)
+        self.assertIn("`Refs #<issue>`", rule)
 
     def test_queue_then_hourly_shows_it_and_launch_starts_it_and_logs_it(self):
         self.sh("new-brief", "q1", "research", stdin=TASK)

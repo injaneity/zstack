@@ -288,14 +288,16 @@ class Pickup(unittest.TestCase):
             {"number": 705, "state": "MERGED", "mergedAt": "2026-07-01T00:00:00Z", "body": "Salvaged from #605",
              "closingIssuesReferences": []},
             {"number": 706, "state": "CLOSED", "mergedAt": None, "body": "Salvaged from #606", "closingIssuesReferences": []},
-            {"number": 707, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #9999", "closingIssuesReferences": []}]))
+            {"number": 707, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #9999", "closingIssuesReferences": []},
+            {"number": 708, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #608\n\nRefs #22\n", "closingIssuesReferences": []}]))
         (self.t / "sources.json").write_text(json.dumps([
             {"number": 601, "state": "OPEN", "closingIssuesReferences": ref(10, 11)},
             {"number": 602, "state": "OPEN", "closingIssuesReferences": ref(12)},
             {"number": 603, "state": "OPEN", "closingIssuesReferences": ref(14, 15)},
             {"number": 604, "state": "OPEN", "closingIssuesReferences": ref(16)},
             {"number": 605, "state": "OPEN", "closingIssuesReferences": ref(18)},
-            {"number": 606, "state": "OPEN", "closingIssuesReferences": ref(20)}]))
+            {"number": 606, "state": "OPEN", "closingIssuesReferences": ref(20)},
+            {"number": 608, "state": "OPEN", "closingIssuesReferences": ref(22)}]))
         self.pickup()
         report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
         chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
@@ -359,6 +361,8 @@ class Pickup(unittest.TestCase):
         self.pickup()
         brief = (self.root / "review" / "cua-310-review-136aaaa" / "brief.md").read_text()
         self.assertIn("A salvage PR's body carries `Salvaged from #310` and a `Fixes #<issue>` line for each issue #310 fixes", brief)
+        self.assertIn("Decide that from #310's own body, not from closingIssuesReferences", brief)
+        self.assertIn("An issue #310 names but says it does not fix gets `Refs #<issue>` instead.", brief)
 
     def test_a_peer_behind_main_is_fast_forwarded_and_flagged_only_when_that_fails(self):
         self.peer(at_main=False)

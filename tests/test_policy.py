@@ -88,6 +88,7 @@ class Policy(unittest.TestCase):
             ('label_hosts = { Linux = "vm", macOS = "mini" }', 'label_hosts = { Linux = "" }', "pickup.label_hosts must be a table"),
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
+            ('refs = "Refs #{issue}"', 'refs = "Refs #{n}"', "issues.refs must be one line with {issue} once"),
             ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
             ('since = "2026-07-22"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
             ('[issues]\nrepo = "trycua/cua"', '[issues]\nrepo = "cua"', "issues.repo must be owner/name"),

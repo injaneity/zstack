@@ -70,13 +70,16 @@ preapprove_tiers = ["deep", "human"]
 # Closing trycua/cua issues and linking salvages to them (Zane, 13 Nov 2026 15:31 SGT, "go ahead with all", on the
 # issue-close audit; Hard rules `issue-close` and `salvage-fixes`). `repo` is whose issues rule-guard lets a session close
 # by hand only with a comment naming a PR. A salvage PR's body names its source with `salvaged_from` and carries `fixes`
-# once per issue the source fixes, so GitHub closes the issue when the salvage merges. bin/pickup writes both lines into
-# every review brief, and each pass lists for the chat an open salvage that lacks a `fixes` line for an open issue, and,
-# for salvages merged on or after `since`, an issue left open or a source PR still open (playbooks/hourly.md step 7).
+# once per issue the source fixes, so GitHub closes the issue when the salvage merges. An issue GitHub links to the source
+# but whose body says it does not fix gets `refs` instead, and the pass leaves it alone. bin/pickup writes these lines into
+# every review brief, and each pass lists for the chat an open salvage that lacks a `fixes` or `refs` line for an issue
+# GitHub links to its source, and, for salvages merged on or after `since`, an issue left open or a source PR still open
+# (playbooks/hourly.md step 7).
 # `since` is the first salvage's merge day (cua#2406), so the pass covers every salvage (Zane, 13 Nov 2026 18:51 SGT).
 [issues]
 repo = "trycua/cua"
 fixes = "Fixes #{issue}"
+refs = "Refs #{issue}"
 salvaged_from = "Salvaged from #{pr}"
 since = "2026-07-22"
 

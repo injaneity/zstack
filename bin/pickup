@@ -138,7 +138,8 @@ def rule(c, h, prs, live, zane, hosts):
 
 
 def salvage_lines(n):
-    return ISSUES["salvaged_from"].format(pr=n), ISSUES["fixes"].format(issue="<issue>")
+    return (ISSUES["salvaged_from"].format(pr=n), ISSUES["fixes"].format(issue="<issue>"),
+            ISSUES["refs"].format(issue="<issue>"))
 
 
 SOURCES_PER_QUERY = 50
@@ -174,6 +175,7 @@ def salvage_check(errors, h):
     ours = gh(errors, "pr", "list", "-R", REPO, "--author", ME, "--state", "all", "--search", f'"{head.strip()}" in:body',
               "--limit", "1000", "--json", "number,state,body,mergedAt,closingIssuesReferences")
     ours = [p for p in ours if p["state"] == "OPEN" or (p["state"] == "MERGED" and (p["mergedAt"] or "") >= ISSUES["since"])]
+    refs_rx = re.compile(r"^\s*" + re.escape(ISSUES["refs"]).replace(re.escape("{issue}"), r"(\d+)") + r"\s*$", re.I | re.M)
     named = [(p, list(dict.fromkeys(int(x) for x in src_rx.findall(p["body"] or "")))) for p in ours]
     sources = source_prs(errors, sorted({n for _, ns in named for n in ns}))
     items = []
@@ -183,7 +185,7 @@ def salvage_check(errors, h):
             src = sources.get(n)
             if src is None:
                 continue
-            linked = {x["number"] for x in p.get("closingIssuesReferences") or []}
+            linked = {x["number"] for x in p.get("closingIssuesReferences") or []} | {int(x) for x in refs_rx.findall(p["body"] or "")}
             want = [x for x in (src.get("closingIssuesReferences") or {}).get("nodes") or [] if x["number"] not in linked]
             if p["state"] == "OPEN":
                 if want:
@@ -218,7 +220,7 @@ def task(c, h):
     teammate = c["author"]["login"].lower() in h["review_only"]
     who = "teammate (review-only: a first review and nothing else)" if teammate else \
         "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
-    frm, fixes = salvage_lines(c["n"])
+    frm, fixes, refs = salvage_lines(c["n"])
     keep = "" if teammate else (
         f"A salvage keeps {c['author']['login']}'s commits as authored: cherry-pick or rebase their commits, then put our "
         "fixes on top as separate commits. Never re-author their work or squash it into our commit. If none of their "
@@ -227,9 +229,10 @@ def task(c, h):
     return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
             f"requested of {ME}. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
             "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n"
-            f"A salvage PR's body carries `{frm}` and a `{fixes}` line for each issue #{c['n']} fixes or was opened for "
-            f"(`gh pr view {c['n']} -R {REPO} --json closingIssuesReferences`, and the issues its body names), "
-            "so GitHub closes them when the salvage merges.\n" + keep)
+            f"A salvage PR's body carries `{frm}` and a `{fixes}` line for each issue #{c['n']} fixes or was opened for, "
+            f"so GitHub closes them when the salvage merges. Decide that from #{c['n']}'s own body, not from "
+            "closingIssuesReferences: GitHub links any issue after a closing word, even one the body says it does not fix. "
+            f"An issue #{c['n']} names but says it does not fix gets `{refs}` instead.\n" + keep)
 
 
 
