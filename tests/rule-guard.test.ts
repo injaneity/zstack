@@ -431,10 +431,10 @@ test("the real holds paths are this host's config, matched on the filesystem wit
 	}
 });
 
-test("the owned repo is config/policy.toml's merge.repo, and an unreadable policy refuses every merge and ready", () => {
+test("the owned repos are every repo the config has, and an unreadable config refuses every merge and ready", () => {
 	assert.deepEqual(OWNED, new Set(["acme/app"]));
-	assert.deepEqual(mergeOwned(() => '{"merge": {"repo": "Acme/App"}}'), new Set(["acme/app"]));
-	for (const dump of [() => { throw new Error("policy: missing merge.repo"); }, () => "not json", () => "{}", () => '{"merge": {"repo": "app"}}'])
+	assert.deepEqual(mergeOwned(() => '{"repos": ["Acme/App", "acme/tool"]}'), new Set(["acme/app", "acme/tool"]));
+	for (const dump of [() => { throw new Error("policy: missing merge.repo"); }, () => "not json", () => "{}", () => '{"repos": ["app"]}', () => '{"repos": []}', () => '{"merge": {"repo": "acme/app"}}'])
 		assert.equal(mergeOwned(dump), null);
 	for (const c of ["gh pr merge 33 -R injaneity/zstack --squash", "gh pr ready 1", "gh api -X PUT repos/x/y/pulls/1/merge",
 		"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"])

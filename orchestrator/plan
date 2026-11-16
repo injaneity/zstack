@@ -29,7 +29,7 @@ EMPTY = {"items": {}}
 
 
 def root():
-    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or "~/zstack"))
+    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or policy.load()["host"]["root"]))
 
 
 def gh(errors, *args):
@@ -123,13 +123,19 @@ def task(c, h, pol):
         return (f"{repo}#{c['n']}{head}: {c['title']}\n{c['url']}\n\nKind: our PR is red at a head we pushed. Diagnose the "
                 "failing checks, fix the cause, push, and have the verifier check the new head. If main or another PR already "
                 "has its change, close it instead and say what replaced it.")
+    salvage = pol["review"]["outside"] == "salvage"
+    outside = "salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes" if salvage else \
+        "request changes on a fixable PR, and do not rewrite it as a PR of ours"
     who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"].lower() in h["review_only"] else \
-        "outside contributor (salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes)"
-    return (f"{repo}#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
+        f"outside contributor ({outside})"
+    text = (f"{repo}#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
             f"requested of {me}. Run playbooks/pull-requests.md Verify. Post nothing under the owner's name: put every comment "
-            "for the author under a `drafts:` section of your final report.\n"
-            f"A salvage PR's body carries `{iss['salvaged_from'].format(pr=c['n'])}` and a `{iss['fixes'].format(issue='<n>')}` "
-            f"line for each issue #{c['n']} fixes or was opened for, so the forge closes them when the salvage merges.")
+            "for the author under a `drafts:` section of your final report.")
+    if not salvage:
+        return text
+    return (f"{text}\nA salvage PR's body carries `{iss['salvaged_from'].format(pr=c['n'])}` and a "
+            f"`{iss['fixes'].format(issue='<n>')}` line for each issue #{c['n']} fixes or was opened for, so the forge closes "
+            "them when the salvage merges.")
 
 
 def thread_for(c, items):

@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def config():
-    r = subprocess.run([sys.executable, "-I", os.path.join(PKG, "bin", "policy"), "get", "wake"], capture_output=True, text=True)
+def config(key="wake"):
+    r = subprocess.run([sys.executable, "-I", os.path.join(PKG, "bin", "policy"), "get", key], capture_output=True, text=True)
     return json.loads(r.stdout) if r.returncode == 0 else {}
 
 
@@ -27,7 +27,7 @@ FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r".+", "prs": r"\S+"}
 
 
 def root():
-    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or "~/zstack"))
+    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or config("host").get("root") or "~/zstack"))
 
 
 def now():

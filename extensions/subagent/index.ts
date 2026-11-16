@@ -13,7 +13,7 @@ import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { buildChildPrompt, expandRules, onSeatProblem, ruleIds } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const MODELS_CONFIG = path.join(PACKAGE_DIR, "config", "policy.toml");
+const MODELS_CONFIG = "the machine file's [models]";
 const POLICY = path.join(PACKAGE_DIR, "bin", "policy");
 const CHILD_SESSIONS = path.join(getAgentDir(), "sessions", "subagents");
 const rawDepth = process.env.PI_SUBAGENT_DEPTH ?? "";
@@ -313,7 +313,7 @@ const SubagentParams = Type.Object({
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 	variant: Type.Optional(
-		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from config/policy.toml [models]" }),
+		Type.Integer({ minimum: 1, description: "Which seat of a role with several (designer: 1 or 2), from the machine file's [models]" }),
 	),
 });
 

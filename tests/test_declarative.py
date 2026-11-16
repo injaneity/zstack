@@ -138,11 +138,11 @@ class Rules(unittest.TestCase):
 class NoRestatedValues(unittest.TestCase):
     def test_skills_name_config_keys_instead_of_values(self):
         found = [f"{f}: {t!r} restates {k}" for f in prose() for k, t in restated((PKG / f).read_text(), POLICY)]
-        self.assertEqual(found, [], "name the config/policy.toml key instead of its value")
+        self.assertEqual(found, [], "name the the config key instead of its value")
 
     def test_code_reads_config_keys_instead_of_values(self):
         found = [f"{f}: {t!r} restates {k}" for f in code() for k, t in restated((PKG / f).read_text(), POLICY, repo=True)]
-        self.assertEqual(found, [], "read the value from config/policy.toml (bin/policy) instead of writing it again")
+        self.assertEqual(found, [], "read the value from the config (bin/policy) instead of writing it again")
 
     def test_the_code_check_catches_what_the_code_said_before(self):
         old = {'"Your PR acme/app#{pr} is red at {head}"': "merge.repo", 'notes.append("ci-gate SUCCESS")': "merge.gate_check",

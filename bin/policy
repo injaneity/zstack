@@ -2,15 +2,17 @@
 import json
 import os
 import re
+import socket
+import subprocess
 import sys
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
-    '  policy check          parse and validate all three: one line, exit 1 when one is not valid\n'
+    '  policy check          parse and validate the machine file, each repo it works on, the rules and the state files\n'
     '  policy seat <role>[:<n>]  "<provider> <model>" for a role from [models]; a role with several seats needs :<n>\n'
     '  policy seats          every role and seat\n'
-    '  policy get <key>      one policy.toml value by dotted key (`merge.repo`, `models.designer`): a string or number as is, else JSON\n'
-    '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
+    '  policy get <key>      one config value by dotted key (`merge.repo`, `models.designer`): a string or number as is, else JSON\n'
+    '  policy dump           the merged config as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
     "  policy rules          every Hard rule as markdown, as the orchestrator reads them\n"
     "  policy rules --thread the same without the rules marked for the orchestrator: a coding session's system prompt\n"
     '  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)'
@@ -21,9 +23,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.join(PKG, "vendor"))
     import tomli as tomllib
 CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "config"))
-PATH = os.path.join(CONFIG, "policy.toml")
-RULES = os.path.join(CONFIG, "rules.toml")
-STATE = os.path.join(CONFIG, "state.toml")
+RULES = os.path.join(PKG, "config", "rules.toml")
+STATE = os.path.join(PKG, "config", "state.toml")
 
 
 class PolicyError(Exception):
@@ -55,14 +56,15 @@ def seats(v):
 
 
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
-SCHEMA = {
+PATHISH = (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/")
+MACHINE = {
     "models": {role: SEAT for role in ("coding", "orchestrator", "explorer", "designer", "verifier")},
-    "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "run": {"idle_min": (pos_int, "a positive integer")},
-    "host": {
-        "clone": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
-        "holds": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
-    },
+    "wake": {"url": (lambda v: text(v) and v.startswith("https://"), "an https URL"), "key_file": PATHISH},
+}
+PLACE = {"clone": PATHISH, "root": PATHISH}
+REPO = {
+    "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "people": {"me": (lambda v: text(v), "a login"), "owner": (lambda v: text(v), "a name")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
@@ -70,7 +72,6 @@ SCHEMA = {
         "private_repo": (repo, "owner/name"),
     },
     "merge": {
-        "repo": (repo, "owner/name"),
         "gate_check": (lambda v: text(v), "a check name"),
         "never_rerun": (names, "a list of distinct check names"),
         "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
@@ -83,30 +84,48 @@ SCHEMA = {
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5],
                            "one line ending in ` #{pr}`, with no other placeholder"),
     },
-    "wake": {
-        "url": (lambda v: text(v) and v.startswith("https://"), "an https URL"),
-        "key_file": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
-    },
+    "review": {"outside": (lambda v: v in ("salvage", "request-changes"), "salvage or request-changes")},
 }
 
 
-def validate(data):
+def sections(where, data, schema, extra=()):
     if type(data.get("schema")) is not int or data["schema"] != 1:
-        raise PolicyError(f"schema must be 1, not {data.get('schema')!r}")
-    for key in data.keys() - SCHEMA.keys() - {"schema"}:
+        raise PolicyError(f"{where}: schema must be 1, not {data.get('schema')!r}")
+    for key in data.keys() - schema.keys() - {"schema", *extra}:
         raise PolicyError(f"unknown key {key}")
-    for name, spec in SCHEMA.items():
+    for name, spec in schema.items():
         sec = data.get(name)
         if not isinstance(sec, dict) or not sec:
             raise PolicyError(f"[{name}] is missing or empty")
-        for k in sec.keys() - spec.keys():
-            raise PolicyError(f"unknown key {name}.{k}")
-        for k, (check, want) in spec.items():
-            if k not in sec:
-                raise PolicyError(f"missing {name}.{k}")
-            if not check(sec[k]):
-                raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
-    if data["merge"]["repo"].lower() == data["patent"]["private_repo"].lower():
+        table(name, sec, spec)
+    return data
+
+
+def table(name, sec, spec):
+    for k in sec.keys() - spec.keys():
+        raise PolicyError(f"unknown key {name}.{k}")
+    for k, (check, want) in spec.items():
+        if k not in sec:
+            raise PolicyError(f"missing {name}.{k}")
+        if not check(sec[k]):
+            raise PolicyError(f"{name}.{k} must be {want}, not {sec[k]!r}")
+
+
+def validate_machine(data):
+    sections("machine", data, MACHINE, extra=("repos",))
+    places = data.get("repos")
+    if not isinstance(places, dict) or not places:
+        raise PolicyError("[repos] is missing or empty: this machine works on no repo")
+    for name, place in places.items():
+        if not repo(name) or not isinstance(place, dict):
+            raise PolicyError(f"repos.{name} must be an owner/name table")
+        table(f'repos."{name}"', place, PLACE)
+    return data
+
+
+def validate_repo(name, data):
+    sections(name, data, REPO)
+    if name.lower() == data["patent"]["private_repo"].lower():
         raise PolicyError("patent.private_repo must differ from merge.repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
@@ -123,8 +142,59 @@ def read(path):
         raise PolicyError(f"{path} is not TOML: {e}") from None
 
 
-def load(path=PATH):
-    return validate(read(path))
+def machine_file():
+    me = os.environ.get("ZSTACK_MACHINE") or socket.gethostname().split(".")[0]
+    for name in (me, "default"):
+        path = os.path.join(CONFIG, "machines", f"{name}.toml")
+        if os.path.isfile(path):
+            return path
+    raise PolicyError(f"no machine file in {os.path.join(CONFIG, 'machines')}: neither {me}.toml nor default.toml")
+
+
+def repos():
+    base = os.path.join(CONFIG, "repos")
+    found = [f"{o}/{n}" for o in sorted(os.listdir(base) if os.path.isdir(base) else [])
+             for n in sorted(os.listdir(os.path.join(base, o)) if os.path.isdir(os.path.join(base, o)) else [])
+             if os.path.isfile(os.path.join(base, o, n, "policy.toml"))]
+    if not found:
+        raise PolicyError(f"no repos/<owner>/<name>/policy.toml in {CONFIG}")
+    return found
+
+
+def origin():
+    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True,
+                       env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$", r.stdout) if r.returncode == 0 else None
+    return m.group(1) if m else None
+
+
+def pick(here, want=None):
+    by = {x.lower(): x for x in here}
+    want = want or os.environ.get("ZSTACK_REPO")
+    if want:
+        if want.lower() not in by:
+            raise PolicyError(f"this machine works on {', '.join(here)}, not {want}")
+        return by[want.lower()]
+    at = origin()
+    if at and at.lower() in by:
+        return by[at.lower()]
+    if len(here) == 1:
+        return here[0]
+    raise PolicyError(f"this machine works on {', '.join(here)}; set ZSTACK_REPO or run from one of their clones")
+
+
+def load(want=None):
+    machine, known = validate_machine(read(machine_file())), repos()
+    by = {x.lower(): x for x in known}
+    if lost := [x for x in machine["repos"] if x.lower() not in by]:
+        raise PolicyError(f"this machine lists {', '.join(lost)}, which has no repos/<owner>/<name>/policy.toml in {CONFIG}")
+    name = by[pick(list(machine["repos"]), want).lower()]
+    place = next(v for k, v in machine["repos"].items() if k.lower() == name.lower())
+    project = validate_repo(name, read(os.path.join(CONFIG, "repos", name, "policy.toml")))
+    root = place["root"]
+    return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO},
+            "merge": {"repo": name, **project["merge"]}, "repos": known,
+            "host": {"clone": place["clone"], "root": root, "holds": root.rstrip("/") + "/hold-prs.txt"}}
 
 
 def text(v):
@@ -163,9 +233,9 @@ def fill(where, s, pol):
     try:
         out = re.sub(r"\{([a-z_]+(?:\.[a-z_]+)+)(?::([^{}]+))?\}", one, s)
     except PolicyError as e:
-        raise PolicyError(e.args[0] if e.args[0].startswith("rules:") else f"rules: {where}: {e.args[0]} in config/policy.toml") from None
+        raise PolicyError(e.args[0] if e.args[0].startswith("rules:") else f"rules: {where}: {e.args[0]} in the config") from None
     if "{" in out or "}" in out:
-        raise PolicyError(f"rules: {where} has a brace that names no config/policy.toml key")
+        raise PolicyError(f"rules: {where} has a brace that names no config key")
     return out
 
 
@@ -198,8 +268,14 @@ def validate_rules(data, pol):
     return data
 
 
-def rules(path=RULES):
-    return validate_rules(read(path), load())
+def rules(path=RULES, want=None):
+    pol, data = load(want), read(path)
+    more = os.path.join(CONFIG, "repos", pol["merge"]["repo"], "rules.toml")
+    if os.path.isfile(more):
+        extra = read(more)
+        keys(more, extra, ("schema", "section"))
+        data["section"] = [*data.get("section", []), *(extra["section"] if isinstance(extra["section"], list) else [None])]
+    return validate_rules(data, pol)
 
 
 def render(data, ids=(), thread=False):
@@ -257,15 +333,18 @@ def model_for(want, data=None):
     if want not in seats and race:
         raise PolicyError(f"{want} has {len(race)} seats, one per side of a race; pass one of {', '.join(race)}. A race runs every seat.")
     if want not in seats:
-        raise PolicyError(f"no role {want!r} in {PATH} (roles: {', '.join(seats)})")
+        raise PolicyError(f"no role {want!r} in {machine_file()} (roles: {', '.join(seats)})")
     return seats[want]["provider"], seats[want]["model"]
 
 
 def main(argv):
     try:
         if argv == ["check"]:
-            load(), rules(), state()
-            return print(f"policy: {os.path.dirname(PATH)}/{{policy,rules,state}}.toml are valid") or 0
+            names = list(validate_machine(read(machine_file()))["repos"])
+            for name in names:
+                rules(want=name)
+            state()
+            return print(f"policy: {CONFIG} is valid for {', '.join(names)} on {os.path.basename(machine_file())[:-5]}") or 0
         if argv[:1] == ["rules"]:
             return print(render(rules(), [x for x in argv[1:] if x != "--thread"], "--thread" in argv), end="") or 0
         if argv == ["dump"]:

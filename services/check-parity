@@ -23,7 +23,7 @@ fi
 
 clone=$("$pkg/bin/policy" get host.clone 2>/dev/null); clone=${ZSTACK_CLONE:-${clone/#\~/$HOME}}
 hook="$clone/.git/hooks/pre-push"
-if [ ! -d "$clone/.git" ]; then fail "hook: no clone at ${clone:-host.clone, which config/policy.toml does not give}"
+if [ ! -d "$clone/.git" ]; then fail "hook: no clone at ${clone:-host.clone, which the config does not give}"
 elif [ ! -L "$hook" ]; then fail "hook: $hook is not a symlink to $pkg/services/pre-push"
 elif [ "$(cd "$(dirname "$hook")" && cd "$(dirname "$(readlink "$hook")")" 2>/dev/null && pwd -P)/$(basename "$(readlink "$hook")")" != "$pkg/services/pre-push" ]; then
   fail "hook: $hook points at $(readlink "$hook"), not $pkg/services/pre-push"

@@ -62,9 +62,10 @@ test("the plugin and the pi package are one version", () => {
 test("a machine with its own config directory gets its own rules and its own guarded repo", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zstack-config-"));
 	try {
-		for (const f of ["policy.toml", "rules.toml", "state.toml"]) {
-			fs.writeFileSync(path.join(dir, f), fs.readFileSync(`${root}config/${f}`, "utf8").replaceAll(repo, "acme/widgets"));
-		}
+		fs.mkdirSync(path.join(dir, "machines"));
+		fs.mkdirSync(path.join(dir, "repos", "acme", "widgets"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "machines", "default.toml"), fs.readFileSync(`${root}config/machines/default.toml`, "utf8").replaceAll(repo, "acme/widgets"));
+		fs.writeFileSync(path.join(dir, "repos", "acme", "widgets", "policy.toml"), fs.readFileSync(`${root}config/repos/${repo}/policy.toml`, "utf8").replaceAll(repo, "acme/widgets"));
 		const env = { ZSTACK_CONFIG: dir };
 		const merge = (r: string) => guard({ tool_name: "Bash", tool_input: { command: `gh pr merge 12 --repo ${r}` }, cwd: "/tmp" }, env);
 		assert.equal(merge("acme/widgets").status, 2);

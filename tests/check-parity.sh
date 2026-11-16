@@ -11,7 +11,7 @@ git init -q --bare -b main "$tmp/origin.git"
 git clone -q "$tmp/origin.git" "$tmp/seed" 2>/dev/null
 mkdir -p "$tmp/seed/services" "$tmp/seed/agents" "$tmp/seed/bin" "$tmp/seed/config"
 cp "$src/services/check-parity" "$src/services/pre-push" "$tmp/seed/services/"; cp "$src/agents/"*.md "$tmp/seed/agents/"
-cp "$src/bin/policy" "$tmp/seed/bin/"; cp "$src/config/"*.toml "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"
+cp "$src/bin/policy" "$tmp/seed/bin/"; cp -R "$src/config/." "$tmp/seed/config/"; cp -R "$src/vendor" "$tmp/seed/"
 cp "$src/.gitignore" "$tmp/seed/"
 git -C "$tmp/seed" add -A; git -C "$tmp/seed" commit -qm one; git -C "$tmp/seed" push -q origin main
 git clone -q "$tmp/origin.git" "$tmp/pkg"

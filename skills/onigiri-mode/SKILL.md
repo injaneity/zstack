@@ -10,12 +10,12 @@ license: MIT
 
 ## Who is reading
 
-- **A coding thread** does the work. Every section below applies. Its model is `models.coding` in `config/policy.toml`.
+- **A coding thread** does the work. Every section below applies. Its model is `models.coding` in the config.
 - **The orchestrator** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `orchestrator/plan` queues, reads what they return and relays it. Its instructions are `orchestrator/playbook.md` in the package, not this skill.
 
 ## Hard rules
 
-The rules are `config/rules.toml` in the zstack package, and nowhere else. The plugin or launcher that started you put `bin/policy rules --thread` in your context, so you already have them. The values the code enforces are `config/policy.toml`; this skill and its playbook name those keys and never restate their values.
+The rules are `config/rules.toml` in the zstack package, and nowhere else. The plugin or launcher that started you put `bin/policy rules --thread` in your context, so you already have them. The values the code enforces are the config; this skill and its playbook name those keys and never restate their values.
 
 ## Work
 
@@ -31,7 +31,7 @@ Your model needs no instruction in how to read code, design or debug. These line
 
 ## Subagents
 
-The three delegates are the role files in the package's `agents/`. Each runs on the provider and model `config/policy.toml` `[models]` gives its name, never on a model you pick. Start one with the delegate tool your harness has: T3 Code's `delegate_task`, or pi's `subagent` tool (`docs/SUBAGENT.md`). The `verifier` never runs on your own model: without its seat it returns an error and nothing runs.
+The three delegates are the role files in the package's `agents/`. Each runs on the provider and model the machine file's `[models]` gives its name, never on a model you pick. Start one with the delegate tool your harness has: T3 Code's `delegate_task`, or pi's `subagent` tool (`docs/SUBAGENT.md`). The `verifier` never runs on your own model: without its seat it returns an error and nothing runs.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|

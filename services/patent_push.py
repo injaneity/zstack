@@ -15,7 +15,7 @@ try:
     POLICY = policy.load()
     PATENT, ME, OWNER = POLICY["patent"], POLICY["people"]["me"], POLICY["people"]["owner"]
 except policy.PolicyError as e:
-    sys.exit(f"patent hold: config/policy.toml is unreadable ({e}), so nothing is pushed until it is fixed. Do not retry "
+    sys.exit(f"patent hold: the config is unreadable ({e}), so nothing is pushed until it is fixed. Do not retry "
              "the push, push elsewhere or skip the hook; say so in your report.")
 HELD = re.compile(r"(?<![a-z0-9])(" + "|".join(map(re.escape, PATENT["held_words"])) + ")", re.I)
 LOCKFILE = re.compile(r"(^|/)(" + "|".join(map(re.escape, PATENT["skip_lockfiles"])) + ")$")

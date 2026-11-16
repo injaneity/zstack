@@ -1,6 +1,6 @@
 # zstack
 
-A stack for coding agents that works the same under any harness. One thread owns a task and writes all its code. Three delegates help it and never edit source: an **`explorer`** reads, two competing **`designer`**s plan deep or new work, and a **`verifier`** owns verification. The role-to-model map is `config/policy.toml` `[models]`.
+A stack for coding agents that works the same under any harness. One thread owns a task and writes all its code. Three delegates help it and never edit source: an **`explorer`** reads, two competing **`designer`**s plan deep or new work, and a **`verifier`** owns verification. The role-to-model map is the machine file's `[models]`.
 
 Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan. `docs/PROVENANCE.md` records what changed and why.
 
@@ -26,15 +26,17 @@ pi install git:github.com/injaneity/zstack
 
 Both need `node`, `git`, `gh` and `python3` 3.9 or newer on `PATH` (`bin/policy` uses `tomllib`, else the vendored `vendor/tomli`).
 
-## configure a machine
+## configure
 
-`config/` ships an example deployment: a repo `acme/app`, an owner `Robin`, a login `octo`. Copy the directory, write your own values, and point `ZSTACK_CONFIG` at the copy. That directory replaces the shipped one whole, and a missing or invalid one stops every reader.
+Config has three layers, and `bin/policy` is the one reader of all of them (`check`, `get <key>`, `dump`, `rules`, `rules --thread`).
 
-- `policy.toml` holds the values the code reads: models, the merge gate and its repo, the patent hold's words and private repo, this machine's clone and holds file, the wake's URL.
-- `rules.toml` holds the Hard rules. A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fills it in. A rule marked `for = "orchestrator"` is left out of a coding thread's copy.
-- `state.toml` declares each runtime state file the services keep.
+- **The stack** ships in this package: `config/rules.toml` (the Hard rules) and `config/state.toml` (the state files the services keep).
+- **A machine** is `machines/<hostname>.toml`: the models its roles run on, its limits, where it sends a wake, and each repo it works on with that repo's clone and state root. `ZSTACK_MACHINE` names another file; `machines/default.toml` is the fallback.
+- **A repo** is `repos/<owner>/<name>/policy.toml`: its merge gate and risk tiers, who "we" are, the patent hold's words, and whether an outside PR is salvaged or sent back. An optional `rules.toml` beside it adds sections to the Hard rules.
 
-`bin/policy` is the one reader of all three: `check`, `get <key>`, `dump`, `rules`, `rules --thread`.
+`config/` ships an example of the last two: a machine working on `acme/app`. Keep your own in a private repo with the same `machines/` and `repos/` folders, clone it on each machine, and point `ZSTACK_CONFIG` at it. A missing or invalid one stops every reader. The repo in play is `ZSTACK_REPO`, else the `origin` of the directory a command runs in, else the machine's only repo.
+
+A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fills it in from the machine and repo in play. A rule marked `for = "orchestrator"` is left out of a coding thread's copy.
 
 ## what a coding thread gets
 

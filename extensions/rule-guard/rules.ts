@@ -6,8 +6,9 @@ export type Owned = ReadonlySet<string> | null;
 
 export function mergeOwned(dump: () => string): Owned {
 	try {
-		const repo = JSON.parse(dump())?.merge?.repo;
-		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
+		const all = JSON.parse(dump())?.repos;
+		const ok = Array.isArray(all) && all.length > 0 && all.every((r) => typeof r === "string" && /^[^/\s]+\/[^/\s]+$/.test(r));
+		return ok ? new Set(all.map((r: string) => r.toLowerCase())) : null;
 	} catch {
 		return null;
 	}

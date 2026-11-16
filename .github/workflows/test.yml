@@ -23,7 +23,7 @@ jobs:
           for f in bin/* services/* orchestrator/*; do
             case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
           done
-      - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
+      - name: bin/policy reads the config under 3.9 (vendor/tomli)
         run: bin/policy check && bin/policy get ci.fix_attempts && bin/policy dump > /dev/null && bin/policy rules > /dev/null
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
@@ -40,7 +40,7 @@ jobs:
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: config/policy.toml, rules.toml and state.toml are valid (bin/policy check, the one parser)
+      - name: the config, rules.toml and state.toml are valid (bin/policy check, the one parser)
         run: bin/policy check && bin/policy rules > /dev/null
       - name: planner, merge job, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
