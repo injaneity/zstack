@@ -221,8 +221,9 @@ def task(c, h):
     frm, fixes = salvage_lines(c["n"])
     keep = "" if teammate else (
         f"A salvage keeps {c['author']['login']}'s commits as authored: cherry-pick or rebase their commits, then put our "
-        "fixes on top as separate commits. Never re-author their work or squash it into our commit. If no code of theirs "
-        f"survives, the body's `{frm}` line is what the release builder credits them from.\n")
+        "fixes on top as separate commits. Never re-author their work or squash it into our commit. If none of their "
+        f"commits survive, add `Co-authored-by: <their name> <their GitHub noreply or commit email>` for "
+        f"{c['author']['login']} to our commit; the body's `{frm}` line still goes in.\n")
     return (f"trycua/cua#{c['n']}{head} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first review, "
             f"requested of {ME}. Check the CLA first. Run playbooks/pull-requests.md Verify. Post nothing under Zane's "
             "name: put every comment or thank-you for the author under a `drafts:` section in report.md.\n"

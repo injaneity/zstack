@@ -48,7 +48,7 @@ title = '''Commits and PR text'''
 
 [[section.rule]]
 id = "text-no-trailers"
-text = '''No `Co-authored-by` trailers of any kind. No model, agent or tool names in commit messages, PR titles or PR bodies.'''
+text = '''No `Co-authored-by` trailers for models, agents or tools. A salvage keeps the contributor's commits as authored; if none survive, add `Co-authored-by: <contributor name> <their GitHub noreply or commit email>` for the source PR's author (Zane, 16 Nov 21:20 SGT). No model, agent or tool names in commit messages, PR titles or PR bodies.'''
 
 [[section.rule]]
 id = "text-upstream-commits"
