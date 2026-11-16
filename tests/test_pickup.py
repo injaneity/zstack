@@ -23,7 +23,7 @@ case "$*" in
 import json, os, re, sys
 src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
 ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
-node = lambda p: {"number": p["number"], "state": p["state"], "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
+node = lambda p: {"number": p["number"], "state": p["state"], "body": p.get("body", ""), "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
     {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED", "author": {"login": i.get("login", "someone")}}
     for i in p["closingIssuesReferences"]]}}
 errs = [{"type": "NOT_FOUND", "message": f"no pull request {n}"} for n in ns if n not in src]
@@ -292,7 +292,7 @@ class Pickup(unittest.TestCase):
             {"number": 708, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #608\n\nRefs #22\n", "closingIssuesReferences": []}]))
         (self.t / "sources.json").write_text(json.dumps([
             {"number": 601, "state": "OPEN", "closingIssuesReferences": ref(10, 11)},
-            {"number": 602, "state": "OPEN", "closingIssuesReferences": ref(12)},
+            {"number": 602, "state": "OPEN", "body": "Fixes #12", "closingIssuesReferences": ref(12)},
             {"number": 603, "state": "OPEN", "closingIssuesReferences": ref(14, 15)},
             {"number": 604, "state": "OPEN", "closingIssuesReferences": ref(16)},
             {"number": 605, "state": "OPEN", "closingIssuesReferences": ref(18)},
@@ -311,6 +311,37 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("error:", report)
         self.pickup()
         self.assertEqual(len(self.wakes()), 1)
+
+    def test_an_open_salvage_that_fixes_an_issue_its_source_never_claims_is_listed(self):
+        self.peer(at_main=True)
+        ref = lambda *ns: [{"number": n} for n in ns]   # noqa: E731
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 711, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #611\n\nFixes #30\nFixes #31\nFixes #33\n",
+             "closingIssuesReferences": ref(30, 31, 33)},
+            {"number": 712, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #612\n\nFixes #32\n",
+             "closingIssuesReferences": ref(32)},
+            {"number": 713, "state": "OPEN", "mergedAt": None, "body": "Salvaged from #613\n\nFixes #34\nFixes #35\n",
+             "closingIssuesReferences": ref(34, 35)},
+            {"number": 714, "state": "MERGED", "mergedAt": "2026-11-14T09:00:00Z", "body": "Salvaged from #614\n\nFixes #37\n",
+             "closingIssuesReferences": ref(37)}]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 611, "state": "CLOSED", "closingIssuesReferences": ref(31),
+             "body": "Refs #30.\n\nThe rest of #31 follows in a separate PR, and that one will close #31.\n\nFixes #33"},
+            {"number": 612, "state": "CLOSED", "closingIssuesReferences": ref(32),
+             "body": "- Fixes #32, trycua/cua#36 and https://github.com/trycua/cua/issues/38"},
+            {"number": 613, "state": "CLOSED", "closingIssuesReferences": ref(34),
+             "body": "This does not claim to fix #34.\nCloses https://github.com/trycua/cua/issues/35"},
+            {"number": 614, "state": "CLOSED", "closingIssuesReferences": [], "body": "Refs #37"}]))
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        tail = "`Fixes #N` to `Refs #N` for each it does not fix or was not opened for"
+        self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
+            "- salvage cua#711 of cua#611 closes #30, #31, which cua#611 names but never claims on a line that starts with a "
+            "closing word: read cua#611's body, and change " + tail,
+            "- salvage cua#713 of cua#613 closes #34, which cua#613 names but never claims on a line that starts with a "
+            "closing word: read cua#613's body, and change " + tail]))
+        self.assertNotIn("error:", report)
 
     def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
         self.peer(holds="review-only | F-Trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
