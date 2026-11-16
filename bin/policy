@@ -11,7 +11,7 @@ USAGE = (
     '  policy seats          every role and seat\n'
     '  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON\n'
     '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
-    "  policy rules          the Hard rules as the markdown bin/pi-run appends to every session's system prompt\n"
+    "  policy rules          the Hard rules as markdown, for a session's system prompt\n"
     '  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)'
 )
 try:

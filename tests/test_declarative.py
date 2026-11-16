@@ -177,6 +177,30 @@ class Harness(unittest.TestCase):
             self.assertNotIn("checkBash", text, f)
 
 
+class Parts(unittest.TestCase):
+    STACK = ("extensions/", "hooks/", ".claude-plugin/", "bin/policy", "package.json")
+    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b)[a-z][\w-]*|hosts/|model/|merge_job|patent_push|wake\.py|PiRun")
+
+    def test_the_stack_names_no_orchestrator_or_service_file(self):
+        wrong = [f"{f}: {m.group(0)}" for f in tracked("extensions/**/*.ts", "hooks/*", ".claude-plugin/*", "bin/policy", "package.json")
+                 for m in self.OTHERS.finditer((PKG / f).read_text())]
+        self.assertEqual(wrong, [], "a coding thread's code reaches the rest only through bin/policy")
+
+    def test_both_manifests_load_only_the_stack(self):
+        pi = json.loads((PKG / "package.json").read_text())["pi"]
+        paths = [x for v in pi.values() for x in v]
+        self.assertTrue(all(x.startswith(("./extensions/", "./skills", "./prompts")) for x in paths), paths)
+        plugin = json.loads((PKG / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual(set(plugin), {"name", "version", "description"})
+        hooks = (PKG / "hooks" / "hooks.json").read_text()
+        self.assertEqual(sorted(set(re.findall(r"CLAUDE_PLUGIN_ROOT\}/([\w./-]+)", hooks))), ["bin/policy", "hooks/guard.ts"])
+
+    def test_the_check_catches_a_stack_file_that_names_the_launcher(self):
+        self.assertTrue(self.OTHERS.search('path.join(PKG, "bin/pi-run")'))
+        self.assertTrue(self.OTHERS.search("hosts/vm/wake.py"))
+        self.assertFalse(self.OTHERS.search("python3 bin/policy rules; bin/hold-row add"))
+
+
 class StateFiles(unittest.TestCase):
     JOIN = re.compile(r"os\.path\.join\((?!PKG\b)[^()]*?(?:\([^()]*\))?[^()]*?"
                       r"\"([\w.-]+\.(?:json|log|txt|md|lock)|[A-Z]+|pushed|last-run|auto-pause)\"\)")
