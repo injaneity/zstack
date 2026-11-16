@@ -262,6 +262,7 @@ class Pickup(unittest.TestCase):
         brief = (self.root / "review" / "cua-304-review-130aaaa" / "brief.md").read_text()
         self.assertIn("a teammate (review-only: a first review and nothing else)", brief)
         self.assertIn("`drafts:`", brief)
+        self.assertNotIn("commits as authored", brief)
 
     def test_an_outside_review_brief_keeps_the_contributors_commits(self):
         self.peer()
