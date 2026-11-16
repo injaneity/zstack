@@ -32,6 +32,7 @@ print(json.dumps({"data": {"repository": {f"p{n}": node(src[n]) if n in src else
 sys.exit(1 if errs else 0)' "$*";;
   "pr list"*isDraft*) cat "$T/open.json";;
   "release list"*) cat "$T/releases.json" 2>/dev/null || echo '[]';;
+  "pr view 7300"*) echo '{"headRefOid": "'"$(printf 'e%.0s' $(seq 40))"'", "headRefName": "y"}';;
   "pr view"*) echo '{"headRefOid": "'"$(printf 'f%.0s' $(seq 40))"'", "headRefName": "x"}';;
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
@@ -123,10 +124,10 @@ class Pickup(unittest.TestCase):
             if v is not None:
                 (self.t / f"{name}.json").write_text(json.dumps(v))
 
-    def peer(self, waits=(), holds="", runs=None, ids=(), at_main=False):
+    def peer(self, waits=(), holds="", runs=None, ids=(), at_main=False, pushed=None):
         last = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} zstack {'a' * 40} ok"
         facts = {"sha": "s", "at_main": at_main, "parity": [], "free_gb": 25, "runs": runs or {}, "ids": list(ids),
-                 "pushed": {}, "merge_last": last, "holds": holds}
+                 "pushed": pushed or {}, "merge_last": last, "holds": holds}
         p = self.t / "vm"
         p.write_text("#!/bin/bash\ncase \"$1\" in *merge_job.py*) echo x >> \"$T/merge-dry-runs\"; printf '%s\\n' "
                      + " ".join(f"'dry-run {w}'" for w in waits)
@@ -618,10 +619,27 @@ class Pickup(unittest.TestCase):
 
     def test_an_unstick_is_picked_only_for_a_red_pr_no_thread_owns(self):
         self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate",
-                         "cua#6975 f454fce4b wait who=session: ci-gate FAILURE; merge conflict"])
+                         "cua#6975 f454fce4b wait who=session: ci-gate FAILURE; merge conflict",
+                         "cua#7300 eeeeeee wait who=session: red after rerun: ci-gate"],
+                  pushed={f"{'e' * 40} y": ["cua-7300-fix", "2026-11-10T03:00:00.000000Z"]})
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z")])
+        out = self.pickup("--dry")
+        self.assertIn("would reopen vm cua-7300-fix for cua#7300", out)
+        self.assertNotIn("cua-7300-unstick", out)
         self.pickup()
-        self.assertEqual(sorted(r[1] for r in self.rows("launch")), ["cua-6975-unstick-f454fce", "cua-7229-unstick-4ef9df0"])
+        self.assertEqual(sorted(r[1] for r in self.rows("launch")), ["cua-10", "cua-6975-unstick-f454fce", "cua-7229-unstick-4ef9df0"])
         self.assertIn("merge conflict", (self.root / "review" / "cua-6975-unstick-f454fce" / "brief.md").read_text())
+
+    def test_an_unstick_goes_before_an_older_urgent_issue_when_one_auto_slot_is_free(self):
+        (self.t / "hang").touch()
+        auto = {"state": "running", "pool": "auto", "nums": []}
+        self.peer(waits=["cua#7229 4ef9df015 wait who=session: red after rerun: ci-gate"],
+                  runs={"a1": auto, "a2": dict(auto)})
+        self.github(issues=[issue(10, "2026-10-01T00:00:00Z", labels=["urgent"])])
+        out = self.pickup()
+        self.assertIn("2 candidates (0 taken before), auto free 1", out)
+        self.assertEqual([r[1] for r in self.rows("launch")], ["cua-7229-unstick-4ef9df0"])
+        self.assertFalse((self.root / "review" / "cua-10").exists())
 
     def test_the_schedule_is_a_plain_launchd_timer_at_the_policy_interval(self):
         r = subprocess.run([str(self.pkg / "hosts" / "mini" / "install-pickup.sh"), "print"], capture_output=True, text=True,

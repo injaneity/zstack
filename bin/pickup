@@ -78,7 +78,7 @@ def candidates(errors, waits, owned):
         if m and int(m[1]) not in owned:
             out.append(dict(id=f"cua-{m[1]}-unstick-{m[2][:7]}", kind="unstick", n=int(m[1]), head=m[2], author={"login": ME},
                             title=m[3], url=f"https://github.com/{REPO}/pull/{m[1]}", created="", labels=[], linked=[], why=m[3]))
-    return sorted(out, key=lambda c: ("urgent" not in c["labels"], c["created"] or "9", c["id"]))
+    return sorted(out, key=lambda c: (c["kind"] != "unstick", "urgent" not in c["labels"], c["created"] or "9", c["id"]))
 
 
 def version(v):
