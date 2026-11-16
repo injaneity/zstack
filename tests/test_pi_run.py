@@ -1033,5 +1033,14 @@ class Launcher(unittest.TestCase):
         self.assertTrue(args.rstrip("\n").endswith("## Host: test\ntask"), args[-60:])
 
 
+    def test_every_host_file_sets_a_brief_prefix_that_exists(self):
+        for host in ("vm", "mini"):
+            env = subprocess.run(["bash", "-c", 'HOME="$1"; source "$2" >/dev/null 2>&1; echo "$ONIGIRI_BRIEF_PREFIX"', "-",
+                                  str(self.t), str(PKG / "hosts" / host / "host.sh")], capture_output=True, text=True,
+                                 env={"PATH": os.environ["PATH"], "TMPDIR": str(self.t)}).stdout.strip()
+            self.assertTrue(env and Path(env).is_file(), f"{host}: ONIGIRI_BRIEF_PREFIX={env!r}")
+            self.assertIn("make your own worktree in this session's directory", Path(env).read_text(), host)
+
+
 if __name__ == "__main__":
     unittest.main()
