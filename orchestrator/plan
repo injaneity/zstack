@@ -13,14 +13,18 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
     "  plan                       one pass: print what to launch and what was skipped, as JSON, and queue the launches\n"
     "  plan --dry                 the same, writing nothing\n"
-    "  plan claim <id> <thread>   the thread now working a queued item\n"
-    "  plan done <id> [<pr>...]   the item's thread finished; the PR numbers it opened\n"
+    "  plan start <id>            reserve a queued item before launching its thread; refused when another pass has it\n"
+    "  plan claim <id> <thread>   the thread now working a started item\n"
+    "  plan requeue <id>          a started item whose thread did not start goes back in the queue\n"
+    "  plan done <id> [<pr>...]   a claimed item's thread finished; the PR numbers it opened\n"
     "  plan list                  the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
 policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(policy)
-STATES = ("queued", "claimed", "done")
+STEPS = {"start": ("queued", "starting"), "claim": ("starting", "claimed"), "requeue": ("starting", "queued"),
+         "done": ("claimed", "done")}
+STALE_S = 15 * 60
 EMPTY = {"items": {}}
 
 
@@ -135,6 +139,7 @@ def thread_for(c, items):
 
 def decide(cands, h, prs, items, pol, template):
     launch, skipped, items = [], [], {k: dict(v) for k, v in items.items()}
+    recover = sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S)
     for c in cands:
         why = rule(c, h, prs, items, pol["ci"]["fix_attempts"])
         if why:
@@ -143,11 +148,15 @@ def decide(cands, h, prs, items, pol, template):
         brief = template.format(id=c["id"], task=task(c, h, pol), clone=pol["host"]["clone"])
         launch.append({"id": c["id"], "kind": c["kind"], "thread": thread_for(c, items), "brief": brief})
         items[c["id"]] = {"state": "queued", "kind": c["kind"], "n": c["n"], "thread": None, "prs": [], "at": now()}
-    return launch, skipped, items
+    return launch, skipped, recover, items
 
 
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def age(at):
+    return (datetime.now(timezone.utc) - datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds()
 
 
 def read_text(path):
@@ -190,20 +199,22 @@ def run_pass(dry):
     cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
 
     def go(state):
-        launch, skipped, items = decide([] if errors else cands, h, prs, state["items"], pol, template)
+        launch, skipped, recover, items = decide([] if errors else cands, h, prs, state["items"], pol, template)
         state["items"] = items
-        return {"launch": launch, "skipped": skipped, "errors": errors}, bool(launch) and not dry
+        return {"launch": launch, "recover": recover, "skipped": skipped, "errors": errors}, bool(launch) and not dry
     return locked(go)
 
 
-def mark(ident, to, thread=None, prs=()):
+def mark(step, ident, thread=None, prs=()):
+    was, to = STEPS[step]
+
     def go(state):
         item = state["items"].get(ident)
         if not item:
             raise policy.PolicyError(f"no queued item {ident}")
-        if STATES.index(to) < STATES.index(item["state"]):
-            raise policy.PolicyError(f"{ident} is already {item['state']}")
-        item.update(state=to, thread=thread or item["thread"], prs=sorted({*item["prs"], *prs}))
+        if item["state"] != was:
+            raise policy.PolicyError(f"{ident} is {item['state']}, not {was}")
+        item.update(state=to, thread=thread or item["thread"], prs=sorted({*item["prs"], *prs}), at=now())
         return item, True
     return locked(go)
 
@@ -214,10 +225,12 @@ def main(argv):
             out = run_pass(bool(argv))
             print(json.dumps(out, indent=1))
             return 1 if out["errors"] else 0
+        if len(argv) == 2 and argv[0] in ("start", "requeue"):
+            return print(json.dumps(mark(argv[0], argv[1]))) or 0
         if len(argv) == 3 and argv[0] == "claim":
-            return print(json.dumps(mark(argv[1], "claimed", thread=argv[2]))) or 0
+            return print(json.dumps(mark("claim", argv[1], thread=argv[2]))) or 0
         if len(argv) >= 2 and argv[0] == "done" and all(re.fullmatch(r"\d+", x) for x in argv[2:]):
-            return print(json.dumps(mark(argv[1], "done", prs=[int(x) for x in argv[2:]]))) or 0
+            return print(json.dumps(mark("done", argv[1], prs=[int(x) for x in argv[2:]]))) or 0
         if argv == ["list"]:
             return print(json.dumps(locked(lambda s: (s["items"], False)), indent=1)) or 0
     except policy.PolicyError as e:

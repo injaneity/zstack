@@ -27,7 +27,8 @@ def cand(n, kind="issue", author="someone", head=None, labels=(), linked=(), cre
 
 
 def decide(cands, items=None, prs=(), h=H):
-    return plan.decide(cands, h, set(prs), items or {}, POL, TEMPLATE)
+    launch, skipped, _, out = plan.decide(cands, h, set(prs), items or {}, POL, TEMPLATE)
+    return launch, skipped, out
 
 
 class Decide(unittest.TestCase):
@@ -59,6 +60,25 @@ class Decide(unittest.TestCase):
         items["app-1"].update(state="done", prs=[40])
         self.assertEqual(decide([cand(1)], items)[1], [{"id": "app-1", "why": "done"}])
         self.assertEqual(decide([cand(1, "review")], items)[1], [])
+
+    def test_a_started_item_is_not_offered_and_a_stale_one_is_listed_to_recover(self):
+        _, _, items = decide([cand(1)])
+        items["app-1"]["state"] = "starting"
+        launch, skipped, recover, _ = plan.decide([cand(1)], H, set(), items, POL, TEMPLATE)
+        self.assertEqual((launch, skipped, recover), ([], [{"id": "app-1", "why": "starting"}], []))
+        items["app-1"]["at"] = "2026-01-01T00:00:00Z"
+        self.assertEqual(plan.decide([cand(1)], H, set(), items, POL, TEMPLATE)[2], ["app-1"])
+
+    def test_the_steps_are_the_models_and_no_other(self):
+        spec = (PKG / "model" / "Plan.tla").read_text()
+        self.assertEqual(plan.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "claimed"),
+                                      "requeue": ("starting", "queued"), "done": ("claimed", "done")})
+        for name, (_, to) in (("Start(p, i)", plan.STEPS["start"]), ("Claim(p)", plan.STEPS["claim"]),
+                                ("Requeue(p)", plan.STEPS["requeue"]), ("Collect(i)", plan.STEPS["done"])):
+            body = spec[spec.index(f"\n{name} =="):].split("\n\n")[0]
+            self.assertIn(f'= "{to}"]', body, name)
+        self.assertIn('q[i] = "queued"', spec[spec.index("\nStart(p, i) =="):].split("\n\n")[0])
+        self.assertIn('q[i] = "claimed"', spec[spec.index("\nCollect(i) =="):].split("\n\n")[0])
 
     def test_two_candidates_on_one_number_launch_one_thread(self):
         launch, skipped, _ = decide([cand(5, "review"), cand(5, "fix", author=ME, created="2026-02-01")])
@@ -107,11 +127,19 @@ class Queue(unittest.TestCase):
             self.assertFalse((self.root / "queue.json").exists())
             self.assertEqual(plan.run_pass(dry=False)["launch"][0]["id"], "app-1")
         self.assertEqual(json.loads((self.root / "queue.json").read_text())["items"]["app-1"]["state"], "queued")
+        early = self.run_("claim", "app-1", "t-9")
+        self.assertEqual((early.returncode, early.stderr), (1, "plan: app-1 is queued, not starting\n"))
+        self.assertEqual(json.loads(self.run_("start", "app-1").stdout)["state"], "starting")
+        second = self.run_("start", "app-1")
+        self.assertEqual((second.returncode, second.stderr), (1, "plan: app-1 is starting, not queued\n"))
+        self.assertEqual(json.loads(self.run_("requeue", "app-1").stdout)["state"], "queued")
+        self.assertEqual(self.run_("done", "app-1").returncode, 1)
+        self.run_("start", "app-1")
         self.assertEqual(json.loads(self.run_("claim", "app-1", "t-9").stdout)["thread"], "t-9")
         done = json.loads(self.run_("done", "app-1", "40", "41").stdout)
         self.assertEqual((done["state"], done["prs"], done["thread"]), ("done", [40, 41], "t-9"))
         back = self.run_("claim", "app-1", "t-10")
-        self.assertEqual((back.returncode, back.stderr), (1, "plan: app-1 is already done\n"))
+        self.assertEqual((back.returncode, back.stderr), (1, "plan: app-1 is done, not starting\n"))
         self.assertEqual(self.run_("claim", "nope", "t").stderr, "plan: no queued item nope\n")
         self.assertEqual(list(json.loads(self.run_("list").stdout)), ["app-1"])
         self.assertEqual(self.run_("done", "app-1", "x").returncode, 2)

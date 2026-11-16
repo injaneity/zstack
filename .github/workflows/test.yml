@@ -48,8 +48,8 @@ jobs:
         run: python3 tests/comments.py check
       - name: lint the services and tests
         run: |
-          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy orchestrator/plan
-          shellcheck services/cron-wrap.sh services/pre-push services/check-parity services/ensure-main tests/check-parity.sh tests/ensure-main.sh
+          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy orchestrator/plan model
+          shellcheck services/cron-wrap.sh services/pre-push services/check-parity services/ensure-main tests/check-parity.sh tests/ensure-main.sh tests/plan-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -65,6 +65,15 @@ jobs:
         run: tests/ensure-main.sh
       - name: check-parity fails a host whose package, hook or agents differ from main
         run: tests/check-parity.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: TLC passes model/Plan.tla (the planner's queue) and every mutant fails on its rule
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/plan-model.sh
       - name: the merge gate is three checks, and verification is not one of them
         run: |
           if bin/policy rules | cat - skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/SKILL.md |

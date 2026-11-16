@@ -69,7 +69,7 @@ host = "each"
 format = "json"
 writer = "orchestrator/plan"
 readers = ["orchestrator/plan"]
-schema = "{items: {<id>: {state, kind, n, thread, prs, at}}}: each item a pass queued, the thread that claimed it and the PRs it opened; state is queued, claimed or done"
+schema = "{items: {<id>: {state, kind, n, thread, prs, at}}}: each item a pass queued, the thread that claimed it and the PRs it opened; state is queued, starting, claimed or done (model/Plan.tla)"
 
 [file.queue-lock]
 path = "queue.lock"
