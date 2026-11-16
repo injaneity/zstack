@@ -17,8 +17,11 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 As a Claude Code plugin, which T3 Code threads load:
 
 ```bash
-claude --plugin-dir /path/to/zstack
+claude plugin marketplace add /path/to/zstack
+claude plugin install zstack@zstack
 ```
+
+The plugin is read from that checkout, so a pull updates it.
 
 As a pi package, which the delegates run under:
 
@@ -42,8 +45,8 @@ A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fill
 
 ## set up a machine
 
-1. Write your config (above) and set `ZSTACK_CONFIG`. Run `bin/policy check`.
-2. In the target repo's branch protection, require the two status checks `merge.gate_check` and `merge.verified_check` name, and allow auto-merge. Without both, the queue arms nothing and every PR waits for the owner.
+1. Write your config (above) and set `ZSTACK_CONFIG` where every thread sees it: under `env` in `~/.claude/settings.json`, and in the shell profile. Run `bin/policy check`.
+2. In the target repo's branch protection or ruleset, require the two status checks `merge.gate_check` and `merge.verified_check` name, and allow auto-merge. Without both, the queue arms nothing and every PR waits for the owner.
 3. Link the pre-push hook into the clone: `ln -s <zstack>/services/pre-push <clone>/.git/hooks/pre-push`. `services/check-parity` checks it.
 4. Create `<root>/hold-prs.txt` (it may hold only a comment). The queue starts nothing while it is unreadable.
 5. Schedule one thread in the zstack project that follows `dispatch/playbook.md`, every few minutes.

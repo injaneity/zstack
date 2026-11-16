@@ -7,6 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
 PKG = Path(__file__).resolve().parent.parent
 try:
     import tomllib
@@ -41,7 +44,7 @@ class Policy(unittest.TestCase):
         self.assertEqual(self.run_("check").returncode, 0)
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
-        self.assertEqual(json.loads(self.run_("get", "models.verifier").stdout), {"provider": "openai-codex", "model": "gpt-6.1-terra"})
+        self.assertEqual(json.loads(self.run_("get", "models.verifier").stdout), {"provider": "codex", "model": "gpt-6.1-terra"})
         self.assertEqual(len(json.loads(self.run_("get", "models.designer").stdout)), 2)
         dump = json.loads(self.run_("dump").stdout)
         machine, project = (tomllib.loads(SHIPPED[f]) for f in FILES)
@@ -112,14 +115,14 @@ class Policy(unittest.TestCase):
             ("schema = 1\n\n# How many", "schema = 2\n\n# How many", "schema must be 1, not 2"),
             ("schema = 1\n\n# The provider", "schema = true\n\n# The provider", "schema must be 1, not True"),
             ("verifier = {", "verifer = {", "unknown key models.verifer"),
-            ('orchestrator = { provider = "claude-code", model = "claude-opus-5-5" }\n', "", "missing models.orchestrator"),
+            ('orchestrator = { provider = "claudeAgent", model = "claude-opus-5-5" }\n', "", "missing models.orchestrator"),
             ("schema = 1\n\n# How many", "schema = 1\nslot = 3\n\n# How many", "unknown key slot"),
             ("[ci]\nfix_attempts = 3\n", "", "[ci] is missing or empty"),
-            ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }', 'verifier = { provider = "openai-codex" }',
+            ('verifier = { provider = "codex", model = "gpt-6.1-terra" }', 'verifier = { provider = "codex" }',
              "models.verifier must be a {provider, model} table or a non-empty list of them"),
-            ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }', "verifier = []", "models.verifier must be"),
-            ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }',
-             'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
+            ('verifier = { provider = "codex", model = "gpt-6.1-terra" }', "verifier = []", "models.verifier must be"),
+            ('verifier = { provider = "codex", model = "gpt-6.1-terra" }',
+             'verifier = { provider = "codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
             ("[ci]", "[ci", "is not TOML"),
             ('me = "octo"', 'me = ""', "people.me must be a login"),
             ('held_words = ["skyhook", "vaultkey", "sealing"]', "held_words = []", "patent.held_words must be a non-empty list"),

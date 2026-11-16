@@ -1,7 +1,11 @@
+import os
 import re
 import subprocess
 import unittest
 from pathlib import Path
+
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
 
 PKG = Path(__file__).resolve().parent.parent
 REFS = (

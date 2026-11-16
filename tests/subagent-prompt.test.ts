@@ -4,6 +4,8 @@ import * as fs from "node:fs";
 import { test } from "node:test";
 import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../extensions/subagent/prompt.ts";
 
+for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
+
 const root = new URL("..", import.meta.url).pathname;
 const body = (name: string) => fs.readFileSync(`${root}agents/${name}.md`, "utf-8").split(/^---$/m).slice(2).join("---");
 

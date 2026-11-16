@@ -11,6 +11,9 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
 VM = Path(__file__).resolve().parent.parent / "services"
 spec = importlib.util.spec_from_file_location("wake_under_test", VM / "wake.py")
 wake = importlib.util.module_from_spec(spec)

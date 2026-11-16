@@ -10,6 +10,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
 PKG = Path(__file__).resolve().parent.parent
 TOOL = PKG / "bin" / "hold-row"
 BASE = "# holds\nhold | 5675 | yes | never touch\nreview-only | f-teammate | no | teammate\n"

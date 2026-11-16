@@ -1,6 +1,10 @@
 import importlib.util
+import os
 import unittest
 from pathlib import Path
+
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
 
 PKG = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("comments", PKG / "tests" / "comments.py")

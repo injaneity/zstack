@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
 PKG = Path(__file__).resolve().parent.parent
 _l = importlib.machinery.SourceFileLoader("queue_under_test", str(PKG / "bin" / "queue"))
 queue = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))

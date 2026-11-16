@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 
+for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
+
 const root = new URL("..", import.meta.url).pathname;
 const hooks = JSON.parse(fs.readFileSync(`${root}hooks/hooks.json`, "utf8")).hooks;
 const command = (event: string) => hooks[event][0].hooks[0].command.replaceAll("${CLAUDE_PLUGIN_ROOT}", root.replace(/\/$/, ""));

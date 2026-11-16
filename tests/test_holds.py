@@ -5,6 +5,9 @@ import sys
 import unittest
 from pathlib import Path
 
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
 VM = Path(__file__).resolve().parent.parent / "services"
 H, H2 = "a" * 40, "b" * 40
 
