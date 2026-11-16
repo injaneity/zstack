@@ -62,3 +62,19 @@ format = "lines"
 writer = "services/cron-wrap.sh"
 readers = ["the owner, by hand"]
 schema = "start, end, skip and TIMEOUT lines per cron job; tick/cron-<name>.started holds each job's last start"
+
+[file.queue]
+path = "queue.json"
+host = "each"
+format = "json"
+writer = "orchestrator/plan"
+readers = ["orchestrator/plan"]
+schema = "{items: {<id>: {state, kind, n, thread, prs, at}}}: each item a pass queued, the thread that claimed it and the PRs it opened; state is queued, claimed or done"
+
+[file.queue-lock]
+path = "queue.lock"
+host = "each"
+format = "lock"
+writer = "orchestrator/plan"
+readers = ["orchestrator/plan"]
+schema = "flock only: one read or write of queue.json at a time"

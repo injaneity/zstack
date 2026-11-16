@@ -26,7 +26,7 @@ def prose():
 
 
 def code():
-    return [f for f in tracked("bin/*", "services/*", "extensions/**/*.ts", "hooks/*")
+    return [f for f in tracked("bin/*", "services/*", "orchestrator/*", "extensions/**/*.ts", "hooks/*")
             if not f.endswith(".md") and f != "bin/policy"]
 
 
@@ -217,7 +217,7 @@ class StateFiles(unittest.TestCase):
                       r"\"([\w.-]+\.(?:json|log|txt|md|lock)|[A-Z]+|pushed|last-run|auto-pause)\"\)")
     FSTR = re.compile(r"f\"\{(?:ROOT|DIR|root|d)\}/([\w.-]+)\"")
     DIRS = {"tick"}
-    CODE = ("bin/hold-row", "services/merge_job.py", "services/patent_push.py", "services/cron-wrap.sh")
+    CODE = ("bin/hold-row", "orchestrator/plan", "services/merge_job.py", "services/patent_push.py", "services/cron-wrap.sh")
 
     def test_every_state_file_the_code_opens_is_declared(self):
         declared = {Path(f["path"]).name for f in STATE["file"].values()}
@@ -235,7 +235,7 @@ class StateFiles(unittest.TestCase):
             name = Path(f["path"]).name
             for who in [f["writer"], *f["readers"]]:
                 p = PKG / who.split()[0]
-                if who.split()[0].startswith(("bin/", "services/", "extensions/")):
+                if who.split()[0].startswith(("bin/", "services/", "orchestrator/", "extensions/")):
                     if not p.is_file():
                         wrong.append(f"{key}: {who} does not exist")
                     elif name not in p.read_text():

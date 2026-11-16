@@ -7,7 +7,7 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 ## the three parts
 
 - **The stack** is what every coding thread loads: `skills/`, `agents/`, the Hard rules, and the guard that enforces them. It names no repo. It reaches the rest only through `bin/policy`.
-- **The orchestrator** is one scheduled thread per machine (`orchestrator/playbook.md`). It plans the work, launches coding threads with `orchestrator/brief.md`, reads their reports and relays them. A messaging service can talk to it; the service decides nothing.
+- **The orchestrator** is one scheduled thread per machine (`orchestrator/playbook.md`). `orchestrator/plan` decides in code what is ready to work on and keeps the queue; the thread launches exactly that, reads the reports and relays them. A messaging service can talk to it; the service decides nothing.
 - **The services** run on a machine beside the threads and are not threads: the merge job (`services/merge_job.py`), the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and the two checks that keep a machine's checkout at main (`services/ensure-main`, `services/check-parity`).
 
 ## install
