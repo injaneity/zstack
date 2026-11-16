@@ -64,7 +64,7 @@ text = '''New files carry the repository's SPDX/FSL header where neighbouring fi
 
 [[section.rule]]
 id = "salvage-fixes"
-text = '''A salvage PR's body says `Salvaged from #<pr>` and, on a line of its own, `Fixes #<issue>` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges (Zane, 13 Nov 15:31 SGT).'''
+text = '''A salvage PR's body says `Salvaged from #<pr>` and, on a line of its own, `Fixes #<issue>` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges (Zane, 13 Nov 15:31 SGT). Take those issues from the salvaged PR's own body, not from GitHub's closingIssuesReferences, which links any issue after a closing word even when the body says it does not fix it. An issue the body names but says it does not fix gets `Refs #<issue>` instead, because an issue closes only when our merged PR fixed it.'''
 
 [[section.rule]]
 id = "text-pr-body"
