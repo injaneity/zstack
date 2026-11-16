@@ -7,4 +7,4 @@ This session runs on the relay Mac mini. onigiri-mode's Hard rules, appended to 
 - macOS crates build and test here. Linux and Windows platform crates, Linux desktop E2E (KDE, GNOME, X11, Wayland, PipeWire) do not: the verifier says in its verdict which checks could not run here.
 - There is no `timeout` or `setsid` command; default bash is 3.2 (bash 5 is first on PATH).
 
-- Pruning is allowed on the mini to stay productive: stale lume worker VMs (verifier runs stop them, never delete them), finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.
+- Pruning is allowed on the mini to stay productive: stale lume worker VMs (a verifier run stops a leftover only with `lume-e2e --stop-leftover <worker>`, which refuses while any lume-e2e run is live, and never deletes one; never a bare `lume stop` on a `cua-e2e-*` worker, since a running one may be another session's live run), finished sessions' build output and caches. Never delete live sessions' VMs or worktrees, seeds the verify skills reference, or the cua clone.
