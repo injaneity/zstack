@@ -16,11 +16,12 @@ stateDiagram-v2
   s3: Listing old stopped lume workers
   s4: Deleting the ones only collected runs name
   s5: Between passes, outbox not delivered
-  s6: Draining the queue
-  s7: Picking from GitHub
-  s8: Listing needs-Zane
-  s9: Nothing new
-  s10: Has news for the chat
+  s6: Deleting collected runs' target/ dirs
+  s7: Draining the queue
+  s8: Picking from GitHub
+  s9: Listing needs-Zane
+  s10: Nothing new
+  s11: Has news for the chat
   [*] --> s0
   s0 --> s1: launchd fires, the pass takes the lock
   s1 --> s2: deadline_s passes: the pass is killed
@@ -32,16 +33,18 @@ stateDiagram-v2
   s4 --> s2: deadline_s passes: the pass is killed
   s4 --> s6: none to delete, or a lume-e2e run holds run.lock
   s6 --> s2: deadline_s passes: the pass is killed
-  s6 --> s7: bin/hourly queue done, free auto slots counted
+  s6 --> s7: pi-run prune on each host: collected runs' target/ dirs deleted
   s5 --> s1: launchd fires, the pass takes the lock
   s7 --> s2: deadline_s passes: the pass is killed
-  s7 --> s8: every candidate launched or skipped by its rule, or no slot left
+  s7 --> s8: bin/hourly queue done, free auto slots counted
   s8 --> s2: deadline_s passes: the pass is killed
-  s8 --> s9: needs-Zane and chat items read
-  s9 --> s0: nothing new: no wake, lock freed
-  s8 --> s10: needs-Zane and chat items read
-  s10 --> s0: wake delivered, lock freed
-  s10 --> s5: wake not delivered: outbox kept, lock freed
+  s8 --> s9: every candidate launched or skipped by its rule, or no slot left
+  s9 --> s2: deadline_s passes: the pass is killed
+  s9 --> s10: needs-Zane and chat items read
+  s10 --> s0: nothing new: no wake, lock freed
+  s9 --> s11: needs-Zane and chat items read
+  s11 --> s0: wake delivered, lock freed
+  s11 --> s5: wake not delivered: outbox kept, lock freed
   class s0 blue
   class s1 teal
   class s2 yellow
@@ -51,5 +54,6 @@ stateDiagram-v2
   class s6 teal
   class s7 teal
   class s8 teal
-  class s9 yellow
+  class s9 teal
   class s10 yellow
+  class s11 yellow

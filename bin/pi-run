@@ -14,7 +14,7 @@ PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WAKE = os.path.join(PKG, "hosts", "vm", "wake.py")
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 USAGE = ("usage: pi-run <id> <role> <brief> [pi args...] | pi-run collect|queue <id> | pi-run ci <id> <pr> <head> <why...> "
-         "| pi-run stop <id> <why...> "
+         "| pi-run stop <id> <why...> | pi-run prune "
          "| pi-run list [<state>...]\nexit 0 done, 2 usage, 3 refused by the run's state (bin/PiRun.mmd), 4 setup failed; "
          "PI_RUN_DRY=1 checks a start and changes nothing")
 LIMIT = re.compile(r"(Error: )?(Incomplete Claude Code upstream response \(status (429|200|5\d\d|unknown), .*\)"
@@ -733,6 +733,24 @@ def prune(d):
         return f"prune failed: {type(e).__name__}: {e}"
 
 
+def prune_collected():
+    _, root = host_env("list")
+    failed = 0
+    for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        d = os.path.join(root, sid)
+        if not ID.fullmatch(sid) or os.path.islink(d) or not os.path.isfile(os.path.join(d, "run.json")) or not build_dirs(d):
+            continue
+        with Run(d) as r:
+            if (r.run or {}).get("state") != "collected":
+                continue
+            line = prune(d)
+            with open(os.path.join(d, "run.log"), "a") as fh:
+                fh.write(f"pi-run prune: {line}\n")
+        failed |= line.startswith("prune failed")
+        print(f"{sid}\t{line}")
+    return failed
+
+
 def continuation(run):
     return bool(run and run["state"] == "queued" and run.get("resume_at"))
 
@@ -833,11 +851,13 @@ def main(argv):
         return {"collect": collect, "queue": queue}[argv[0]](argv[1])
     if len(argv) >= 5 and argv[0] == "ci" and ID.fullmatch(argv[1]) and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{7,40}", argv[3]):
         return ci(argv[1], argv[2], argv[3], " ".join(argv[4:]))
+    if argv == ["prune"]:
+        return prune_collected()
     if argv[:1] == ["list"]:
         return list_runs(argv[1:])
     if len(argv) >= 3 and argv[0] == "stop" and ID.fullmatch(argv[1]):
         return stop(argv[1], " ".join(argv[2:]))
-    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop"):
+    if len(argv) >= 3 and ID.fullmatch(argv[0]) and argv[0] not in ("collect", "queue", "list", "ci", "stop", "prune"):
         return launch(argv[0], argv[1], argv[2], argv[3:])
     die(2, USAGE)
 
