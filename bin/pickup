@@ -150,7 +150,7 @@ def source_prs(errors, numbers):
     out = {}
     for i in range(0, len(numbers), SOURCES_PER_QUERY):
         chunk = numbers[i:i + SOURCES_PER_QUERY]
-        fields = " ".join(f"p{n}: pullRequest(number: {n}) {{ number state body author {{ login }} "
+        fields = " ".join(f"p{n}: pullRequest(number: {n}) {{ number state body createdAt author {{ login }} "
                           "closingIssuesReferences(first: 100) { nodes { number state author { login } } } }" for n in chunk)
         p = hourly.run(["gh", "api", "graphql", "-f", f'query=query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'])
         try:
@@ -172,6 +172,24 @@ def source_prs(errors, numbers):
 ISSUE_REF = r"(?:(?<![\w/.-])#|(?<![\w/.-])" + re.escape(REPO) + r"#|https://github\.com/" + re.escape(REPO) + r"/issues/)(\d+)\b"
 CLAIM_RX = re.compile(r"^[\s*>-]*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?((?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)"
                       + ISSUE_REF.replace("(\\d+)", "\\d+") + r")+)", re.I | re.M)
+
+
+def issue_authors(errors, numbers):
+    owner, name = REPO.split("/")
+    fields = " ".join(f"i{n}: issue(number: {n}) {{ createdAt author {{ login }} }}" for n in numbers)
+    p = hourly.run(["gh", "api", "graphql", "-f", f'query=query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'])
+    try:
+        repo = (json.loads(p.stdout or "null") or {}).get("data", {}).get("repository") or {}
+    except (ValueError, AttributeError):
+        repo = {}
+    if p.returncode or not repo:
+        errors.append(f"gh api graphql for {len(numbers)} salvage issues' authors: " + pr.tail(p, 150))
+    return {n: repo[f"i{n}"] for n in numbers if isinstance(repo.get(f"i{n}"), dict)}
+
+
+def opened_for(src, issue):
+    login = lambda x: ((x.get("author") or {}).get("login") or "").lower()  # noqa: E731
+    return bool(issue) and login(src) != "" and login(src) == login(issue) and (src.get("createdAt") or "") >= (issue.get("createdAt") or "~")
 
 
 def claimed(body):
@@ -205,6 +223,9 @@ def salvage_check(errors, h):
                 ours_fix = {x["number"] for x in p.get("closingIssuesReferences") or []}
                 body = src.get("body")
                 wrong = sorted(ours_fix & ({x["number"] for x in links} | mentioned(body)) - claimed(body))
+                if wrong:
+                    authors = issue_authors(errors, wrong)
+                    wrong = [i for i in wrong if not opened_for(src, authors.get(i))]
                 if wrong:
                     items.append([f"salvage-wrong-fixes:{p['number']}:{n}", f"salvage cua#{p['number']} of cua#{n} closes "
                                   + ", ".join(f"#{i}" for i in wrong) + f", which cua#{n} names but never claims on a line that "

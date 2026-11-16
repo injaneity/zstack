@@ -21,9 +21,16 @@ case "$*" in
   "pr list"*in:body*) cat "$T/salvages.json" 2>/dev/null || echo '[]';;
   "api graphql"*) echo "$*" >> "$T/graphql"; python3 -c '
 import json, os, re, sys
-src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
+T = os.environ["T"]
+iss = re.findall(r"issue\\(number: (\\d+)\\)", sys.argv[1])
+if iss:
+    au = json.load(open(os.path.join(T, "issue_authors.json"))) if os.path.exists(os.path.join(T, "issue_authors.json")) else {}
+    print(json.dumps({"data": {"repository": {f"i{n}": {"createdAt": au.get(n, {}).get("createdAt", "2026-01-01T00:00:00Z"),
+        "author": {"login": au.get(n, {}).get("login", "reporter")}} for n in iss}}}))
+    sys.exit(0)
+src = {p["number"]: p for p in json.load(open(os.path.join(T, "sources.json")))}
 ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
-node = lambda p: {"number": p["number"], "state": p["state"], "body": p.get("body", ""),
+node = lambda p: {"number": p["number"], "state": p["state"], "body": p.get("body", ""), "createdAt": p.get("createdAt", "2026-06-01T00:00:00Z"),
     "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
     {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED", "author": {"login": i.get("login", "someone")}}
     for i in p["closingIssuesReferences"]]}}
@@ -343,6 +350,27 @@ class Pickup(unittest.TestCase):
             "closing word: read cua#611's body, and change " + tail,
             "- salvage cua#713 of cua#613 closes #34, which cua#613 names but never claims on a line that starts with a "
             "closing word: read cua#613's body, and change " + tail]))
+        self.assertNotIn("error:", report)
+
+    def test_a_source_by_the_issues_own_author_opened_after_it_keeps_its_fixes(self):
+        self.peer(at_main=True)
+        (self.t / "salvages.json").write_text(json.dumps([
+            {"number": 720 + i, "state": "OPEN", "mergedAt": None, "body": f"Salvaged from #{620 + i}\n\nFixes #{50 + i}\n",
+             "closingIssuesReferences": [{"number": 50 + i}]} for i in range(3)]))
+        (self.t / "sources.json").write_text(json.dumps([
+            {"number": 620 + i, "state": "CLOSED", "login": "Alice", "createdAt": "2026-08-29T17:51:22Z",
+             "closingIssuesReferences": [], "body": f"Refs #{50 + i}"} for i in range(3)]))
+        (self.t / "issue_authors.json").write_text(json.dumps({
+            "50": {"login": "alice", "createdAt": "2026-08-29T17:25:42Z"},
+            "51": {"login": "bob", "createdAt": "2026-08-29T17:25:42Z"},
+            "52": {"login": "alice", "createdAt": "2026-09-01T00:00:00Z"}}))
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[0] if f.startswith("report="))[7:]).read_text()
+        chat = report.split("chat:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        tail = "`Fixes #N` to `Refs #N` for each it does not fix or was not opened for"
+        self.assertEqual(sorted(x.removesuffix(" (new)") for x in chat), sorted([
+            f"- salvage cua#72{i} of cua#62{i} closes #5{i}, which cua#62{i} names but never claims on a line that starts "
+            f"with a closing word: read cua#62{i}'s body, and change " + tail for i in (1, 2)]))
         self.assertNotIn("error:", report)
 
     def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
