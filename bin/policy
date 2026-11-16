@@ -62,8 +62,6 @@ SCHEMA = {
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "resume": {"cap": (pos_int, "a positive integer")},
     "run": {"idle_min": (pos_int, "a positive integer")},
-    "skills": {"extra": (lambda v: names(v) and not any(os.path.isabs(x) or ".." in x.split("/") for x in v),
-                         "a list of distinct directories inside the package")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),

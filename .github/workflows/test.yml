@@ -107,7 +107,7 @@ jobs:
       - name: skills and agent types have frontmatter
         run: |
           fail=0
-          for f in skills/*/SKILL.md extras/*/*/SKILL.md agents/*.md; do
+          for f in skills/*/SKILL.md agents/*.md; do
             head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; fail=1; }
           done
           exit $fail
@@ -124,7 +124,7 @@ jobs:
           exit $fail
       - name: every skill and playbook the docs name exists
         run: |
-          verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/)|^extras/'
+          verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/)'
           agents=$(sed -n 's/^name: *//p' agents/*.md)
           fail=0
           while IFS=: read -r file ref; do
@@ -132,8 +132,8 @@ jobs:
             [[ $ref == .cursor/* || $ref == .pi/* ]] && continue
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
-            [ -f "skills/$name/SKILL.md" ] || ls extras/*/"$name"/SKILL.md >/dev/null 2>&1 || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
-          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills extras prompts docs agents README.md AGENTS.md | sort -u)
+            [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
+          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
             [ -f "skills/onigiri-mode/playbooks/$name.md" ] || { echo "$file names playbook \`$name\` but skills/onigiri-mode/playbooks/$name.md does not exist"; fail=1; }

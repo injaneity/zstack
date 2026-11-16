@@ -97,12 +97,6 @@ since = "2026-07-22"
 [run]
 idle_min = 150
 
-# Skills a deployment loads beside the ones the package ships. The package manifest lists only `skills/`, so a
-# plain `pi install` gets none of these. `extra` names directories in the package; a host loads one by listing its
-# path under `skills` in pi's own settings file, and bin/check-host fails on a host that has not.
-[skills]
-extra = ["extras/cua"]
-
 # The hourly pass's thresholds (bin/hourly, bin/pickup, playbooks/hourly.md), moved out of bin/hourly and the playbook.
 # `floor_gb`: a peer takes launches only with this much disk free (step 3), and a host under it is a disk to prune.
 # `merge_stale_min`: the

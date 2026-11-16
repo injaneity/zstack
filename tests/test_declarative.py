@@ -12,8 +12,7 @@ policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name
 _l.exec_module(policy)
 POLICY, RULES, STATE = policy.load(), policy.rules(), policy.state()
 
-VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/",
-            "extras/")
+VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/")
 
 BENCH = "hosts/mini/release-bench/"
 

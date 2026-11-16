@@ -64,16 +64,8 @@ class CheckHost(unittest.TestCase):
                                          "  npm:@ff-labs/pi-fff@0.11.0\n    /f\n")
         (self.t / "models").write_text(MODELS)
         (self.t / "gh-ok").touch()
-        self.load_skills(*(str(PKG / x) for x in self.extras()))
         for p in ("claude-code", "openai-codex"):
             (self.t / f"answer-{p}").write_text("ok\n")
-
-    def extras(self):
-        return load().pr.policy().load()["skills"]["extra"]
-
-    def load_skills(self, *paths):
-        (self.t / "agent").mkdir(exist_ok=True)
-        (self.t / "agent" / "settings.json").write_text(json.dumps({"skills": list(paths)}))
 
     def fails(self, lines):
         return [x for x in lines if x.startswith("FAIL")]
@@ -95,33 +87,10 @@ class CheckHost(unittest.TestCase):
         self.assertFalse(any(x.startswith("ok    live") for x in lines))
         self.assertEqual(rc, 1)
 
-    def test_an_extra_skills_directory_the_host_does_not_load_fails_with_the_line_to_add(self):
-        self.assertTrue(self.extras())
-        self.ready()
-        self.load_skills()
-        _, lines = self.check("--offline")
-        for extra in self.extras():
-            row = next(x for x in lines if x.startswith(f"FAIL  skills {extra}: not loaded on this host"))
-            self.assertIn(json.dumps(str(PKG / extra)), row)
-            self.assertIn(str(self.t / "agent" / "settings.json"), row)
-        os.unlink(self.t / "agent" / "settings.json")
-        _, lines = self.check("--offline")
-        self.assertEqual(len([x for x in lines if x.startswith("FAIL  skills ")]), len(self.extras()))
-
-    def test_an_extra_skills_directory_counts_however_the_settings_file_spells_its_path(self):
-        self.ready()
-        (self.t / "pkg").symlink_to(PKG)
-        self.load_skills(*(f"~/pkg/{x}" for x in self.extras()))
-        _, lines = self.check("--offline")
-        for extra in self.extras():
-            self.assertIn(f"ok    skills {extra}: loaded from {self.t / 'agent' / 'settings.json'}", lines)
-
     def test_the_package_ships_only_its_own_skills_directory(self):
         manifest = json.loads((PKG / "package.json").read_text())["pi"]["skills"]
         self.assertEqual(manifest, ["./skills"])
-        for extra in self.extras():
-            self.assertTrue((PKG / extra).is_dir(), extra)
-            self.assertFalse((PKG / extra).resolve().is_relative_to((PKG / "skills").resolve()), extra)
+
 
     def test_pi_claude_code_at_another_commit_fails_even_offline(self):
         self.ready()

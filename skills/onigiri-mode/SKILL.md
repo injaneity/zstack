@@ -17,26 +17,17 @@ license: MIT
 
 The rules are `config/rules.toml` in the zstack package, and nowhere else. `bin/pi-run` renders them with `bin/policy rules` and appends them to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, runs `bin/policy rules` now. The values the code enforces are `config/policy.toml`, and the runtime state files are `config/state.toml`; this skill and its playbooks name those keys and never restate their values.
 
-## Non-negotiables
+## Work
 
-- **Restate the goal first.** Name the problem and the smallest change that meets it. Don't wait for confirmation. If the evidence rules out the request, show that and stop.
-- **Name the principle that changed a decision**, and the decision it changed.
-- **Verify against the real thing.** Resolve the repo's tools and the platform, then run it and read the value. Check the artifact, never a proxy, cache, or self-report. When verification fails, suspect the observation first. The best proof is a script a reviewer can rerun. Install a missing tool yourself. Never hand the user a check the verifier could run.
-- **Never fabricate.** Every claim is measured, inferred, or a guess, and you say which.
-- **Clean up your scratch.** Remove only what you created, after saving the evidence.
+Your model is `models.coding` in `config/policy.toml`, and it needs no instruction in how to read code, design or debug. These lines are only the choices that are Zane's:
 
-## Principles
-
-- **Root cause.** Fix the first place the system did something it should not. Ask why until the answer is a wrong decision in the code. If the triggering state is legitimate, the code that broke on it is the bug. If it should never exist, find what produced it, because a guard where it broke hides the bug. Suspect persisted state when a failure appears only after a restart. Fix every instance. Two failed fixes on one premise mean the premise is wrong. Reproducing and narrowing a bug are in `change`.
-- **Tests** assert what users of the code can observe, with expected values derived from the requirement, not from a run. A test that stays green when the behavior breaks proves nothing. One that turns red when internals move is pinned to the implementation.
-- **Shape.** Bias to deletion. No speculative abstraction, validator, or config. Types and data structures before logic: a state machine over booleans, a table over branching. If a requirement doesn't fit, rebuild as if it had been there from the start. Fewer layers and less hidden state. The user's experience beats convenience. A novel design gets two or three competing shapes from **architect** before you commit.
-- **Guards.** Parse at the edge (CLI, config, network, external APIs) into named types and trust them inside. Every state-mutating step survives running twice and dying halfway. Move every caller and delete the old API in the same change, with no shims. Each actor owns its mutable state, and only real sharing gets a lock.
-
-**Run it well.**
-- Small units, each ending in a check that can fail. Don't advance on red. Bulk output goes to a file, and you read back the slice you need. Before reporting a number, name what bounds it and what else it might measure. A recurring mistake gets a line in the repo's rules file, and the second time a check.
-- **When no playbook fits**, write done as a predicate that can fail, then split the work into units that land alone, riskiest unknown first.
-- **Wall clock.** Resolve a tool with `command -v`, `which -a` or `brew --prefix`, or its known install directory. Never `find /` or a whole home directory for one. Run a long build or test in the background with its output in a log and wait on it once (`wait <pid>`, or until the log shows its end marker or the pid exits), never `sleep N; tail` it. A measurement is a fixed, time-bounded matrix, not a long serial loop in the foreground.
-- **On a long or unattended run**, keep an append-only log with one row per decision: what, why, and a pointer to the evidence (a sha, `file:line`, or artifact path). Reread it before each attempt and before handing back.
+- **A question** gets a cited answer, not a fix. A cause you did not prove on the running thing is the strongest hypothesis, and you call it that.
+- **A bug** is reproduced on the real surface before any fix. When a cheap local test exists, its failing test is the first commit. Reply with what broke, the root cause, and the failing-then-passing repro verbatim.
+- **A refactor** pins the behavior first with a characterization test, snapshot or equivalence harness (type checks are not a pin), lands its deletions first, and is reverted when it does not lower reader load. Reply with the structure that changed, the pin and the equivalence proof.
+- **A measurement** uses a harness proven to tell a slow case from a fast one, then frozen. Keep a change only when the number moves past noise, one commit per kept change, and never relax the stop predicate. Reply with baseline, result, delta and the artifact path.
+- **Every change** is small ordered commits, moves every caller and deletes the old API with no shims, and ends in a PR (`playbooks/pull-requests.md`). Follow-ups get their own PRs.
+- **Pausing** is one `wip:` commit and a resume note in a file: intent, what is verified, what is not, the next action. Resuming rebuilds state from the repo and checks inherited claims on the real artifact.
+- **Every claim** is measured, inferred or a guess, and you say which. Prose goes through **unslop**.
 
 ## Subagents
 
@@ -44,8 +35,8 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs the agents in the package's `
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|
-| Explore | `explorer`, 2 to 4 at once | Diagnose, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
-| Design | `designer`, twice (`variant` 1 and 2) | Change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
+| Explore | `explorer`, 2 to 4 at once | A question, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
+| Design | `designer`, twice (`variant` 1 and 2) | A change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
 | Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Every diff and every done claim that rests on one, and a review of someone else's PR, as Hard rules' Checks says. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one `subagent` call per angle with `agent: explorer`. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
@@ -66,29 +57,17 @@ When `$ONIGIRI_WAKE` is set, failures wake the orchestrator. The launcher wakes 
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
-"Don't stop" or "going to bed" means run to the exit condition and keep the decision log. A plateau is not a stop.
-
-## Writing
-
-- Lead with the answer. Short declarative sentences.
-- No long dashes, and no colon as a mid-sentence connector.
-- Every claim carries its evidence in the same sentence. Link PRs by full URL.
-- Comments only for a non-obvious why.
-- Run prose through **unslop**.
+"Don't stop" or "going to bed" means run to the exit condition, with an append-only log of one row per decision (what, why, and a pointer to the evidence). A plateau is not a stop.
 
 ## Playbooks
 
-Each is `playbooks/<name>.md`. Read the matched one in full, and list its numbered steps in your first message. A step you skip stays in the list as `skip: <reason>`. Other skills are `../<name>/SKILL.md`: **how**, **why**, **architect**, **unslop**.
+Each is `playbooks/<name>.md`. Read the matched one in full, and list its numbered steps in your first message. A step you skip stays in the list as `skip: <reason>`.
 
-- **Diagnose** (`diagnose`). A read-only question or unexplained behavior. The deliverable is a cited answer, not a fix.
-- **Change** (`change`). A bug fix, a feature, or a refactor, through to an open PR.
-- **Measure** (`measure`). Improve a number, once or in a loop, against a frozen harness.
-- **Release bench** (`release-bench`). Bench a published cua-driver release against the last one benched, and revert our own PR that regressed it. The pickup starts it; no PR waits on a bench.
 - **Pull requests** (`pull-requests`). Open a PR at the end of every change. On request, land one or verify someone else's.
-- **Resume** (`resume`). Pick up prior work, or pause so it can be picked up.
+- **Release bench** (`release-bench`). Bench a published cua-driver release against the last one benched, and revert our own PR that regressed it. The pickup starts it; no PR waits on a bench.
 - **Hourly** (`hourly`). The pickup: `bin/pickup` on the mini's schedule, and the chat's judgment steps with `bin/hourly`. Never a pi session.
 
-Editing a skill is a Change. Match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
+Editing a skill is a change like any other. Match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
 
 ## Repo rules
 
