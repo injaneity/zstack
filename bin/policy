@@ -59,10 +59,11 @@ SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 PATHISH = (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/")
 MACHINE = {
     "models": {role: SEAT for role in ("coding", "orchestrator", "explorer", "designer", "verifier")},
-    "run": {"idle_min": (pos_int, "a positive integer")},
+    "run": {"idle_min": (pos_int, "a positive integer"), "threads": (pos_int, "a positive integer")},
     "wake": {"url": (lambda v: text(v) and v.startswith("https://"), "an https URL"), "key_file": PATHISH},
 }
-PLACE = {"clone": PATHISH, "root": PATHISH}
+PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
+         "unlabelled": (lambda v: type(v) is bool, "true or false")}
 REPO = {
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "people": {"me": (lambda v: text(v), "a login"), "owner": (lambda v: text(v), "a name")},
@@ -73,10 +74,9 @@ REPO = {
     },
     "merge": {
         "gate_check": (lambda v: text(v), "a check name"),
-        "never_rerun": (names, "a list of distinct check names"),
+        "verified_check": (lambda v: text(v), "a status name"),
         "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
-        "preapprove_tiers": (words, "a list of distinct lowercase words"),
-        "floor_gb": (pos_int, "a positive integer"),
+        "auto_tiers": (words, "a list of distinct lowercase words"),
     },
     "issues": {
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
@@ -127,8 +127,8 @@ def validate_repo(name, data):
     sections(name, data, REPO)
     if name.lower() == data["patent"]["private_repo"].lower():
         raise PolicyError("patent.private_repo must differ from merge.repo")
-    if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
-        raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
+    if extra := [t for t in data["merge"]["auto_tiers"] if t not in data["merge"]["tiers"]]:
+        raise PolicyError(f"merge.auto_tiers names {', '.join(extra)}, which merge.tiers lacks")
     return data
 
 
@@ -191,10 +191,17 @@ def load(want=None):
     name = by[pick(list(machine["repos"]), want).lower()]
     place = next(v for k, v in machine["repos"].items() if k.lower() == name.lower())
     project = validate_repo(name, read(os.path.join(CONFIG, "repos", name, "policy.toml")))
+    every = set()
+    for f in sorted(os.listdir(os.path.join(CONFIG, "machines"))):
+        other = read(os.path.join(CONFIG, "machines", f)).get("repos") if f.endswith(".toml") else None
+        for k, v in (other.items() if isinstance(other, dict) else []):
+            if k.lower() == name.lower() and isinstance(v, dict) and names(v.get("labels")):
+                every |= set(v["labels"])
     root = place["root"]
     return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO},
             "merge": {"repo": name, **project["merge"]}, "repos": known,
-            "host": {"clone": place["clone"], "root": root, "holds": root.rstrip("/") + "/hold-prs.txt"}}
+            "host": {"clone": place["clone"], "root": root, "holds": root.rstrip("/") + "/hold-prs.txt",
+                     "labels": place["labels"], "unlabelled": place["unlabelled"], "all_labels": sorted(every)}}
 
 
 def text(v):

@@ -50,6 +50,30 @@ function readText(file: string, dir: string | undefined): string | undefined {
 
 const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
+const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
+
+export function checkDelegate(tool: string, input: { subagent_type?: unknown; role?: unknown; target?: { model?: unknown } }): string | undefined {
+	if (tool === "Agent" || tool === "Task") {
+		const type = String(input.subagent_type ?? "");
+		const role = type.replace(/^zstack:/, "");
+		return type.startsWith("zstack:") || Object.values(ROLES).includes(type)
+			? `blocked: the ${role} runs on its own model, not as a subagent of this one. Start it with the delegate tool, on the model \`bin/policy seat ${role}\` prints.`
+			: undefined;
+	}
+	const agent = ROLES[String(input.role ?? "")];
+	if (!agent) return undefined;
+	let seats: { model: string }[];
+	try {
+		const entry = JSON.parse(dump()).models[agent];
+		seats = Array.isArray(entry) ? entry : [entry];
+	} catch {
+		return `blocked: the config could not be read, so the ${agent}'s model is unknown.`;
+	}
+	const model = input.target?.model;
+	return seats.some((x) => x.model === model) ? undefined
+		: `blocked: the ${agent} runs on ${seats.map((x) => x.model).join(" or ")}, not ${typeof model === "string" ? model : "the model this thread runs on"}. Pass it as target.model.`;
+}
+
 export function check(tool: "bash" | "write", target: string, cwd: string | undefined, ready: boolean): string | undefined {
 	return tool === "bash" ? checkBash(target, owned, host, cwd, ready, owned) : checkWrite(target, host, cwd);
 }

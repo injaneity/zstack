@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+USAGE = (
+    "  queue pickup [--dry]             read the repo and queue what this machine takes\n"
+    "  queue add <id> [--priority N]    queue a task from the orchestrator; its text on stdin\n"
+    "  queue next                       what to launch now, what to verify and what to recover, as JSON\n"
+    "  queue start <id>                 reserve the next item before launching its thread\n"
+    "  queue claim <id> <thread>        the thread now working a started item\n"
+    "  queue requeue <id>               a started item whose thread did not start\n"
+    "  queue ready <id> <pr>            a working item's PR is open and waits for the verifier\n"
+    "  queue verified <id> pass <tier>  the verifier passed that head and named its risk\n"
+    "  queue verified <id> fail         the verifier found something: back to its thread\n"
+    "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
+    "  queue sweep                      close merged items, and send a passed item with a new head back to work\n"
+    "  queue list                       the queue as it stands"
+)
+_l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
+policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
+_l.exec_module(policy)
+Refused = policy.PolicyError
+STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "requeue": ("starting", "queued"),
+         "ready": ("working", "verifying")}
+ACTIVE = ("starting", "working", "verifying", "passed")
+OPEN = ("working", "verifying", "passed", "owner")
+STALE_S = 15 * 60
+ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
+ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
+       "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", "/opt/homebrew/bin",
+                                os.environ.get("PATH") or "/usr/bin:/bin"])}
+
+
+def gh(*args, stdin=None):
+    p = subprocess.run(["gh", *args], capture_output=True, text=True, input=stdin, env=ENV)
+    return p.returncode, p.stdout, (p.stderr or p.stdout).strip()[-200:]
+
+
+def gh_json(errors, *args):
+    rc, out, err = gh(*args)
+    if rc:
+        errors.append(f"gh {' '.join(args[:3])}: {err}")
+        return []
+    try:
+        return json.loads(out)
+    except ValueError:
+        errors.append(f"gh {' '.join(args[:3])}: not JSON")
+        return []
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def age(at):
+    return (datetime.now(timezone.utc) - datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds()
+
+
+def read_text(path):
+    try:
+        with open(os.path.expanduser(path)) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def holds(text):
+    h = {"hold": set(), "skip": set(), "review_only": set(), "read": text is not None}
+    for line in (text or "").splitlines():
+        f = [x.strip() for x in line.split("|")]
+        if line.lstrip().startswith("#") or len(f) < 2:
+            continue
+        if f[0] == "hold" and f[1].lstrip("#").isdigit():
+            h["hold"].add(int(f[1].lstrip("#")))
+        elif f[0] in ("skip-author", "review-only"):
+            h["skip" if f[0] == "skip-author" else "review_only"].add(f[1].lower())
+    return h
+
+
+def bot(author):
+    return bool(author.get("is_bot")) or author["login"].startswith("app/") or author["login"].endswith("[bot]")
+
+
+def candidates(errors, pol):
+    repo, me, short = pol["merge"]["repo"], pol["people"]["me"], pol["merge"]["repo"].split("/")[1]
+    out = []
+    for i in gh_json(errors, "issue", "list", "-R", repo, "--assignee", me, "--state", "open", "--limit", "1000",
+                     "--json", "number,title,body,url,createdAt,labels,closedByPullRequestsReferences,author"):
+        out.append(dict(id=f"{short}-{i['number']}", kind="issue", n=i["number"], head=None, author=i["author"], title=i["title"],
+                        body=i.get("body") or "", url=i["url"], created=i["createdAt"], labels=[x["name"] for x in i["labels"]],
+                        linked=[x["number"] for x in i.get("closedByPullRequestsReferences") or []]))
+    for p in gh_json(errors, "pr", "list", "-R", repo, "--state", "open", "--search", f"review-requested:{me}", "--limit", "1000",
+                     "--json", "number,title,body,url,createdAt,labels,headRefOid,author"):
+        out.append(dict(id=f"{short}-{p['number']}-review-{p['headRefOid'][:7]}", kind="review", n=p["number"], head=p["headRefOid"],
+                        author=p["author"], title=p["title"], body=p.get("body") or "", url=p["url"], created=p["createdAt"],
+                        labels=[x["name"] for x in p["labels"]], linked=[]))
+    return sorted(out, key=lambda c: (c["created"] or "9", c["id"]))
+
+
+def open_prs(errors, repo):
+    return {p["number"] for p in gh_json(errors, "pr", "list", "-R", repo, "--state", "open", "--limit", "3000", "--json", "number")}
+
+
+def takes(labels, host):
+    mine, everyones = set(host["labels"]), set(host["all_labels"])
+    if not mine or mine & set(labels):
+        return True
+    return host["unlabelled"] and not everyones & set(labels)
+
+
+def skip(c, h, prs, items, host):
+    if not h["read"]:
+        return "holds-unreadable"
+    if c["id"] in items:
+        return items[c["id"]]["state"]
+    if not takes(c["labels"], host):
+        return "other-machine"
+    if bot(c["author"]) or c["author"]["login"].lower() in h["skip"] or "hold" in c["labels"]:
+        return "held"
+    if (c["kind"] != "issue" and c["n"] in h["hold"]) or any(n in h["hold"] for n in c["linked"]):
+        return "held"
+    if c["kind"] == "issue" and any(n in prs for n in c["linked"]):
+        return "pr"
+    busy = {n for i in items.values() if i["state"] != "done" for n in (i["n"], i["pr"]) if n}
+    if c["n"] in busy or any(n in busy for n in c["linked"]):
+        return "overlap"
+    return None
+
+
+def strictest(tiers, *named):
+    known = [t for t in named if t in tiers]
+    return max(known, key=tiers.index) if known else tiers[-1]
+
+
+def labelled(labels, tiers):
+    return [x[len("risk:"):] for x in labels if x.startswith("risk:") and x[len("risk:"):] in tiers]
+
+
+def task(c, h, pol):
+    repo, me, iss = pol["merge"]["repo"], pol["people"]["me"], pol["issues"]
+    if c["kind"] == "issue":
+        return (f"{repo}#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in {repo}, picked from the issues assigned to {me}. "
+                f"Read the issue and its thread, fix it with a test, and open a PR whose body says `{iss['fixes'].format(issue=c['n'])}`.")
+    salvage = pol["review"]["outside"] == "salvage"
+    outside = "salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes" if salvage else \
+        "request changes on a fixable PR, and do not rewrite it as a PR of ours"
+    who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"].lower() in h["review_only"] else \
+        f"outside contributor ({outside})"
+    text = (f"{repo}#{c['n']} at head {c['head']} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first "
+            f"review, requested of {me}. Run playbooks/pull-requests.md Verify. Post nothing under the owner's name: put every "
+            "comment for the author under a `drafts:` section of your final report.")
+    if not salvage:
+        return text
+    return (f"{text}\nA salvage PR's body carries `{iss['salvaged_from'].format(pr=c['n'])}` and a "
+            f"`{iss['fixes'].format(issue='<n>')}` line for each issue #{c['n']} fixes or was opened for, so the forge closes "
+            "them when the salvage merges. Keep the contributor's commits as they authored them.")
+
+
+def item(kind, n, source, priority, text, title):
+    return {"state": "queued", "kind": kind, "n": n, "source": source, "risk": None, "priority": priority, "raised": False,
+            "task": text, "title": title, "thread": None, "pr": None, "head": None, "fixes": 0, "armed": False, "at": now()}
+
+
+def forge_claim(repo, ident):
+    rc, out, err = gh("api", f"repos/{repo}", "--jq", ".default_branch")
+    if rc:
+        return f"cannot read {repo}: {err}"
+    rc, sha, err = gh("api", f"repos/{repo}/git/ref/heads/{out.strip()}", "--jq", ".object.sha")
+    if rc:
+        return f"cannot read the default branch of {repo}: {err}"
+    rc, _, err = gh("api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/zstack/claims/{ident}", "-f", f"sha={sha.strip()}")
+    return None if rc == 0 else "claimed-elsewhere" if "already exists" in err else f"cannot claim {ident}: {err}"
+
+
+def root(pol):
+    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or pol["host"]["root"]))
+
+
+def locked(pol, fn):
+    base = root(pol)
+    os.makedirs(base, exist_ok=True)
+    with open(os.path.join(base, "queue.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = os.path.join(base, "queue.json")
+        text = read_text(path)
+        state = json.loads(text) if text else {"items": {}}
+        out, changed = fn(state["items"])
+        if changed:
+            with open(path + ".tmp", "w") as f:
+                json.dump(state, f, indent=1, sort_keys=True)
+                f.write("\n")
+            os.replace(path + ".tmp", path)
+        return out
+
+
+def pickup(pol, dry, claim=forge_claim):
+    errors = []
+    h = holds(read_text(pol["host"]["holds"]))
+    cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
+
+    def go(items):
+        queued, skipped = [], []
+        for c in [] if errors else cands:
+            why = skip(c, h, prs, items, pol["host"])
+            if not why and not dry:
+                why = claim(pol["merge"]["repo"], c["id"])
+            if why:
+                (errors if why.startswith("cannot ") else skipped).append(why if why.startswith("cannot ") else {"id": c["id"], "why": why})
+                continue
+            priority = 100 if "urgent" in c["labels"] else 0
+            items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"])
+            queued.append({"id": c["id"], "priority": priority})
+        return {"queued": queued, "skipped": skipped, "errors": errors}, bool(queued) and not dry
+    return locked(pol, go)
+
+
+def add(pol, ident, text, priority, claim=forge_claim):
+    if not re.fullmatch(ID, ident) or not text.strip():
+        raise Refused("an id of letters, digits, . _ - and a task on stdin")
+
+    def go(items):
+        if ident in items:
+            raise Refused(f"{ident} is already {items[ident]['state']}")
+        why = claim(pol["merge"]["repo"], ident)
+        if why:
+            raise Refused(f"{ident}: {why}")
+        items[ident] = item("task", None, "orchestrator", priority, text.strip(), text.strip().splitlines()[0][:120])
+        return items[ident], True
+    return locked(pol, go)
+
+
+def order(items):
+    return sorted((k for k, v in items.items() if v["state"] == "queued"), key=lambda k: (-items[k]["priority"], items[k]["at"], k))
+
+
+def first(items, h, cap):
+    if any(v["state"] == "starting" for v in items.values()):
+        return None, "a launch is under way"
+    if sum(1 for v in items.values() if v["state"] in ACTIVE) >= cap:
+        return None, "the machine is at its thread cap"
+    if not h["read"]:
+        return None, "the holds file is unreadable"
+    free = [k for k in order(items) if items[k]["n"] not in h["hold"]]
+    return (free[0], None) if free else (None, "nothing is queued")
+
+
+def brief(pol, ident, it):
+    return read_text(os.path.join(PKG, "dispatch", "brief.md")).format(
+        id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "bin", "queue"))
+
+
+def next_up(pol):
+    h = holds(read_text(pol["host"]["holds"]))
+
+    def go(items):
+        pick, waiting = first(items, h, pol["run"]["threads"])
+        return {"launch": {"id": pick, "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
+                "verify": [{"id": k, "pr": v["pr"], "head": v["head"], "thread": v["thread"]} for k, v in sorted(items.items())
+                           if v["state"] == "verifying"],
+                "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S)}, False
+    return locked(pol, go)
+
+
+def step(pol, name, ident, thread=None, pr=None):
+    was, to = STEPS[name]
+    h = holds(read_text(pol["host"]["holds"]))
+
+    def go(items):
+        it = items.get(ident)
+        if not it:
+            raise Refused(f"no item {ident}")
+        if it["state"] != was:
+            raise Refused(f"{ident} is {it['state']}, not {was}")
+        if name == "start":
+            pick, waiting = first(items, h, pol["run"]["threads"])
+            if pick != ident:
+                raise Refused(f"{ident} is not next: {waiting or pick + ' is'}")
+        if name == "ready":
+            head = pr_view(pol, pr)["headRefOid"]
+            it.update(pr=pr, head=head)
+        it.update(state=to, thread=thread or it["thread"], at=now())
+        return it, True
+    return locked(pol, go)
+
+
+def pr_view(pol, pr):
+    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", "state,headRefOid,labels,number")
+    if rc:
+        raise Refused(f"cannot read PR {pr}: {err}")
+    return json.loads(out)
+
+
+def protected(pol):
+    repo, need = pol["merge"]["repo"], {pol["merge"]["gate_check"], pol["merge"]["verified_check"]}
+    rc, branch, _ = gh("api", f"repos/{repo}", "--jq", ".default_branch")
+    rc2, out, _ = gh("api", f"repos/{repo}/branches/{branch.strip()}/protection/required_status_checks", "--jq", ".contexts") \
+        if rc == 0 else (1, "", "")
+    try:
+        return rc2 == 0 and need <= set(json.loads(out))
+    except ValueError:
+        return False
+
+
+def verified(pol, ident, result, said=None):
+    m, h = pol["merge"], holds(read_text(pol["host"]["holds"]))
+
+    def go(items):
+        it = items.get(ident)
+        if not it or it["state"] != "verifying":
+            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not verifying")
+        if result == "fail":
+            it["fixes"] += 1
+            it.update(state="working" if it["fixes"] < pol["ci"]["fix_attempts"] else "owner", at=now())
+            return {**it, "say": "send the findings to its thread" if it["state"] == "working" else "its attempts are spent: the owner's"}, True
+        live = pr_view(pol, it["pr"])
+        if live["headRefOid"] != it["head"]:
+            it.update(state="working", at=now())
+            return {**it, "say": "the head moved while it was verified: it needs `queue ready` again"}, True
+        rc, _, err = gh("api", "-X", "POST", f"repos/{m['repo']}/statuses/{it['head']}", "-f", "state=success",
+                        "-f", f"context={m['verified_check']}", "-f", "description=the verifier passed this head")
+        if rc:
+            raise Refused(f"cannot post {m['verified_check']} on {it['head'][:9]}: {err}")
+        risk = strictest(m["tiers"], said, *labelled([x["name"] for x in live["labels"]], m["tiers"]))
+        risk = m["tiers"][-1] if it["raised"] else risk
+        why = None if risk in m["auto_tiers"] else f"its risk is {risk}"
+        why = why or ("it has a hold row" if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"] else None)
+        why = why or (None if protected(pol) else f"branch protection does not require {m['gate_check']} and {m['verified_check']}")
+        if not why:
+            rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--auto", "--squash")
+            why = f"auto-merge could not be armed: {err}" if rc else None
+        it.update(state="passed", risk=risk, armed=not why, at=now())
+        return {**it, "say": "it merges itself once CI is green" if not why else f"the owner merges it: {why}"}, True
+    return locked(pol, go)
+
+
+def raise_risk(pol, ident):
+    def go(items):
+        it = items.get(ident)
+        if not it or it["state"] not in ("working", "verifying", "passed"):
+            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}: nothing to raise")
+        if it["armed"]:
+            rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--disable-auto")
+            if rc:
+                raise Refused(f"cannot disarm auto-merge on {it['pr']}: {err}")
+        it.update(raised=True, armed=False, risk=pol["merge"]["tiers"][-1])
+        return it, True
+    return locked(pol, go)
+
+
+def sweep(pol):
+    h = holds(read_text(pol["host"]["holds"]))
+
+    def go(items):
+        moved = []
+        for ident, it in sorted(items.items()):
+            if it["state"] not in OPEN or not it["pr"]:
+                continue
+            live = pr_view(pol, it["pr"])
+            if live["state"] in ("MERGED", "CLOSED"):
+                it.update(state="done", armed=False, at=now())
+                moved.append({"id": ident, "now": "done", "why": live["state"].lower()})
+            elif it["state"] == "passed" and live["headRefOid"] != it["head"]:
+                it.update(state="working", at=now())
+                moved.append({"id": ident, "now": "working", "why": "a new head after it passed"})
+            elif it["armed"] and (it["pr"] in h["hold"] or not h["read"]):
+                rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--disable-auto")
+                it.update(armed=bool(rc))
+                moved.append({"id": ident, "now": it["state"], "why": "held, so auto-merge is off" if not rc else f"held, but {err}"})
+        return moved, bool(moved)
+    return locked(pol, go)
+
+
+def main(argv, stdin=sys.stdin):
+    try:
+        pol = policy.load()
+        say = lambda x: print(json.dumps(x, indent=1)) or 0   # noqa: E731
+        if argv in (["pickup"], ["pickup", "--dry"]):
+            out = pickup(pol, len(argv) == 2)
+            return say(out) or (1 if out["errors"] else 0)
+        if argv[:1] == ["add"] and len(argv) >= 2:
+            opts = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1, 2)}
+            if set(opts) <= {"--priority"} and len(argv) % 2 == 0 and re.fullmatch(r"-?\d+", opts.get("--priority", "0")):
+                return say(add(pol, argv[1], stdin.read(), int(opts.get("--priority", "0"))))
+        if argv == ["next"]:
+            return say(next_up(pol))
+        if len(argv) == 2 and argv[0] in ("start", "requeue"):
+            return say(step(pol, argv[0], argv[1]))
+        if len(argv) == 3 and argv[0] == "claim":
+            return say(step(pol, "claim", argv[1], thread=argv[2]))
+        if len(argv) == 3 and argv[0] == "ready" and argv[2].isdigit():
+            return say(step(pol, "ready", argv[1], pr=int(argv[2])))
+        if argv[:1] == ["verified"] and (argv[2:] == ["fail"] or (len(argv) == 4 and argv[2] == "pass" and argv[3] in pol["merge"]["tiers"])):
+            return say(verified(pol, argv[1], argv[2], argv[3] if argv[2] == "pass" else None))
+        if len(argv) == 2 and argv[0] == "raise":
+            return say(raise_risk(pol, argv[1]))
+        if argv == ["sweep"]:
+            return say(sweep(pol))
+        if argv == ["list"]:
+            return say(locked(pol, lambda items: (items, False)))
+    except Refused as e:
+        print(f"queue: {e}", file=sys.stderr)
+        return 1
+    print(USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

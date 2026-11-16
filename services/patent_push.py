@@ -145,7 +145,7 @@ def staging_push_ok():
 
 
 def wake_hold(branch, sha, hits, root=ROOT):
-    ident, log = f"app:{branch}", f"{root}/events.log"
+    ident, log = f"{PUBLIC.split('/')[1]}:{branch}", f"{root}/events.log"
     mark = f" patent-held {ident} at {sha} "
     try:
         if any(mark in line and line.split(mark, 1)[1].startswith(("webhook sent", "not sent: dry run")) for line in open(log)):

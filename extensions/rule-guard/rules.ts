@@ -182,7 +182,7 @@ function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string 
 function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
 	const w = c.words;
 	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
-	const who = owned ? `${[...owned].join(", ")} is merged only by its merge job` : "the repo the merge job owns is unknown (bin/policy dump failed)";
+	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (bin/policy dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
@@ -197,7 +197,20 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${who}`;
 	const hit = repos.find((r) => owned.has(r as string));
-	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
+	return hit ? `${act} in ${hit}: a PR there merges itself once it is verified, or the owner merges it (Hard rules, Merging)` : undefined;
+}
+
+const QUEUE_OPEN = new Set(["ready", "raise", "list", "next"]);
+
+function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
+	const at = cwd === undefined ? undefined : host.repoAt(cwd);
+	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
+	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
+	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && !QUEUE_OPEN.has(w[i + 1]))
+		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue ready <id> <pr>\` or \`queue raise <id>\``;
+	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
+		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
+	return undefined;
 }
 
 const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -375,7 +388,7 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 	for (const c of simpleCommands(command, [cwd])) {
 		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready) ?? dispatcherOnly(c, owned, host, cwd);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 		const words = ghPrText(c, owned, host);
 		if (words) return `blocked: ${words}. ${TEXT_WAY}`;

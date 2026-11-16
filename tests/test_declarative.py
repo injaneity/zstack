@@ -26,14 +26,15 @@ def prose():
 
 
 def code():
-    return [f for f in tracked("bin/*", "services/*", "orchestrator/*", "extensions/**/*.ts", "hooks/*")
+    return [f for f in tracked("bin/*", "services/*", "dispatch/*", "extensions/**/*.ts", "hooks/*")
             if not f.endswith(".md") and f != "bin/policy"]
 
 
 def restated(text, pol, repo=False):
     hits = []
     words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]], "people.owner": [pol["people"]["owner"]],
-             "merge.gate_check": [pol["merge"]["gate_check"]], "patent.private_repo": [pol["patent"]["private_repo"]]}
+             "merge.gate_check": [pol["merge"]["gate_check"]], "merge.verified_check": [pol["merge"]["verified_check"]],
+             "patent.private_repo": [pol["patent"]["private_repo"]]}
     if repo:
         words["merge.repo"] = [pol["merge"]["repo"]]
     for v in pol["models"].values():
@@ -44,7 +45,6 @@ def restated(text, pol, repo=False):
             for m in re.finditer(rf"(?<![\w/.-]){re.escape(v)}(?![\w/-])", text, re.I):
                 hits.append((key, m.group(0)))
     numbers = {
-        "merge.floor_gb": rf"\b{pol['merge']['floor_gb']} ?G(B|iB)?\b",
         "run.idle_min": rf"\b({pol['run']['idle_min']} ?min(ute)?s?|{pol['run']['idle_min'] / 60:g} ?h(ours?)?)\b",
         "ci.fix_attempts": rf"\b{pol['ci']['fix_attempts']} (fix )?attempts\b",
     }
@@ -106,13 +106,14 @@ class Rules(unittest.TestCase):
             self.assertIn(value, policy.render(RULES))
         full = policy.render(RULES)
         self.assertNotIn("{", full)
-        for want in ("`risk: <light|standard|deep|human>`", "`Salvaged from #<pr>`", "`Fixes #<issue>`",
+        for want in ("one of `light|standard|deep|human`", "at light or standard merges itself", "`Salvaged from #<pr>`", "`Fixes #<issue>`",
                      "touches skyhook, vaultkey or sealing is", "(only real failures go to Robin)"):
             self.assertIn(want, full)
         pol = json.loads(json.dumps(POLICY))
-        pol["merge"]["tiers"], pol["people"]["owner"], pol["patent"]["held_words"] = ["low", "high"], "Sam", ["vault"]
+        pol["merge"].update(tiers=["low", "high"], auto_tiers=["low"])
+        pol["people"]["owner"], pol["patent"]["held_words"] = "Sam", ["vault"]
         got = policy.render(policy.validate_rules(policy.read(policy.RULES), pol))
-        for want in ("`risk: <low|high>`", "without Sam's explicit ok", "Work on vault normally."):
+        for want in ("one of `low|high`", "without Sam's explicit ok", "Work on vault normally."):
             self.assertIn(want, got)
 
     def test_a_brace_that_names_no_key_is_refused(self):
@@ -152,7 +153,7 @@ class NoRestatedValues(unittest.TestCase):
                 self.assertIn(key, [k for k, _ in restated(line, POLICY, repo=True)])
 
     def test_the_check_catches_what_the_playbook_said_before(self):
-        old = {"it has at least 20G free": "merge.floor_gb", "no progress for 2.5h": "run.idle_min",
+        old = {"no progress for 2.5h": "run.idle_min", "the zstack/verified status": "merge.verified_check",
                "issues assigned to octo": "people.me", "green ci-gate at a stable head": "merge.gate_check",
                "only real failures go to Robin": "people.owner",
                "Work on sealing, Skyhook and Vaultkey normally": "patent.held_words"}
@@ -173,7 +174,7 @@ class Harness(unittest.TestCase):
 
     def test_only_an_adapter_names_its_harness(self):
         wrong = []
-        for f in tracked("bin/*", "services/*", "orchestrator/*", "extensions/**/*.ts", "hooks/*", "config/*", ".claude-plugin/*"):
+        for f in tracked("bin/*", "services/*", "dispatch/*", "extensions/**/*.ts", "hooks/*", "config/*", ".claude-plugin/*"):
             text = (PKG / f).read_text()
             if self.PI.search(text) and not f.startswith(self.PI_ADAPTERS):
                 wrong.append(f"{f} imports pi, and is not a pi adapter")
@@ -190,7 +191,7 @@ class Harness(unittest.TestCase):
 
 class Parts(unittest.TestCase):
     STACK = ("extensions/", "hooks/", ".claude-plugin/", "bin/policy", "package.json")
-    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b)[a-z][\w-]*|services/|orchestrator/|merge_job|patent_push|wake\.py")
+    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b)[a-z][\w-]*|services/|dispatch/|patent_push|wake\.py")
 
     def test_the_stack_names_no_orchestrator_or_service_file(self):
         wrong = [f"{f}: {m.group(0)}" for f in tracked("extensions/**/*.ts", "hooks/*", ".claude-plugin/*", "bin/policy", "package.json")
@@ -217,7 +218,7 @@ class StateFiles(unittest.TestCase):
                       r"\"([\w.-]+\.(?:json|log|txt|md|lock)|[A-Z]+|pushed|last-run|auto-pause)\"\)")
     FSTR = re.compile(r"f\"\{(?:ROOT|DIR|root|d)\}/([\w.-]+)\"")
     DIRS = {"tick"}
-    CODE = ("bin/hold-row", "orchestrator/plan", "services/merge_job.py", "services/patent_push.py", "services/cron-wrap.sh")
+    CODE = ("bin/hold-row", "bin/queue", "services/holds.py", "services/patent_push.py")
 
     def test_every_state_file_the_code_opens_is_declared(self):
         declared = {Path(f["path"]).name for f in STATE["file"].values()}
@@ -235,7 +236,7 @@ class StateFiles(unittest.TestCase):
             name = Path(f["path"]).name
             for who in [f["writer"], *f["readers"]]:
                 p = PKG / who.split()[0]
-                if who.split()[0].startswith(("bin/", "services/", "orchestrator/", "extensions/")):
+                if who.split()[0].startswith(("bin/", "services/", "dispatch/", "extensions/")):
                     if not p.is_file():
                         wrong.append(f"{key}: {who} does not exist")
                     elif name not in p.read_text():
@@ -255,10 +256,10 @@ class NoVerifiedComment(unittest.TestCase):
         rx = re.compile(r"verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
         rendered = policy.render(RULES)
         hits = [f"config/rules.toml: {m.group(0)}" for m in rx.finditer(rendered)]
-        for f in [*prose(), "orchestrator/playbook.md", "README.md", "docs/SUBAGENT.md"]:
+        for f in [*prose(), "README.md", "docs/SUBAGENT.md"]:
             hits += [f"{f}: {m.group(0)}" for m in rx.finditer((PKG / f).read_text())]
         self.assertEqual(hits, [])
-        self.assertIn("run report", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
+        self.assertIn("bin/queue ready", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
 
 
 if __name__ == "__main__":

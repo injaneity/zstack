@@ -9,15 +9,15 @@ schema = 1
 
 [file.holds]
 path = "hold-prs.txt"
-host = "merge host"
+host = "each"
 format = "rows"
 writer = "bin/hold-row"   # and the owner by hand; rule-guard refuses every other write (docs/RULE-GUARD.md)
-readers = ["services/merge_job.py", "extensions/rule-guard/holds.ts"]
-schema = "kind | target | rules | note; kinds hold, preapprove, hands-off-path, skip-author, review-only"
+readers = ["services/holds.py", "extensions/rule-guard/holds.ts"]
+schema = "kind | target | rules | note; kinds hold, hands-off-path, skip-author, review-only"
 
 [file.holds-lock]
 path = ".hold-row.lock"
-host = "merge host"
+host = "each"
 format = "lock"
 writer = "bin/hold-row"
 readers = ["bin/hold-row"]
@@ -25,56 +25,24 @@ schema = "flock only: one holds-file write at a time; each write leaves hold-prs
 
 [file.events]
 path = "events.log"
-host = "merge host"
+host = "each"
 format = "lines"
-writer = "services/merge_job.py"   # and the patent hook's patent-held lines (services/patent_push.py)
-readers = ["services/merge_job.py", "services/patent_push.py"]
-schema = "<iso ts> <kind> <id> <reason>, one per decision, append-only"
-
-[file.merge-state]
-path = "tick/state.json"
-host = "merge host"
-format = "json"
-writer = "services/merge_job.py"
-readers = ["services/merge_job.py"]
-schema = "the merge job's per-PR memory: reruns, landed heads, sent wakes, the merge-watch window"
-
-[file.merge-last-run]
-path = "tick/last-run"
-host = "merge host"
-format = "lines"
-writer = "services/merge_job.py"
-readers = ["the orchestrator"]
-schema = "`<iso ts> zstack <sha> ok|<n> error(s)[ paused]`, the last finished run"
-
-[file.merge-paused]
-path = "tick/PAUSED"
-host = "merge host"
-format = "mark"
-writer = "the owner, by hand"
-readers = ["services/merge_job.py"]
-schema = "present: no merges or reruns; its first line is the reason"
-
-[file.cron-log]
-path = "tick/cron.log"
-host = "merge host"
-format = "lines"
-writer = "services/cron-wrap.sh"
-readers = ["the owner, by hand"]
-schema = "start, end, skip and TIMEOUT lines per cron job; tick/cron-<name>.started holds each job's last start"
+writer = "services/patent_push.py"
+readers = ["services/patent_push.py"]
+schema = "<iso ts> patent-held <id> <reason>, one per push the patent hold kept local, append-only"
 
 [file.queue]
 path = "queue.json"
 host = "each"
 format = "json"
-writer = "orchestrator/plan"
-readers = ["orchestrator/plan"]
-schema = "{items: {<id>: {state, kind, n, thread, prs, at}}}: each item a pass queued, the thread that claimed it and the PRs it opened; state is queued, starting, claimed or done (model/Plan.tla)"
+writer = "bin/queue"
+readers = ["bin/queue"]
+schema = "{items: {<id>: {state, kind, n, source, priority, risk, raised, task, title, thread, pr, head, fixes, armed, at}}}; state is queued, starting, working, verifying, passed, owner or done (model/Queue.tla)"
 
 [file.queue-lock]
 path = "queue.lock"
 host = "each"
 format = "lock"
-writer = "orchestrator/plan"
-readers = ["orchestrator/plan"]
+writer = "bin/queue"
+readers = ["bin/queue"]
 schema = "flock only: one read or write of queue.json at a time"

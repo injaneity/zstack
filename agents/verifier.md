@@ -21,8 +21,10 @@ Never edit source, commit (beyond that scratch merge, which is never pushed), pu
 - Say in the verdict which platform checks could not run.
 {{rule scope-no-numbers}}
 - Never write local machine paths.
+{{rule merge-risk}}
 
 Answer in this order, and keep it short. Never paste full logs: quote only the failing lines, at most about ten per failure, and give the log path for the rest.
 1. What makes the change safe: the fact it rests on and whether you confirmed it.
 2. Findings by severity, each with location, trigger, impact, evidence, and the smallest fix. A failing check is a finding.
 3. One line the parent puts in its run report: `ran <commands>; skipped <what and why>; result <pass|fail>`. It names only what actually ran.
+4. On a pass, one line `risk: <tier>` with the tier you would defend for this change, and one sentence of why.

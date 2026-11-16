@@ -3,8 +3,8 @@
 schema = 1
 
 # The provider and model each role runs on. `coding` is the thread that owns a task and writes all its code.
-# `orchestrator` is the one scheduled thread per machine that plans work and launches coding threads
-# (orchestrator/playbook.md). `explorer`, `designer` and `verifier` are the delegates a coding thread spawns; a list is
+# `orchestrator` is the one scheduled thread per machine that launches what bin/queue queues
+# (dispatch/playbook.md). `explorer`, `designer` and `verifier` are the delegates a coding thread spawns; a list is
 # a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the parent's
 # model when its seat fails; the other delegates do.
 [models]
@@ -17,10 +17,12 @@ designer = [
 ]
 verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }
 
-# The longest a bash call that declares no timeout may run, in minutes (extensions/tool-guard), so a call blocked on a
-# process that never ends returns to the session instead of hanging it.
+# `idle_min` is the longest a bash call that declares no timeout may run, in minutes (extensions/tool-guard), so a call
+# blocked on a process that never ends returns to the session instead of hanging it. `threads` is how many coding
+# threads this machine works at once (bin/queue start refuses past it).
 [run]
 idle_min = 150
+threads = 3
 
 # Where a service sends a wake for the owner (services/wake.py): a POST of one JSON object to `url`, with the bearer
 # token read from `key_file`. An empty or missing key file sends nothing.
@@ -29,7 +31,11 @@ url = "https://example.invalid/wake"
 key_file = "~/.config/zstack/wake-key"
 
 # The repos this machine works on. `clone` is the checkout a thread works from, and `root` is where this machine keeps
-# that repo's state: the holds file (`<root>/hold-prs.txt`), the queue and the merge job's files.
+# that repo's state: the holds file (`<root>/hold-prs.txt`) and the queue. The pickup takes an issue or PR only when it
+# carries one of `labels` (an empty list takes any label), and one that carries none of any machine's labels only
+# when `unlabelled` is true. Give each machine labels that do not overlap, and set `unlabelled` on one machine.
 [repos."acme/app"]
 clone = "~/work/app"
 root = "~/zstack/acme/app"
+labels = []
+unlabelled = true

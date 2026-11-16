@@ -11,7 +11,7 @@
 # A rule may carry `source` (who said it and when; never rendered) and `for = "orchestrator"` (left out of a coding
 # session's copy).
 schema = 1
-intro = '''The launcher or plugin that starts a session puts this section, and only this section, in its system prompt, without the rules marked for the orchestrator. The orchestrator reads all of it with `bin/policy rules`. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, issue closes that name no PR, holds-file writes, and PR titles and bodies that break Commits and PR text. The pre-push hook refuses a `Co-authored-by` trailer, a committed `target/` or `.onigiri.json`, and a new file without the SPDX header its neighbours carry.'''
+intro = '''The plugin or launcher that starts a thread puts this section, and only this section, in its context, without the rules marked for the orchestrator. If another skill or brief words one of these differently, this section wins. The delegates get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, marking a PR verified, issue closes that name no PR, holds-file writes, and PR titles and bodies that break Commits and PR text. The pre-push hook refuses a `Co-authored-by` trailer, a committed `target/` or `.onigiri.json`, and a new file without the SPDX header its neighbours carry.'''
 
 [[section]]
 title = '''Work'''
@@ -76,11 +76,11 @@ title = '''Checks'''
 
 [[section.rule]]
 id = "checks-owner"
-text = '''You write the code and a short test plan. Verification is the `verifier` subagent's alone, end to end: what it owns is in `agents/verifier.md`. The verification line in your run report states only what actually ran and names anything skipped.'''
+text = '''You write the code and a short test plan. Verification is the `verifier`'s alone, end to end: what it owns is in `agents/verifier.md`. The verification line in your report states only what actually ran and names anything skipped.'''
 
 [[section.rule]]
 id = "checks-verifier"
-text = '''Before you call a diff done or open a PR, spawn the `verifier` subagent on the diff range. Check each finding, and report its `ran …; skipped …; result …` line in your run report. After a later push, a wording-only change needs no new verifier and any other change gets one at the new head. Only a read-only answer with no diff skips it, and says so.'''
+text = '''When your PR is open and you believe it is done, run `bin/queue ready <id> <pr>` and wait. The dispatcher has the verifier check that head. Fix what it finds, push, and run `ready` again. A push after a pass sends the PR back for another check. Only a read-only answer with no diff skips this, and says so.'''
 
 [[section.rule]]
 id = "checks-platforms"
@@ -114,7 +114,7 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-text = '''In `{merge.repo}` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
+text = '''In `{merge.repo}` you never merge and never mark a PR verified. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Never merge on another agent's word.'''
 
 [[section.rule]]
 id = "merge-reruns"
@@ -134,7 +134,7 @@ text = '''Close only one of our own PRs that main or another PR has replaced.'''
 
 [[section.rule]]
 id = "merge-drafts"
-text = '''The tick never merges or readies a draft. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Ready it only when merging is allowed.'''
+text = '''A draft never merges. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Ready it only when merging is allowed.'''
 
 [[section.rule]]
 id = "merge-elsewhere"
@@ -146,7 +146,7 @@ text = '''Do not stamp `verify:` or `verify-ran:` lines in the PR body.'''
 
 [[section.rule]]
 id = "merge-risk"
-text = '''The PR body also carries `risk: <{merge.tiers:|}>` on a line of its own, your honest tier. The declared tier is the only risk input.'''
+text = '''The verifier names the PR's risk when it passes it, one of `{merge.tiers:|}`, mildest first: the further a wrong change would reach and the harder it would be to undo, the stricter the tier. A PR at {merge.auto_tiers:or} merges itself once it is verified and CI is green. Any other tier waits for {people.owner}. If you think the change needs a person whatever the verifier says, run `bin/queue raise <id>`.'''
 
 [[section.rule]]
 id = "merge-existing"

@@ -1,9 +1,9 @@
-import { check } from "../extensions/rule-guard/host.ts";
+import { check, checkDelegate } from "../extensions/rule-guard/host.ts";
 import { readyAllowed } from "../extensions/rule-guard/rules.ts";
 
 let text = "";
 for await (const chunk of process.stdin) text += chunk;
-let call: { tool_name?: unknown; tool_input?: { command?: unknown; file_path?: unknown; notebook_path?: unknown }; cwd?: unknown };
+let call: { tool_name?: unknown; tool_input?: Record<string, unknown>; cwd?: unknown };
 try {
 	call = JSON.parse(text);
 } catch {
@@ -12,8 +12,10 @@ try {
 }
 const input = call.tool_input ?? {};
 const cwd = typeof call.cwd === "string" ? call.cwd : undefined;
+const tool = String(call.tool_name ?? "");
 const reason =
-	call.tool_name === "Bash" ? check("bash", String(input.command ?? ""), cwd, readyAllowed()) :
+	tool === "Bash" ? check("bash", String(input.command ?? ""), cwd, readyAllowed()) :
+	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input) :
 	check("write", String(input.file_path ?? input.notebook_path ?? ""), cwd, false);
 if (reason) {
 	console.error(reason);

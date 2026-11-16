@@ -46,7 +46,7 @@ test("input the hook cannot read is refused, not waved through", () => {
 });
 
 test("the hook covers every tool that runs a command or writes a file, and session start prints the Hard rules", () => {
-	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"]);
+	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Agent", "Bash", "Edit", "MultiEdit", "NotebookEdit", "Task", "Write", "mcp__.*__delegate_task"]);
 	const rules = spawnSync("sh", ["-c", command("SessionStart")], { encoding: "utf8" });
 	assert.equal(rules.status, 0);
 	assert.match(rules.stdout, /^## Hard rules/m);
@@ -83,4 +83,23 @@ test("a config directory that is not there refuses every guarded call instead of
 	const env = { ZSTACK_CONFIG: "/nonexistent/zstack-config" };
 	assert.equal(guard({ tool_name: "Bash", tool_input: { command: `gh pr merge 12 --repo ${repo}` }, cwd: "/tmp" }, env).status, 2);
 	assert.notEqual(spawnSync("sh", ["-c", command("SessionStart")], { encoding: "utf8", env: { ...process.env, ...env } }).status, 0);
+});
+
+test("a helper runs on the model the config gives its role, never as a subagent of the coding model", () => {
+	const seat = (role: string) => spawnSync("python3", ["-I", `${root}bin/policy`, "seat", role], { encoding: "utf8" }).stdout.trim().split(" ")[1];
+	for (const type of ["zstack:verifier", "zstack:explorer", "verifier"]) {
+		const r = guard({ tool_name: "Agent", tool_input: { subagent_type: type, prompt: "x" }, cwd: "/tmp" });
+		assert.equal(r.status, 2, type);
+		assert.match(r.stderr, /runs on its own model/);
+	}
+	assert.equal(guard({ tool_name: "Agent", tool_input: { subagent_type: "Explore", prompt: "x" }, cwd: "/tmp" }).status, 0);
+	const delegate = (role: string, model?: string) =>
+		guard({ tool_name: "mcp__t3-code__delegate_task", tool_input: { task: "x", role, target: model ? { model } : undefined }, cwd: "/tmp" });
+	assert.equal(delegate("review", seat("verifier")).status, 0);
+	assert.equal(delegate("research", seat("explorer")).status, 0);
+	const wrong = delegate("review", "some-other-model");
+	assert.equal(wrong.status, 2);
+	assert.match(wrong.stderr, new RegExp(`the verifier runs on ${seat("verifier")}, not some-other-model`));
+	assert.equal(delegate("review").status, 2);
+	assert.equal(delegate("implementation").status, 0);
 });

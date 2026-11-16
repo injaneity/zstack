@@ -6,7 +6,7 @@ schema = 1
 [ci]
 fix_attempts = 3
 
-# Who "we" are. `me` is the login whose PRs the merge job merges and the orchestrator counts as ours. `owner` is the
+# Who "we" are. `me` is the login the pickup works for: its assigned issues and its requested reviews. `owner` is the
 # person the rules and the services' messages name: the one whose calls the holds file relays.
 [people]
 me = "octo"
@@ -24,15 +24,16 @@ skip_lockfiles = [
 ]
 private_repo = "acme/app-private"
 
-# The merge gate (services/merge_job.py, the one merger in `repo`; Hard rules, Merging). The gate is three checks at the
-# PR head: `gate_check` green, no hold row in the holds file, and a tier from `tiers` declared, with a preapprove row
-# pinned to the head for a tier in `preapprove_tiers`. Under `floor_gb` free on its disk the job wakes the owner.
+# How a PR merges (bin/queue; Hard rules, Merging). `gate_check` is the CI check that must be green and
+# `verified_check` the status bin/queue posts on a head the verifier passed; branch protection must require both.
+# `tiers` is the risk enum, mildest first. The verifier names a PR's tier when it passes it. A PR whose tier is in
+# `auto_tiers` merges itself once both checks are green; any other tier waits for the owner. A stricter `risk:<tier>`
+# label on the PR, or the thread raising it, overrides the verifier's tier.
 [merge]
 gate_check = "ci-gate"
-never_rerun = ["cla"]
+verified_check = "zstack/verified"
 tiers = ["light", "standard", "deep", "human"]
-preapprove_tiers = ["deep", "human"]
-floor_gb = 20
+auto_tiers = ["light", "standard"]
 
 # The lines that link a salvage PR to what it replaces (Hard rules `salvage-fixes`): `salvaged_from` names the source
 # PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.

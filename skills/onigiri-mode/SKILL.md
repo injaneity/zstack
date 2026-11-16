@@ -11,7 +11,7 @@ license: MIT
 ## Who is reading
 
 - **A coding thread** does the work. Every section below applies. Its model is `models.coding` in the config.
-- **The orchestrator** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `orchestrator/plan` queues, reads what they return and relays it. Its instructions are `orchestrator/playbook.md` in the package, not this skill.
+- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `bin/queue` queues, has the verifier check each PR, and relays what comes back. Its instructions are `dispatch/playbook.md` in the package, not this skill.
 
 ## Hard rules
 

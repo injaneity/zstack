@@ -550,3 +550,18 @@ test("a PR title or body that breaks Commits and PR text is refused in the merge
 	ok('gh pr view 12 --json title');
 	assert.deepEqual(prTextProblems("docs(readme): say where ~/Library/x and /usr/bin live", "see https://example.com/home/page and /usr/local/bin/x"), []);
 });
+
+test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
+	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", "python3 /pkg/zstack/bin/queue verified app-1 pass light",
+		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
+		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
+		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
+		blocked(c, inApp);
+	for (const c of ["/pkg/zstack/bin/queue ready app-1 40", "bin/queue raise app-1", "bin/queue list", "gh api repos/acme/app/statuses/abc",
+		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
+		allowed(c, inApp);
+	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 pass light",
+		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
+		allowed(c, "/zs");
+	assert.match(checkBash("bin/queue start app-1", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
+});

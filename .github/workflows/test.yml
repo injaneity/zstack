@@ -20,7 +20,7 @@ jobs:
         run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
       - name: scripts parse under 3.9
         run: |
-          for f in bin/* services/* orchestrator/*; do
+          for f in bin/* services/*; do
             case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
           done
       - name: bin/policy reads the config under 3.9 (vendor/tomli)
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: scripts parse
         run: |
-          for f in bin/* services/* orchestrator/*; do
+          for f in bin/* services/*; do
             case "$(head -1 "$f")" in
               *python3*) python3 -m py_compile "$f";;
               '#!/bin/bash'*) bash -n "$f";;
@@ -42,14 +42,14 @@ jobs:
           done
       - name: the config, rules.toml and state.toml are valid (bin/policy check, the one parser)
         run: bin/policy check && bin/policy rules > /dev/null
-      - name: planner, merge job, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
+      - name: queue, holds, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: zstack code carries no comments
         run: python3 tests/comments.py check
       - name: lint the services and tests
         run: |
-          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy orchestrator/plan model
-          shellcheck services/cron-wrap.sh services/pre-push services/check-parity services/ensure-main tests/check-parity.sh tests/ensure-main.sh tests/plan-model.sh
+          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy bin/queue model
+          shellcheck services/pre-push services/check-parity services/ensure-main tests/check-parity.sh tests/ensure-main.sh tests/queue-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -69,17 +69,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: TLC passes model/Plan.tla (the planner's queue) and every mutant fails on its rule
+      - name: TLC passes model/Queue.tla (the queue, the verifier's gate and the merge) and every mutant fails on its rule
         run: |
           curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
-          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/plan-model.sh
-      - name: the merge gate is three checks, and verification is not one of them
-        run: |
-          if bin/policy rules | cat - skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/SKILL.md |
-              grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif'; then
-            echo "a line above makes verification a merge condition"; exit 1
-          fi
+          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/queue-model.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0

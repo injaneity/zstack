@@ -40,9 +40,9 @@ class HoldRow(unittest.TestCase):
         [b] = self.backups()
         self.assertEqual(b.read_text(), BASE)
 
-    def test_the_merge_job_reads_the_new_row(self):
+    def test_the_parser_reads_the_new_row(self):
         self.run_tool("add", ROW)
-        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "merge_job.py")
+        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "holds.py")
         mj = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mj)
         self.assertEqual(mj.parse_holds(self.holds.read_text())["preapproved"], {7338: SHA})
@@ -143,17 +143,17 @@ class HoldRow(unittest.TestCase):
         self.assertEqual(self.holds.read_text(), BASE + tomb + "\n" + self.NEW + "\nhold | 7400 | no | x\n")
         [b] = self.backups()
         self.assertEqual(b.read_text(), BASE + self.OLD + "\nhold | 7400 | no | x\n")
-        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "merge_job.py")
+        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "holds.py")
         mj = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mj)
         self.assertEqual(mj.parse_holds(self.holds.read_text())["preapproved"], {5178: SHA})
 
-    def test_retire_drops_the_row_from_what_the_merge_job_reads(self):
+    def test_retire_drops_the_row_from_what_the_parser_reads(self):
         self.holds.write_text(BASE + self.OLD + "\n")
         r = self.run_tool("retire", self.OLD, "Robin 11 Nov 18:00 SGT: stale pin")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.holds.read_text(), BASE + f"# retired Robin 11 Nov 18:00 SGT: stale pin: {self.OLD}\n")
-        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "merge_job.py")
+        spec = importlib.util.spec_from_file_location("mj", PKG / "services" / "holds.py")
         mj = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mj)
         self.assertEqual(mj.parse_holds(self.holds.read_text())["preapproved"], {})
