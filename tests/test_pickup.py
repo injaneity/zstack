@@ -271,8 +271,8 @@ class Pickup(unittest.TestCase):
         brief = (self.root / "review" / "cua-305-review-131aaaa" / "brief.md").read_text()
         self.assertIn("A salvage keeps ruicongg's commits as authored: cherry-pick or rebase their commits, then put our "
                       "fixes on top as separate commits. Never re-author their work or squash it into our commit.", brief)
-        self.assertIn("If no code of theirs survives, the body's `Salvaged from #305` line is what the release builder "
-                      "credits them from.", brief)
+        self.assertIn("If none of their commits survive, add `Co-authored-by: <their name> <their GitHub noreply or "
+                      "commit email>` for ruicongg to our commit; the body's `Salvaged from #305` line still goes in.", brief)
 
     def test_salvage_links_the_pass_lists_for_the_chat(self):
         self.peer(holds="hold | 604 | no | note\n")
