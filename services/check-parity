@@ -1,7 +1,6 @@
 #!/bin/bash
 set -u
 pkg="$(cd "$(dirname "$0")/.." && pwd -P)"
-root=${ONIGIRI_ROOT:-$HOME/zstack}
 agents="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/agents"
 rc=0
 ok() { echo "ok    $1"; }
