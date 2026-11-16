@@ -23,7 +23,8 @@ case "$*" in
 import json, os, re, sys
 src = {p["number"]: p for p in json.load(open(os.path.join(os.environ["T"], "sources.json")))}
 ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
-node = lambda p: {"number": p["number"], "state": p["state"], "body": p.get("body", ""), "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
+node = lambda p: {"number": p["number"], "state": p["state"], "body": p.get("body", ""),
+    "author": {"login": p.get("login", "someone")}, "closingIssuesReferences": {"nodes": [
     {"number": i["number"], "state": "OPEN" if i["number"] % 2 == 0 else "CLOSED", "author": {"login": i.get("login", "someone")}}
     for i in p["closingIssuesReferences"]]}}
 errs = [{"type": "NOT_FOUND", "message": f"no pull request {n}"} for n in ns if n not in src]
