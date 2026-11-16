@@ -27,14 +27,15 @@ VARIABLES
   atMerge,
   fixing,
   fixes,
-  limits
+  limits,
+  ejected
 
 vars == <<phase, draft, lost, collected, woke, reopened, cont, due, limited, slot, drained, ci, reran, tier, pre, held, conflict, byJob, by,
-          alerted, logged, atQueue, atMerge, fixing, fixes, limits>>
+          alerted, logged, atQueue, atMerge, fixing, fixes, limits, ejected>>
 RunVars == <<lost, collected, woke, reopened, cont, due, limited, slot, drained, fixing, fixes, limits>>
 FixAttempts == 2
 ResumeCap == 1
-PRVars == <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+PRVars == <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
 Tiers == {"light", "deep"}
 NoFacts == [green |-> FALSE, held |-> FALSE, preOk |-> FALSE, tier |-> "none", draft |-> FALSE]
 PRopen == {"open", "inqueue"}
@@ -44,7 +45,7 @@ Init ==
   /\ cont = FALSE /\ due = FALSE /\ limited = FALSE /\ slot = FALSE /\ drained = FALSE
   /\ ci = "pending" /\ reran = FALSE /\ tier = "none" /\ pre = FALSE /\ held = FALSE /\ conflict = FALSE
   /\ byJob = FALSE /\ by = "none" /\ alerted = FALSE /\ logged = FALSE /\ atQueue = NoFacts /\ atMerge = NoFacts
-  /\ fixing = FALSE /\ fixes = 0 /\ limits = 0
+  /\ fixing = FALSE /\ fixes = 0 /\ limits = 0 /\ ejected = FALSE
 
 Drain == phase = "queued" /\ (cont => due)
   /\ phase' = "running" /\ slot' = TRUE /\ drained' = TRUE /\ reopened' = cont /\ cont' = FALSE
@@ -72,79 +73,82 @@ Retry == phase = "failed" /\ collected
 ExitOk == phase = "running" /\ slot' = FALSE
   /\ \/ phase' = "done" /\ UNCHANGED PRVars
      \/ /\ phase' = "open" /\ draft' \in BOOLEAN /\ tier' \in {"none"} \cup Tiers
-        /\ UNCHANGED <<ci, reran, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+        /\ UNCHANGED <<ci, reran, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED <<lost, collected, woke, reopened, cont, due, limited, drained, fixing, fixes, limits>>
 
 CiReopen == phase = "open" /\ ~draft /\ ci = "red" /\ reran /\ ~held /\ ~fixing /\ fixes < FixAttempts
   /\ fixing' = TRUE /\ fixes' = fixes + 1 /\ slot' = TRUE /\ reopened' = TRUE /\ drained' = TRUE
-  /\ UNCHANGED <<phase, lost, collected, woke, cont, due, limited, limits>> /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, lost, collected, woke, cont, due, limited, limits>> /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
 ThreadFixes == fixing
   /\ \/ phase \in PRopen /\ ci' = "pending" /\ reran' = FALSE /\ pre' = FALSE /\ conflict' = FALSE /\ byJob' = FALSE
-        /\ phase' = "open"
-     \/ UNCHANGED <<phase, ci, reran, pre, conflict, byJob>>
+        /\ phase' = "open" /\ ejected' = FALSE
+     \/ UNCHANGED <<phase, ci, reran, pre, conflict, byJob, ejected>>
   /\ fixing' = FALSE /\ slot' = FALSE /\ reopened' = FALSE
   /\ UNCHANGED <<draft, tier, held, by, alerted, logged, atQueue, atMerge>>
   /\ UNCHANGED <<lost, collected, woke, cont, due, limited, drained, fixes, limits>>
 
 CiFinishes == phase \in PRopen /\ ci = "pending" /\ ci' \in {"green", "red"}
-  /\ UNCHANGED <<phase, draft, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 Push == phase \in PRopen
-  /\ ci' = "pending" /\ reran' = FALSE /\ pre' = FALSE /\ conflict' = FALSE
+  /\ ci' = "pending" /\ reran' = FALSE /\ pre' = FALSE /\ conflict' = FALSE /\ ejected' = FALSE
   /\ phase' = (IF phase = "inqueue" THEN "open" ELSE phase) /\ byJob' = FALSE
   /\ UNCHANGED <<draft, tier, held, by, alerted, logged, atQueue, atMerge>> /\ UNCHANGED RunVars
 DeclareTier == phase = "open" /\ tier = "none" /\ tier' \in Tiers
-  /\ UNCHANGED <<phase, draft, ci, reran, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 MainMoves == phase = "open" /\ ~conflict /\ conflict' = TRUE
-  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 Ready == phase \in PRopen /\ draft /\ draft' = FALSE
-  /\ UNCHANGED <<phase, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, ci, reran, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 ZaneHolds == phase \in PRopen /\ held' = ~held
-  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 ZanePreapproves == phase \in PRopen /\ tier = "deep" /\ ~pre /\ ~conflict /\ ci # "red" /\ pre' = TRUE
-  /\ UNCHANGED <<phase, draft, ci, reran, tier, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, tier, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 
 Gate == ci = "green" /\ ~held /\ tier \in Tiers /\ (tier = "deep" => pre)
 Facts == [green |-> ci = "green", held |-> held, preOk |-> (tier # "deep" \/ pre), tier |-> tier,
           draft |-> draft]
-JobEnqueues == phase = "open" /\ ~draft /\ Gate /\ ~conflict
+JobEnqueues == phase = "open" /\ ~draft /\ Gate /\ ~conflict /\ ~ejected
   /\ phase' = "inqueue" /\ byJob' = TRUE /\ atQueue' = Facts
-  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atMerge>> /\ UNCHANGED RunVars
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atMerge, ejected>> /\ UNCHANGED RunVars
 JobReruns == phase = "open" /\ ci = "red" /\ ~reran /\ ci' = "pending" /\ reran' = TRUE
-  /\ UNCHANGED <<phase, draft, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, tier, pre, held, conflict, byJob, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 JobDequeues == phase = "inqueue" /\ byJob /\ ~Gate /\ phase' = "open" /\ byJob' = FALSE
-  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 JobLogsMerged == phase = "merged" /\ by = "job" /\ ~logged /\ logged' = TRUE
-  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, conflict, byJob, by, alerted, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 JobAlerts == phase = "merged" /\ by = "other" /\ ~alerted /\ alerted' = TRUE
-  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, conflict, byJob, by, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<phase, draft, ci, reran, tier, pre, held, conflict, byJob, by, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 
 OtherEnqueues == phase = "open" /\ ~draft /\ ci = "green" /\ ~conflict /\ phase' = "inqueue" /\ byJob' = FALSE
-  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge>>
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge, ejected>>
   /\ UNCHANGED RunVars
 QueueMerges == phase = "inqueue" /\ phase' = "merged" /\ by' = (IF byJob THEN "job" ELSE "other") /\ atMerge' = Facts
-  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, alerted, logged, atQueue>> /\ UNCHANGED RunVars
-QueueDrops == phase = "inqueue" /\ phase' = "open" /\ byJob' = FALSE
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, alerted, logged, atQueue, ejected>> /\ UNCHANGED RunVars
+QueueEjects == phase = "inqueue" /\ byJob /\ ci = "green" /\ phase' = "open" /\ byJob' = FALSE /\ ejected' = TRUE
   /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge>>
   /\ UNCHANGED RunVars
+QueueDrops == phase = "inqueue" /\ phase' = "open" /\ byJob' = FALSE
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, by, alerted, logged, atQueue, atMerge, ejected>>
+  /\ UNCHANGED RunVars
 OtherMerges == phase = "open" /\ ~draft /\ ~conflict /\ phase' = "merged" /\ by' = "other" /\ atMerge' = Facts
-  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, alerted, logged, atQueue>> /\ UNCHANGED RunVars
+  /\ UNCHANGED <<draft, ci, reran, tier, pre, held, conflict, byJob, alerted, logged, atQueue, ejected>> /\ UNCHANGED RunVars
 
 Ends == (phase \in {"done", "merged"} \/ (phase = "failed" /\ collected)) /\ ~fixing /\ UNCHANGED vars
 
 Next == Drain \/ StartNow \/ Limit \/ LimitSpent \/ ResumeAtPasses \/ ExitFailed \/ Killed \/ Collect \/ Retry \/ ExitOk
   \/ CiFinishes \/ Push \/ DeclareTier \/ MainMoves \/ Ready \/ ZaneHolds \/ ZanePreapproves
   \/ JobEnqueues \/ JobReruns \/ JobDequeues \/ JobLogsMerged \/ JobAlerts
-  \/ OtherEnqueues \/ QueueMerges \/ QueueDrops \/ OtherMerges \/ CiReopen \/ ThreadFixes \/ Ends
+  \/ OtherEnqueues \/ QueueMerges \/ QueueEjects \/ QueueDrops \/ OtherMerges \/ CiReopen \/ ThreadFixes \/ Ends
 Spec == Init /\ [][Next]_vars /\ WF_vars(Drain) /\ WF_vars(ResumeAtPasses) /\ WF_vars(Collect) /\ WF_vars(JobLogsMerged) /\ WF_vars(JobAlerts) /\ WF_vars(JobDequeues)
   /\ WF_vars(CiReopen) /\ WF_vars(ThreadFixes)
 
@@ -172,6 +176,8 @@ EveryOtherMergeWakes == [](by = "other" => <>alerted)
 EveryJobMergeLogged == [](JobMerged => <>logged)
 
 AskedOnlyWhenUnstuck == [][~pre /\ pre' => ~conflict /\ ci # "red"]_vars
+EjectedHeadNotRequeued == [][ejected /\ ~byJob => ~byJob']_vars
+EjectedHeadCanMove == ejected /\ phase \in PRopen => ENABLED Push
 
 HeldIsNeverMergedStrict == JobMerged => ~atMerge.held
 

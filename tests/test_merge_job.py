@@ -950,6 +950,42 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7232")])
 
+    def test_a_head_the_queue_ejects_for_failed_checks_goes_to_a_session_and_is_not_queued_again(self):
+        self.queue = True
+        self.add(7818)
+        added = {"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}}
+        failed = {"__typename": "RemovedFromMergeQueueEvent", "reason": "failed_checks"}
+        self.queue_events[7818] = [added]
+        self.run_()
+        self.queue_events[7818] = [added, failed]
+        self.entries.pop(7818)
+        for _ in range(4):
+            self.run_()
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7818"])
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()],
+                         [["merge-queued", "cua#7818"], ["merge-ejected", "cua#7818"], ["wait", "cua#7818"]])
+        self.assertEqual(self.events()[-1],
+                         f"wait cua#7818 who=session: ejected from the merge queue for failed checks at {H[:9]}: not queued again at this head")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            mj.Job(dry=True).run()
+        self.assertIn(f"dry-run cua#7818 {H[:9]} wait who=session: ejected from the merge queue", out.getvalue())
+        self.add(7818, head=H2)
+        self.queue_events[7818] = [added, failed, added]
+        self.run_()
+        self.assertEqual([c[3:] for c in self.of(["gh", "pr", "merge"])][-1], ["7818", "-R", "trycua/cua", "--squash", "--match-head-commit", H2])
+        self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["ejected"], {})
+
+    def test_a_queue_entry_removed_for_another_reason_is_queued_again(self):
+        self.queue = True
+        self.add(7819)
+        self.run_()
+        self.queue_events[7819] = [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
+                                   {"__typename": "RemovedFromMergeQueueEvent", "reason": "checks_timed_out"}]
+        self.entries.pop(7819)
+        self.run_()
+        self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7819", "7819"])
+        self.assertNotIn("merge-ejected cua#7819", "\n".join(self.events()))
+
     def test_queue_merged_by_reads_the_entry_that_merged(self):
         add = lambda who: {"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": who}}   # noqa: E731
         gone = lambda why: {"__typename": "RemovedFromMergeQueueEvent", "reason": why}   # noqa: E731

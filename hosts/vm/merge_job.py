@@ -185,7 +185,7 @@ def blockers(pr, paused):
 
 URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed", "disk")
 ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}
-SESSION_CODES = {"no-tier", "conflict"}
+SESSION_CODES = {"no-tier", "conflict", "ejected"}
 
 
 def next_action(reasons, notes, pr, rerun_head=None):
@@ -383,7 +383,7 @@ class Job:
         self.paused = (read(PAUSED).strip().splitlines() or ["paused"])[0] if os.path.exists(PAUSED) else None
         self.can_act = not dry and not self.paused
         s = json.loads(read(STATE)) if os.path.exists(STATE) else {}
-        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed", "disk")}
+        self.s = {k: s.get(k, {}) for k in ("woken", "rerun", "last_reason", "merges", "queued", "landed", "disk", "ejected")}
         self.errors = 0
 
     def event(self, kind, ident, reason):
@@ -447,6 +447,8 @@ class Job:
         notes = []
         reasons = gate(p, holds, notes)
         stop = blockers(p, self.paused)
+        if self.s["ejected"].get(f"{SHORT}#{n}") == p["headRefOid"]:
+            stop.append(Reason("ejected", f"ejected from the merge queue for failed checks at {p['headRefOid'][:9]}: not queued again at this head"))
         for _ in range(MERGEABLE_REREADS):
             if reasons or [r.code for r in stop] != ["mergeable"] or p.get("mergeable") != "UNKNOWN":
                 break
@@ -458,7 +460,7 @@ class Job:
     def merges(self, holds):
         for ident in list(self.s["queued"]):
             try:
-                self.landed(ident)
+                self.landed(ident, ejects=True)
             except Exception as e:
                 self.errors += 1
                 self.event("error", ident, f"queued merge: {type(e).__name__}: {str(e)[:150]}")
@@ -487,6 +489,8 @@ class Job:
                 continue
             if node and node.get("state") == "OPEN":
                 nodes.append(node)
+        heads = {f"{SHORT}#{x['number']}": x["headRefOid"] for x in nodes}
+        self.s["ejected"] = {k: v for k, v in self.s["ejected"].items() if heads.get(k) == v}
         for node in nodes:
             ident = f"{SHORT}#{node['number']}"
             try:
@@ -545,14 +549,15 @@ class Job:
         if not os.path.exists(EVENTS) or not any(mark in x for x in read(EVENTS).splitlines()):
             self.event(kind, ident, reason)
 
-    def landed(self, ident):
+    def queue_events(self, n):
+        pull = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_EVENTS}"]) or {}).get("data") or {})
+                .get("repository") or {}).get("pullRequest") or {}
+        return (pull.get("timelineItems") or {}).get("nodes") or []
+
+    def landed(self, ident, ejects=False):
         q, n = self.s["queued"][ident], ident.split("#")[1]
         st = gh_json(["pr", "view", n, "-R", REPO, "--json", "state,mergedAt,headRefOid"]) or {}
-        by = None
-        if st.get("state") == "MERGED":
-            pull = (((gh_json(["api", "graphql", "-F", f"n={n}", "-f", f"query={QUEUE_EVENTS}"]) or {}).get("data") or {})
-                    .get("repository") or {}).get("pullRequest") or {}
-            by = queue_merged_by((pull.get("timelineItems") or {}).get("nodes") or [])
+        by = queue_merged_by(self.queue_events(n)) if st.get("state") == "MERGED" else None
         if st.get("state") == "MERGED" and ((st.get("headRefOid") or q["head"]) != q["head"] or by != ME):
             self.event("merge-dropped", ident, f"merged at {(st.get('headRefOid') or q['head'])[:9]} through {by or 'no'} queue entry, "
                                                f"the job queued {q['head'][:9]}: not the job's merge")
@@ -562,6 +567,9 @@ class Job:
             self.once("merged", ident, head, f"squash at {head[:9]}, mergedAt {st.get('mergedAt')}: {q['why']}")
         elif st.get("state") == "CLOSED":
             self.event("merge-dropped", ident, f"closed before the queued merge at {q['head'][:9]} landed")
+        elif ejects and st.get("headRefOid") == q["head"] and (self.queue_events(n) or [{}])[-1].get("reason") == "failed_checks":
+            self.s["ejected"][ident] = q["head"]
+            self.event("merge-ejected", ident, f"the merge queue removed it for failed checks at {q['head'][:9]}")
         else:
             return
         del self.s["queued"][ident]
