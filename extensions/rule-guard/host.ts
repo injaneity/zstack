@@ -19,9 +19,16 @@ function originRepo(dir: string): string | null | undefined {
 	}
 }
 
-const holds = holdsPaths();
 const POLICY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/policy");
 const dump = () => execFileSync("python3", ["-I", POLICY, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+function configuredHolds(): string | undefined {
+	try {
+		return JSON.parse(dump()).host.holds;
+	} catch {
+		return undefined;
+	}
+}
+const holds = holdsPaths(process.env, configuredHolds());
 const owned = mergeOwned(dump);
 function authorOf(repo: string, n: number): string | undefined {
 	try {

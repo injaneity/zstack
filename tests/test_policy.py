@@ -21,7 +21,7 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", "bin/pi-run", "bin/hourly", "bin/check-host", "config/policy.toml",
+        for f in ("bin/policy", "config/policy.toml",
                   "config/rules.toml", "config/state.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
@@ -37,30 +37,28 @@ class Policy(unittest.TestCase):
 
     def test_the_shipped_file_is_valid_and_get_reads_it(self):
         self.assertEqual(self.run_("check").returncode, 0)
-        self.assertEqual(self.run_("get", "slots.auto").stdout, "3\n")
-        self.assertEqual(self.run_("get", "slots.hand").stdout, "5\n")
         self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
-        self.assertEqual(self.run_("get", "resume.cap").stdout, "3\n")
+        self.assertEqual(self.run_("get", "ci.fix_attempts").stdout, "3\n")
         self.assertEqual(json.loads(self.run_("get", "models.verifier").stdout), {"provider": "openai-codex", "model": "gpt-6.1-terra"})
         self.assertEqual(len(json.loads(self.run_("get", "models.designer").stdout)), 2)
         self.assertEqual(json.loads(self.run_("dump").stdout), tomllib.loads(SHIPPED))
 
     def test_a_missing_key_is_named(self):
-        r = self.run_("get", "slots.nope")
-        self.assertEqual((r.returncode, r.stderr), (1, "policy: no key slots.nope\n"))
+        r = self.run_("get", "ci.nope")
+        self.assertEqual((r.returncode, r.stderr), (1, "policy: no key ci.nope\n"))
 
     def test_every_bad_edit_is_refused_with_its_reason(self):
         cases = [
-            ("hand = 5", "hand = 0", "slots.hand must be a positive integer, not 0"),
-            ("hand = 5", 'hand = "5"', "slots.hand must be a positive integer, not '5'"),
-            ("hand = 5", "hand = true", "slots.hand must be a positive integer, not True"),
-            ("hand = 5\n", "", "missing slots.hand"),
-            ("hand = 5", "hand = 5\ntotal = 7", "unknown key slots.total"),
+            ("floor_gb = 20", "floor_gb = 0", "merge.floor_gb must be a positive integer, not 0"),
+            ("floor_gb = 20", 'floor_gb = "20"', "merge.floor_gb must be a positive integer, not '20'"),
+            ("floor_gb = 20", "floor_gb = true", "merge.floor_gb must be a positive integer, not True"),
+            ("floor_gb = 20\n", "", "missing merge.floor_gb"),
+            ("floor_gb = 20", "floor_gb = 20\ntotal = 7", "unknown key merge.total"),
             ("fix_attempts = 3", "fix_attempts = 3\nfix_attemps = 4", "unknown key ci.fix_attemps"),
             ("schema = 1", "schema = 2", "schema must be 1, not 2"),
             ("schema = 1", "schema = true", "schema must be 1, not True"),
             ("verifier = {", "verifer = {", "unknown key models.verifer"),
-            ('research = { provider = "claude-code", model = "claude-opus-5-5" }\n', "", "missing models.research"),
+            ('orchestrator = { provider = "claude-code", model = "claude-opus-5-5" }\n', "", "missing models.orchestrator"),
             ("schema = 1", "schema = 1\nslot = 3", "unknown key slot"),
             ("[ci]\nfix_attempts = 3\n", "", "[ci] is missing or empty"),
             ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }', 'verifier = { provider = "openai-codex" }',
@@ -68,27 +66,26 @@ class Policy(unittest.TestCase):
             ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }', "verifier = []", "models.verifier must be"),
             ('verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }',
              'verifier = { provider = "openai-codex", model = "gpt-6.1-terra", fallback = true }', "models.verifier must be"),
-            ("[slots]", "[slots", "is not TOML"),
-            ('me = "injaneity"', 'me = ""', "people.me must be a GitHub login"),
-            ('held_words = ["teleport", "keyvault", "pairing"]', "held_words = []", "patent.held_words must be a non-empty list"),
-            ('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
+            ("[ci]", "[ci", "is not TOML"),
+            ('me = "octo"', 'me = ""', "people.me must be a login"),
+            ('held_words = ["skyhook", "vaultkey", "sealing"]', "held_words = []", "patent.held_words must be a non-empty list"),
+            ('held_words = ["skyhook", "vaultkey", "sealing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
             ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),
-            ('private_repo = "trycua/cua-staging"', 'private_repo = "trycua/cua"', "patent.private_repo must differ"),
-            ('private_repo = "trycua/cua-staging"', 'private_repo = "TryCua/CUA"', "patent.private_repo must differ"),
-            ('[merge]\nrepo = "trycua/cua"', '[merge]\nrepo = "trycua"', "merge.repo must be owner/name"),
+            ('private_repo = "acme/app-private"', 'private_repo = "acme/app"', "patent.private_repo must differ"),
+            ('private_repo = "acme/app-private"', 'private_repo = "Acme/APP"', "patent.private_repo must differ"),
+            ('[merge]\nrepo = "acme/app"', '[merge]\nrepo = "acme"', "merge.repo must be owner/name"),
             ('never_rerun = ["cla"]', 'never_rerun = ["cla", "cla"]', "merge.never_rerun must be a list of distinct check names"),
             ('tiers = ["light", "standard", "deep", "human"]', "tiers = []", "merge.tiers must be a non-empty list"),
             ('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard", "de.p", "deep", "human"]',
              "merge.tiers must be a non-empty list of distinct lowercase words"),
             ('preapprove_tiers = ["deep", "human"]', 'preapprove_tiers = ["deep", "hman"]', "merge.preapprove_tiers names hman"),
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
-            ("interval_s = 1800", "interval_s = 0", "pickup.interval_s must be a positive integer, not 0"),
-            ("deadline_s = 1200", "deadline_s = 1800", "pickup.deadline_s must be under pickup.interval_s"),
-            ('label_hosts = { Linux = "vm", macOS = "mini" }', 'label_hosts = { Linux = "" }', "pickup.label_hosts must be a table"),
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
             ('salvaged_from = "Salvaged from #{pr}"', 'salvaged_from = "Salvaged from {pr}"', "issues.salvaged_from must be"),
-            ('since = "2026-07-22"', 'since = "13 Nov"', "issues.since must be a YYYY-MM-DD date"),
+            ('url = "https://example.invalid/wake"', 'url = "http://example.invalid/wake"', "wake.url must be an https URL"),
+            ('owner = "Robin"', "", "missing people.owner"),
+            ('clone = "~/work/app"', 'clone = "work/app"', "host.clone must be a path from / or ~/"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):
@@ -106,78 +103,64 @@ class Policy(unittest.TestCase):
 
     def test_readers_refuse_a_policy_bin_policy_rejects(self):
         self.write(SHIPPED.replace("fix_attempts = 3", "fix_attempts = -1"))
-        for prog, args in (("bin/policy", ["seat", "coding"]), ("bin/hourly", ["log", "h", "a", "i", "r"])):
-            with self.subTest(prog=prog):
-                r = self.run_(*args, prog=prog)
+        for args in (["seat", "coding"], ["rules"], ["dump"]):
+            with self.subTest(args=args):
+                r = self.run_(*args)
                 self.assertNotEqual(r.returncode, 0, r.stdout)
                 self.assertIn("ci.fix_attempts must be a positive integer, not -1", r.stderr)
                 self.assertNotIn("Traceback", r.stderr)
-        run = Path(self.env["ONIGIRI_ROOT"]) / "review" / "x"
-        run.mkdir(parents=True)
-        (run / "run.json").write_text(json.dumps({"state": "collected", "attempt": 1, "pid": None, "rc": 0}))
-        r = self.run_("ci", "x", "1", "a" * 40, "red", prog="bin/pi-run")
-        self.assertEqual(r.returncode, 2, r.stdout)
-        self.assertIn("ci.fix_attempts must be a positive integer, not -1", r.stderr)
-        self.assertEqual(json.loads((run / "run.json").read_text())["state"], "collected")
 
     def test_the_merge_job_runs_no_gate_without_its_policy(self):
-        (self.pkg / "hosts" / "vm").mkdir(parents=True)
+        (self.pkg / "services").mkdir(parents=True)
         for f in ("merge_job.py", "wake.py"):
-            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
         (self.pkg / "bin" / "gh").write_text("#!/bin/sh\necho called >> \"$0.log\"\n")
         (self.pkg / "bin" / "gh").chmod(0o755)
         self.write(SHIPPED.replace('tiers = ["light", "standard", "deep", "human"]', 'tiers = ["light", "standard"]'))
         env = {**self.env, "PATH": f"{self.pkg / 'bin'}:{self.env['PATH']}", "ZSTACK_ENSURED": "1"}
-        r = subprocess.run([sys.executable, str(self.pkg / "hosts/vm/merge_job.py"), "--dry-run"], capture_output=True, text=True,
+        r = subprocess.run([sys.executable, str(self.pkg / "services/merge_job.py"), "--dry-run"], capture_output=True, text=True,
                            env=env, timeout=60)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("merge_job: merge.preapprove_tiers names deep, human, which merge.tiers lacks", r.stderr)
         self.assertFalse((self.pkg / "bin" / "gh.log").exists())
 
     def test_hold_row_writes_nothing_without_the_merge_gates_policy(self):
-        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        (self.pkg / "services").mkdir(parents=True, exist_ok=True)
         for f in ("merge_job.py", "wake.py"):
-            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
         shutil.copy2(PKG / "bin" / "hold-row", self.pkg / "bin" / "hold-row")
         root = Path(self.env["ONIGIRI_ROOT"])
         root.mkdir(parents=True)
         (root / "hold-prs.txt").write_text("hold | 1 | no | x\n")
         self.write(SHIPPED.replace('gate_check = "ci-gate"', ""))
-        r = self.run_("add", "hold | 2 | no | Zane 12 Nov 15:00 SGT", prog="bin/hold-row")
+        r = self.run_("add", "hold | 2 | no | Robin 12 Nov 15:00 SGT", prog="bin/hold-row")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("merge_job: missing merge.gate_check", r.stderr)
         self.assertEqual((root / "hold-prs.txt").read_text(), "hold | 1 | no | x\n")
         self.assertEqual(sorted(p.name for p in root.iterdir()), ["hold-prs.txt"])
 
     def test_a_push_is_refused_without_the_patent_policy(self):
-        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        (self.pkg / "services").mkdir(parents=True, exist_ok=True)
         for f in ("patent_push.py", "wake.py", "pre-push"):
-            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
-        self.write(SHIPPED.replace('held_words = ["teleport", "keyvault", "pairing"]', 'held_words = ["Teleport"]'))
-        r = subprocess.run([str(self.pkg / "hosts/vm/pre-push"), "origin", "https://github.com/trycua/cua"],
+            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
+        self.write(SHIPPED.replace('held_words = ["skyhook", "vaultkey", "sealing"]', 'held_words = ["Skyhook"]'))
+        r = subprocess.run([str(self.pkg / "services/pre-push"), "origin", "https://github.com/acme/app"],
                            input=f"refs/heads/x {'a' * 40} refs/heads/x {'0' * 40}\n", capture_output=True, text=True, env=self.env, timeout=60)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("patent hold: config/policy.toml is unreadable (patent.held_words must be", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
     def test_a_push_under_a_python_without_tomllib_still_reads_the_patent_policy(self):
-        (self.pkg / "hosts" / "vm").mkdir(parents=True, exist_ok=True)
+        (self.pkg / "services").mkdir(parents=True, exist_ok=True)
         for f in ("patent_push.py", "wake.py"):
-            shutil.copy2(PKG / "hosts" / "vm" / f, self.pkg / "hosts" / "vm" / f)
+            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
         (self.pkg / "notoml").mkdir()
         (self.pkg / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
         code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('pp', sys.argv[1]); "
-                "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp); print(pp.held_hits(['src/pairing.rs'], ''))")
-        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "hosts/vm/patent_push.py")], capture_output=True, text=True,
+                "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp); print(pp.held_hits(['src/sealing.rs'], ''))")
+        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "services/patent_push.py")], capture_output=True, text=True,
                            env={**self.env, "PYTHONPATH": str(self.pkg / "notoml")}, timeout=60)
-        self.assertEqual((r.returncode, r.stdout), (0, "['src/pairing.rs']\n"), r.stderr)
-
-    def test_check_host_reports_a_bad_policy_as_one_fail_line_and_goes_on(self):
-        self.write(SHIPPED.replace("schema = 1", "schema = true"))
-        r = self.run_("--offline", prog="bin/check-host")
-        self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("FAIL  policy: schema must be 1, not True", r.stdout)
-        self.assertIn("gh: ", r.stdout)
+        self.assertEqual((r.returncode, r.stdout), (0, "['src/sealing.rs']\n"), r.stderr)
 
     def test_the_old_json_configs_are_gone(self):
         for f in ("models.json", "slots.json", "ci.json"):

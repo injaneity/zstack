@@ -21,7 +21,7 @@ test("the Claude Code hook refuses what the pi extension refuses, with exit 2 an
 	assert.match(merge.stderr, /^blocked: `gh pr merge`/);
 	assert.equal(merge.stderr.trim().split("\n").length, 1);
 	for (const tool of ["Write", "Edit", "MultiEdit"]) {
-		const holds = guard({ tool_name: tool, tool_input: { file_path: "/srv/onigiri/hold-prs.txt" }, cwd: "/tmp" });
+		const holds = guard({ tool_name: tool, tool_input: { file_path: "~/zstack/hold-prs.txt" }, cwd: "/tmp" });
 		assert.equal(holds.status, 2, tool);
 		assert.match(holds.stderr, /holds file/);
 	}

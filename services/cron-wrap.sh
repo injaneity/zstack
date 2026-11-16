@@ -1,8 +1,7 @@
 #!/bin/sh
 set -u
-export TMPDIR=/var/tmp/onigiri; mkdir -p "$TMPDIR"
 name=$1 interval=$2 limit=$3; shift 3
-dir=${ONIGIRI_ROOT:-/srv/onigiri}/tick; stamp=$dir/cron-$name.started; log=$dir/cron.log
+dir=${ONIGIRI_ROOT:-$HOME/zstack}/tick; stamp=$dir/cron-$name.started; log=$dir/cron.log
 now=$(date +%s); last=$(cat "$stamp" 2>/dev/null || echo 0)
 [ $((now - last)) -ge $((interval - 30)) ] || exit 0
 exec 9>"$dir/cron-$name.lock"

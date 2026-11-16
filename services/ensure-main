@@ -1,6 +1,6 @@
 #!/bin/bash
 set -u
-die() { echo "ensure-package-main: $*; not launching on an old tree" >&2; exit 1; }
+die() { echo "ensure-main: $*; not launching on an old tree" >&2; exit 1; }
 here="$(cd "$(dirname "$0")/.." && pwd)"
 root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null) || die "$here is not a git checkout"
 g() { git -C "$root" "$@"; }

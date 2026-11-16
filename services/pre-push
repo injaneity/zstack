@@ -1,4 +1,4 @@
 #!/bin/sh
-pkg=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+pkg=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 echo "zstack $(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$pkg" rev-parse HEAD 2>/dev/null || echo unknown)" >&2
 ONIGIRI_ROOT=${ONIGIRI_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)} exec python3 "$(dirname "$(readlink -f "$0")")/patent_push.py" "$@"

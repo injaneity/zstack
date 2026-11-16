@@ -29,6 +29,8 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 **Cut on 16 Nov 2026.** `how`, `why`, `architect` and `charts`, the `diagnose`, `change`, `measure` and `resume` playbooks, and onigiri-mode's Principles, Non-negotiables and Writing sections were removed: the coding model does that work without being told. The choices that were Zane's are onigiri-mode's Work section. The copies of trycua/cua's two verify skills were removed too, since the verifier reads them from the checkout.
 
+**The T3 move, 16 Nov 2026.** The pi launcher (`bin/pi-run`), the hourly pass, the pickup, their TLA+ models, the host files and the release bench were removed. A scheduled orchestrator thread (`orchestrator/playbook.md`) plans and launches coding threads, and the harness caps how many run. The merge job, the patent hook and the wake moved to `services/`. The shipped config became an example deployment, so the package names no repo.
+
 ## Vendored verbatim
 
 `statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied byte for byte with `statechart/scripts/`. The statechart's own test suite and corpus (`scripts/test/`, and the `fast-check` dev dependency in its `package.json`) are left upstream at that commit: no zstack CI step or session ran them. Same MIT license and copyright as the rest of pstack.

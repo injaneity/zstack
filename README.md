@@ -1,41 +1,49 @@
 # zstack
 
-[pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan, trimmed for pi.
+A stack for coding agents that works the same under any harness. One thread owns a task and writes all its code. Three delegates help it and never edit source: an **`explorer`** reads, two competing **`designer`**s plan deep or new work, and a **`verifier`** owns verification. The role-to-model map is `config/policy.toml` `[models]`.
 
-pstack splits work across agents: one model designs, a subagent implements, more subagents review and race. zstack keeps the same engineering standard with one main session doing the work. The main session builds. A **`verifier`** owns verification (`agents/verifier.md`), an optional **`explorer`** answers narrow reading questions, and two competing **`designer`**s plan deep or new work. Each role's model is in `config/policy.toml` `[models]`.
+Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan. `docs/PROVENANCE.md` records what changed and why.
+
+## the three parts
+
+- **The stack** is what every coding thread loads: `skills/`, `agents/`, the Hard rules, and the guard that enforces them. It names no repo. It reaches the rest only through `bin/policy`.
+- **The orchestrator** is one scheduled thread per machine (`orchestrator/playbook.md`). It plans the work, launches coding threads with `orchestrator/brief.md`, reads their reports and relays them. A messaging service can talk to it; the service decides nothing.
+- **The services** run on a machine beside the threads and are not threads: the merge job (`services/merge_job.py`), the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and the two checks that keep a machine's checkout at main (`services/ensure-main`, `services/check-parity`).
 
 ## install
+
+As a Claude Code plugin, which T3 Code threads load:
+
+```bash
+claude --plugin-dir /path/to/zstack
+```
+
+As a pi package, which the delegates run under:
 
 ```bash
 pi install git:github.com/injaneity/zstack
 ```
 
-That installs the skills, extensions and agents. A fresh host needs these too (a fresh-HOME install on 11 Nov 2026 failed without each one):
+Both need `node`, `git`, `gh` and `python3` 3.9 or newer on `PATH` (`bin/policy` uses `tomllib`, else the vendored `vendor/tomli`).
 
-- **Tools** on `PATH`: `pi`, `node`, `git`, `gh`, and `python3` 3.9 or newer (`bin/policy` uses `tomllib`, else the vendored `vendor/tomli`).
-- **The claude-code provider** for the `coding`, `research` and `designer:1` roles: the Claude Code CLI (`npm install -g @anthropic-ai/claude-code`, then `claude auth login`, or `CLAUDE_CODE_OAUTH_TOKEN` exported by the host file) and the pi package, pinned:
-  `pi install git:github.com/earendil-works/pi-claude-code@70abb65186592ca788b29b3db22c3160d629c41f`.
-  Later commits (from d070212, which sets `CLAUDE_CODE_ENTRYPOINT=pi-agent`) get every request refused as third-party usage on a Claude plan, while pi still lists the models.
-- **The openai-codex provider** for `explorer`, `verifier` and `designer:2`: run `pi`, then `/login` and pick ChatGPT. Without it the verifier refuses to run and the explorer falls back to your model.
-- **FFF's search tools** for the agents: `pi install npm:@ff-labs/pi-fff@0.11.0`. Without it pi drops `fffind`, `ffgrep` and `fff-multi-grep` from their tool lists without a word.
-- **`gh auth login`**, for the hourly pass, the merge job and PRs.
+## configure a machine
 
-Then run `bin/check-host` (`--offline` skips the live calls). It prints one `ok` or `FAIL` line per dependency, makes one real `pi -p` call per provider, runs `hosts/check-parity`, and exits 1 on any `FAIL`. A deployment's host file, cua clone, holds file and webhook key are `docs/HOST.md`'s. `ci.fix_attempts` in `config/policy.toml` is how many red heads of one PR reopen the thread that pushed them. `[models]` in `config/policy.toml` maps each role (`coding`, `research`, and the subagents `explorer`, `designer`, `verifier`) to a provider and model. That file holds the values the code reads. Beside it, `config/rules.toml` holds the Hard rules' text, which names a value by its key in braces (`{merge.repo}`) for `bin/policy` to fill in, including this machine's clone, holds file and unbuildable platforms from `[host]`, and `config/state.toml` declares every runtime state file a host keeps (its path, format, one writer and readers). `bin/policy` is the one reader of all three (`bin/policy check`, `get <key>`, `dump`, `rules`). A machine with its own setup sets `ZSTACK_CONFIG` to a directory holding its own three files, and every reader uses that directory instead of the package's `config/`; a directory that is missing or invalid fails closed. zstack also loads as a Claude Code plugin (`.claude-plugin/plugin.json`, `hooks/`): the same skills, the Hard rules at session start, and rule-guard as a hook on every Bash and write call. Skills name config keys and never restate their values, which `tests/test_declarative.py` checks. `bin/pi-run <id> <role> <brief-file>` starts a detached print-mode session with onigiri-mode's Hard rules appended (`bin/pi-run --help`). Its lifecycle is one state machine, `bin/PiRun.tla`, which CI model-checks and holds the launcher to. `model/Zstack.tla` is the whole flow from the chat to merged, with the merge job. CI model-checks it, and its mutants (`model/mutants.py`) each put back a bug the flow had. `model/Hourly.tla` is the hourly pickup (`bin/hourly` and the hourly playbook's steps 0 to 5), with its chart `model/Hourly.mmd`. CI model-checks it with `tests/hourly-model.sh`, and its mutants (`model/hourly_mutants.py`) include the pass as it was before the pickup fix. `docs/HOST.md` and `hosts/` are one example deployment.
+`config/` ships an example deployment: a repo `acme/app`, an owner `Robin`, a login `octo`. Copy the directory, write your own values, and point `ZSTACK_CONFIG` at the copy. That directory replaces the shipped one whole, and a missing or invalid one stops every reader.
 
-Then type `/onigiri-mode <task>` (or `/skill:onigiri-mode <task>`), or describe the work and let the model route to it. The `/onigiri-mode` prompt template expands inside pi, so it works on any provider, including claude-code.
+- `policy.toml` holds the values the code reads: models, the merge gate and its repo, the patent hold's words and private repo, this machine's clone and holds file, the wake's URL.
+- `rules.toml` holds the Hard rules. A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fills it in. A rule marked `for = "orchestrator"` is left out of a coding thread's copy.
+- `state.toml` declares each runtime state file the services keep.
 
-## what you get
+`bin/policy` is the one reader of all three: `check`, `get <key>`, `dump`, `rules`, `rules --thread`.
 
-- **`onigiri-mode`**: one skill for both readers, the pi session that does the work and the chat orchestrator that files it. It holds the hard rule (coding runs in pi, one session per task), the few working choices that are Zane's, subagent rules, autonomy, and the playbook list, and it points at the Hard rules (holds, patent hold, commit and PR text, checks, scope, merging) in `config/rules.toml`, their one copy, which `bin/pi-run` renders with `bin/policy rules` and appends to every session's system prompt. Three playbooks: pull requests (open, land, verify), release bench and hourly. It replaces pstack's `poteto-mode`.
+## what a coding thread gets
+
+- **`onigiri-mode`**: the one skill it reads. The hard rule (one thread, one task), the working choices this stack makes, the delegates and when to use each, autonomy, and the pull-requests playbook.
 - **`unslop`**: strips AI tells from prose.
-- **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `.pi/skills/verify-<app>/` skill that launches the real app, drives it like a user, and captures evidence, then keep its feature map honest as the app changes.
-- **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart (the first run installs Java and TLC through mise, so it needs mise and the network, unless `TLA2TOOLS` points at a local `tla2tools.jar`, with `JAVA` optionally naming the Java binary). The other two generate a repo's formal verification skill and keep it in step with the code. All three are slash-command only: `/skill:<name>`.
-- **`subagent` tool** and **`agents/`** (`explorer`, `designer`, `verifier`, no model named in the files): pi's example extension, cut to one agent per call, each child getting only its role prompt (its place in the pipeline, the skill it loads, the rules it could break), with safety changes and a per-role model from `config/policy.toml` `[models]`. `docs/SUBAGENT.md` lists them and says why "read-only" is a prompt instruction, not a boundary.
-
-- **`tool-guard` extension** (`extensions/tool-guard/`): adds three wall-clock rules to every session's system prompt: no whole-disk `find` for a tool, no `sleep`-and-`tail` polling, and time-bounded measurements. A bash call that declares no timeout gets `[run]` `idle_min` (`config/policy.toml`) less a minute, so a blocked call returns to the session before its supervisor stops the run.
-- **`rule-guard` extension** (`extensions/rule-guard/`): blocks the bash and write calls onigiri-mode's Hard rules ban outright: force-push, skipping the pre-push hook, `gh pr merge`, or `gh pr ready` (unless the brief says `merge: allowed`) in the repo `merge.repo` names, and writes to the real holds file (a test root's `hold-prs.txt` is not one) other than `bin/hold-row`, which adds, retires or replaces one row relaying the owner's call. `docs/RULE-GUARD.md` has the details.
-
-`docs/PROVENANCE.md` records what changed from pstack and why.
+- **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `verify-<app>` skill that launches the real app, drives it like a user and captures evidence, then keep its feature map honest.
+- **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart. All three are slash-command only.
+- **The rule guard** (`extensions/rule-guard/`, with a pi adapter beside it and a Claude Code adapter in `hooks/`): blocks the calls the Hard rules ban outright. `docs/RULE-GUARD.md` lists them.
+- **The pi extensions** `subagent` (`docs/SUBAGENT.md`) and `tool-guard`, which bounds a bash call that declares no timeout by `run.idle_min`.
 
 ## license
 

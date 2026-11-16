@@ -9,7 +9,7 @@ USAGE = (
     '  policy check          parse and validate all three: one line, exit 1 when one is not valid\n'
     '  policy seat <role>[:<n>]  "<provider> <model>" for a role from [models]; a role with several seats needs :<n>\n'
     '  policy seats          every role and seat\n'
-    '  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON\n'
+    '  policy get <key>      one policy.toml value by dotted key (`merge.repo`, `models.designer`): a string or number as is, else JSON\n'
     '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
     "  policy rules          every Hard rule as markdown, as the orchestrator reads them\n"
     "  policy rules --thread the same without the rules marked for the orchestrator: a coding session's system prompt\n"
@@ -24,7 +24,6 @@ CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "c
 PATH = os.path.join(CONFIG, "policy.toml")
 RULES = os.path.join(CONFIG, "rules.toml")
 STATE = os.path.join(CONFIG, "state.toml")
-RUN_ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 
 
 class PolicyError(Exception):
@@ -57,54 +56,36 @@ def seats(v):
 
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 SCHEMA = {
-    "models": {role: SEAT for role in ("coding", "research", "explorer", "designer", "verifier")},
-    "slots": {"auto": (pos_int, "a positive integer"), "hand": (pos_int, "a positive integer")},
+    "models": {role: SEAT for role in ("coding", "orchestrator", "explorer", "designer", "verifier")},
     "ci": {"fix_attempts": (pos_int, "a positive integer")},
-    "resume": {"cap": (pos_int, "a positive integer")},
     "run": {"idle_min": (pos_int, "a positive integer")},
+    "host": {
+        "clone": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
+        "holds": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
+    },
+    "people": {"me": (lambda v: text(v), "a login"), "owner": (lambda v: text(v), "a name")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
         "private_repo": (repo, "owner/name"),
     },
-    "host": {
-        "clone": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
-        "holds": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
-        "unbuildable": (lambda v: names(v) and bool(v), "a non-empty list of distinct platform names"),
-    },
-    "people": {"me": (lambda v: isinstance(v, str) and v.strip() != "", "a GitHub login")},
-    "hourly": {
-        "floor_gb": (pos_int, "a positive integer"),
-        "merge_stale_min": (pos_int, "a positive integer"),
-        "batch_hour": (lambda v: type(v) is int and 0 <= v <= 23, "an hour of the day, 0 to 23"),
-        "file_cap": (pos_int, "a positive integer"),
-        "lume_prune_age_h": (pos_int, "a positive integer"),
-    },
-    "pickup": {
-        "interval_s": (pos_int, "a positive integer"),
-        "deadline_s": (pos_int, "a positive integer"),
-        "label_hosts": (lambda v: isinstance(v, dict) and all(isinstance(x, str) and x.strip() for x in [*v, *v.values()]),
-                        "a table of label = host name"),
-    },
     "merge": {
         "repo": (repo, "owner/name"),
-        "gate_check": (lambda v: isinstance(v, str) and v.strip() != "", "a check name"),
+        "gate_check": (lambda v: text(v), "a check name"),
         "never_rerun": (names, "a list of distinct check names"),
         "tiers": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "preapprove_tiers": (words, "a list of distinct lowercase words"),
-    },
-    "release_bench": {
-        "repo": (repo, "owner/name"),
-        "tag_prefix": (lambda v: text(v) and re.fullmatch(r"[\w.-]+", v) is not None, "a tag prefix of letters, digits, . - _"),
-        "benched": (lambda v: isinstance(v, str) and re.fullmatch(r"\d+(\.\d+)*", v) is not None, "a dotted version"),
-        "host": (lambda v: text(v), "a host name"),
+        "floor_gb": (pos_int, "a positive integer"),
     },
     "issues": {
         "fixes": (lambda v: text(v) and v.count("{issue}") == 1 and "{" not in v.replace("{issue}", ""),
                    "one line with {issue} once and no other placeholder"),
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5],
                            "one line ending in ` #{pr}`, with no other placeholder"),
-        "since": (lambda v: isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) is not None, "a YYYY-MM-DD date"),
+    },
+    "wake": {
+        "url": (lambda v: text(v) and v.startswith("https://"), "an https URL"),
+        "key_file": (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/"),
     },
 }
 
@@ -129,8 +110,6 @@ def validate(data):
         raise PolicyError("patent.private_repo must differ from merge.repo")
     if extra := [t for t in data["merge"]["preapprove_tiers"] if t not in data["merge"]["tiers"]]:
         raise PolicyError(f"merge.preapprove_tiers names {', '.join(extra)}, which merge.tiers lacks")
-    if data["pickup"]["deadline_s"] >= data["pickup"]["interval_s"]:
-        raise PolicyError("pickup.deadline_s must be under pickup.interval_s, so a pass ends before the next one is due")
     return data
 
 

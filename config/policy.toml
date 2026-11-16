@@ -1,139 +1,77 @@
-# zstack policy: the values the code reads (models, slots, gates, the patent hold, the hourly and pickup passes), in one
-# versioned file. Every reader goes through bin/policy, the one parser, which refuses an unknown, missing or mistyped
-# key. CI and hosts/check-parity run `bin/policy check`. The Hard rules' text is config/rules.toml, and the runtime state
-# files are config/state.toml, both read through bin/policy too. The per-PR hold and preapprove rows are not here: they
-# stay in the merge host's append-only ledger, hold-prs.txt (docs/HOST.md, Holds file). A value that came from Zane names
-# his call in its comment.
+# zstack policy: the values the stack, the orchestrator and the services read, in one versioned file. Every reader goes
+# through bin/policy, the one parser, which refuses an unknown, missing or mistyped key. The values here are an example
+# deployment (a repo `acme/app`, an owner `Robin`, a login `octo`). A machine states its own in its own config
+# directory and points ZSTACK_CONFIG at it; that directory replaces this one whole. The Hard rules' text is
+# config/rules.toml and the runtime state files are config/state.toml, both read through bin/policy too.
 schema = 1
 
-# The provider and model each role runs on: bin/pi-run (bin/policy seat) for a launch, the subagent tool for a child.
-# A list is a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the
-# parent's model when its seat fails (extensions/subagent/prompt.ts); the other agents do.
+# The provider and model each role runs on. `coding` is the thread that owns a task and writes all its code.
+# `orchestrator` is the one scheduled thread per machine that plans work and launches coding threads
+# (orchestrator/playbook.md). `explorer`, `designer` and `verifier` are the delegates a coding thread spawns; a list is
+# a role with one seat per side of a race (`designer:1`, `designer:2`). The verifier never falls back to the parent's
+# model when its seat fails; the other delegates do.
 [models]
 coding = { provider = "claude-code", model = "claude-opus-5-5" }
+orchestrator = { provider = "claude-code", model = "claude-opus-5-5" }
 explorer = { provider = "openai-codex", model = "gpt-6.1-terra" }
 designer = [
   { provider = "claude-code", model = "claude-opus-5-5" },
   { provider = "openai-codex", model = "gpt-6.1-terra" },
 ]
 verifier = { provider = "openai-codex", model = "gpt-6.1-terra" }
-research = { provider = "claude-code", model = "claude-opus-5-5" }
 
-# Two slot pools across both hosts, counted apart (Zane, 12 Nov 12:47 SGT: "we should have 3 slots for autopickup and up
-# to 5 hand started work"). `auto` runs are hourly picks (`source: auto`), `hand` runs are the rest; a running run with
-# no pool tag counts as hand. The quick-check lane (`source: quick`, role research) is in neither. bin/pi-run and
-# bin/hourly read them (playbooks/hourly.md step 2).
-[slots]
-auto = 3
-hand = 5
-
-# How many red heads per PR reopen the thread that pushed them (bin/pi-run ci, bin/hourly queue). Past that the PR is Zane's.
+# How many red heads of one PR the orchestrator sends back to the thread that pushed them. Past that the PR is the owner's.
 [ci]
 fix_attempts = 3
 
-# How many times one run id is resumed after pi stops on an upstream 429 or an incomplete upstream response (bin/pi-run
-# LIMIT), counted over the id's whole life. The next such stop ends the run failed and sends the failed wake, so a run
-# whose upstream always fails reaches the chat instead of resuming on every drain (the resume-cap follow-up to #85, 12 Nov).
-[resume]
-cap = 3
+# The longest a bash call that declares no timeout may run, in minutes (extensions/tool-guard), so a call blocked on a
+# process that never ends returns to the session instead of hanging it.
+[run]
+idle_min = 150
 
-# The patent hold at publish time (hosts/vm/patent_push.py, cua's pre-push hook; Hard rules, Patent hold; Zane 27 Oct
-# 14:12 SGT, t747s4293, corrected t748u). A change whose diff touches one of `held_words` is never pushed to
-# `merge.repo`; it goes to `private_repo`. A word counts when no letter or digit comes before it, in any case, so
-# "repairing" passes and "src/pairing.rs", "ws_pairing" and "KeyVault" hit (Zane 27 Oct t753u). Generated lockfiles are
-# skipped, path and lines (a crate named teleport-e2e is not patent work). Never reword or loosen without Zane's
-# explicit ok.
+# This machine, as the Hard rules name it (`work-path`, `work-holds`). `clone` is the checkout a session works from and
+# `holds` the holds file it reads.
+[host]
+clone = "~/work/app"
+holds = "~/zstack/hold-prs.txt"
+
+# Who "we" are. `me` is the login whose PRs the merge job merges and the orchestrator counts as ours. `owner` is the
+# person the rules and the services' messages name: the one whose calls the holds file relays.
+[people]
+me = "octo"
+owner = "Robin"
+
+# The patent hold at publish time (services/patent_push.py, the clone's pre-push hook; Hard rules, Patent hold). A change
+# whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
+# no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines.
 [patent]
-held_words = ["teleport", "keyvault", "pairing"]
+held_words = ["skyhook", "vaultkey", "sealing"]
 skip_lockfiles = [
   "Cargo.lock", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock",
   "pdm.lock", "Pipfile.lock", "bun.lock", "bun.lockb", "composer.lock", "Gemfile.lock", "go.sum", "flake.lock",
   "Package.resolved", "packages.lock.json", "gradle.lockfile", "pubspec.lock", "mix.lock",
 ]
-private_repo = "trycua/cua-staging"
+private_repo = "acme/app-private"
 
-# This machine, as the Hard rules name it (`work-path`, `work-holds`, `checks-platforms`). These are the VM's; a machine
-# with its own config directory (ZSTACK_CONFIG) states its own. `clone` is the checkout a session works from, `holds`
-# the holds file it reads, `unbuildable` the platforms whose crates do not build here.
-[host]
-clone = "/home/box/agent-data/onigiri/cua"
-holds = "/srv/onigiri/hold-prs.txt"
-unbuildable = ["Windows", "macOS"]
-
-# Who "we" are: the login whose PRs the merge job merges and the hourly pass counts as ours.
-[people]
-me = "injaneity"
-
-# The trycua/cua merge gate (hosts/vm/merge_job.py, the one merger there; Hard rules, Merging). The gate is three checks
-# at the PR head: `gate_check` green, no hold row in the ledger, and a tier from `tiers` declared, with a preapprove row
-# pinned to the head for a tier in `preapprove_tiers`. Never reword or loosen without Zane's explicit ok.
+# The merge gate (services/merge_job.py, the one merger in `repo`; Hard rules, Merging). The gate is three checks at the
+# PR head: `gate_check` green, no hold row in the holds file, and a tier from `tiers` declared, with a preapprove row
+# pinned to the head for a tier in `preapprove_tiers`. Under `floor_gb` free on its disk the job wakes the owner.
 [merge]
-repo = "trycua/cua"
-gate_check = "ci-gate"          # it owns red checks and which platform lanes a PR needs
-never_rerun = ["cla"]           # not required on trycua/cua main: never rerun, never a reason to wait
-tiers = ["light", "standard", "deep", "human"]   # the one risk enum, mildest first; a PR declaring none never merges
+repo = "acme/app"
+gate_check = "ci-gate"
+never_rerun = ["cla"]
+tiers = ["light", "standard", "deep", "human"]
 preapprove_tiers = ["deep", "human"]
+floor_gb = 20
 
-# Closing trycua/cua issues and linking salvages to them (Zane, 13 Nov 2026 15:31 SGT, "go ahead with all", on the
-# issue-close audit; Hard rules `issue-close` and `salvage-fixes`). rule-guard lets a session close a `merge.repo` issue
-# by hand only with a comment naming a PR. A salvage PR's body names its source with `salvaged_from` and carries `fixes`
-# once per issue the source fixes, so GitHub closes the issue when the salvage merges. bin/pickup writes both lines into
-# every review brief, and each pass lists for the chat an open salvage that lacks a `fixes` line for an open issue, and,
-# for salvages merged on or after `since`, an issue left open or a source PR still open (playbooks/hourly.md step 7).
-# `since` is the first salvage's merge day (cua#2406), so the pass covers every salvage (Zane, 13 Nov 2026 18:51 SGT).
+# The lines that link a salvage PR to what it replaces (Hard rules `salvage-fixes`): `salvaged_from` names the source
+# PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.
 [issues]
 fixes = "Fixes #{issue}"
 salvaged_from = "Salvaged from #{pr}"
-since = "2026-07-22"
 
-# How long a running run may show no progress before its supervisor stops it (bin/pi-run supervise; Zane, 13 Nov: "lets
-# investigate and see if we can not let this issues happen again", after a run held an auto slot for 20 hours). Progress
-# is any of: a run.log write, a session entry of the run or of its subagents that is not a cache-warming refresh, a file
-# written under review/<id> outside its worktrees, or a tool call still inside the `timeout` it declared. A stopped run
-# exits failed and sends the failed wake, and the pickup collects it like any failed run. bin/hourly marks a run HUNG?
-# past the same limit, for a supervisor too old to stop it. tool-guard gives every bash call that declares no timeout
-# this limit as its timeout, so a call blocked on a process that never ends returns to the session instead of hanging
-# it. The value is above the longest silence of a working run on either host in Nov and below the shortest stuck one.
-[run]
-idle_min = 150
-
-# The hourly pass's thresholds (bin/hourly, bin/pickup, playbooks/hourly.md), moved out of bin/hourly and the playbook.
-# `floor_gb`: a peer takes launches only with this much disk free (step 3), and a host under it is a disk to prune.
-# `merge_stale_min`: the
-# merge job's `last-run` older than this is `stale` (step 0): its 15-minute cron interval plus its 40-minute kill
-# (docs/HOST.md, The merge job). `batch_hour`: the daily preapprove batch is due from this hour SGT (step 9).
-# `file_cap`: follow-up issues the chat files per pass, oldest first (step 6). `lume_prune_age_h`: a stopped
-# `cua-e2e-*` lume VM whose run is collected is pruned once this old (step 3; the 11 Nov retro), by every pickup pass
-# on the mini whatever its free disk.
-[hourly]
-floor_gb = 20
-merge_stale_min = 55
-batch_hour = 8
-file_cap = 10
-lume_prune_age_h = 24
-
-# The scheduled pickup pass, bin/pickup (model/Pickup.tla), on the mini's launchd timer (hosts/mini/install-pickup.sh).
-# `interval_s` is its StartInterval (Zane, 12 Nov 11:10 SGT: start at 90 min, "reduce to 30min if it works correctly";
-# it did, so 30 min from 12 Nov);
-# a pass still running at `deadline_s` is killed and wakes the chat failed. `label_hosts` maps a trycua/cua platform
-# label to the one host that can do its work (playbooks/hourly.md step 3); an item with none or several goes to the
-# launch host.
-[pickup]
-interval_s = 1800
-deadline_s = 1200
-label_hosts = { Linux = "vm", macOS = "mini" }
-
-# The release bench (skills/onigiri-mode/playbooks/release-bench.md; Zane, 14 Nov 2026 23:33 SGT: "lets bench releases
-# instead of each individual pr, since it takes too long. we can just be aggressive with reverting our own prs"). Each
-# pickup pass (bin/pickup) reads `repo`'s published (non-draft) releases whose tag starts with `tag_prefix`. The last
-# one benched is the newest of `benched` and the releases whose `release-bench-<version>` run exited 0 with a
-# `benched: <version> against <old>` line in its report (pickup/state.json `benched`). When no release bench is live on any host and the newest release is newer than that and has no
-# `release-bench-<version>` run yet, it launches that run on `host`, in the auto pool, against the last one benched.
-# Releases that land while a bench runs are skipped, and a bench that failed is not a baseline: the next pass benches the
-# newest one against the last one benched. `benched` is the last release benched by hand before the pickup took over
-# (0.49.11 against 0.49.4, 14 Nov).
-[release_bench]
-repo = "trycua/cua"
-tag_prefix = "cua-driver-rs-v"
-benched = "0.49.11"
-host = "mini"
+# Where a service sends a wake for the owner (services/wake.py): a POST of one JSON object to `url`, with the bearer
+# token read from `key_file`. An empty or missing key file sends nothing.
+[wake]
+url = "https://example.invalid/wake"
+key_file = "~/.config/zstack/wake-key"

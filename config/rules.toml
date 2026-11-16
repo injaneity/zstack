@@ -7,7 +7,7 @@
 # for one value, `{patent.held_words:or}` or `:and` for a list read as a phrase, `{merge.tiers:|}` for a list joined by
 # the text after the colon. `bin/policy check` refuses an unknown key, a duplicate id and a brace that names no key.
 # Strings are TOML literal strings, so backticks and quotes need no escaping. Never reword a hold, patent or merge rule
-# without Zane's explicit ok.
+# without the owner's explicit ok.
 # A rule may carry `source` (who said it and when; never rendered) and `for = "orchestrator"` (left out of a coding
 # session's copy).
 schema = 1
@@ -27,19 +27,7 @@ text = '''Holds live in `{host.holds}`, one `kind | target | rules | note` row e
 [[section.rule]]
 id = "holds-relay"
 for = "orchestrator"
-text = '''To relay Zane's explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names his call and its time. Retire or replace a row only to relay his explicit call, with `bin/hold-row retire '<row>' '<source>'` or `bin/hold-row replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
-
-[[section.rule]]
-id = "priority-slot"
-for = "orchestrator"
-source = "Zane, 12 Nov retro"
-text = '''When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool.'''
-
-[[section.rule]]
-id = "lume-prune"
-for = "orchestrator"
-source = "Zane, 12 Nov retro"
-text = '''Delete stopped `cua-e2e-*` lume VMs older than {hourly.lume_prune_age_h}h whose run is collected; never a running VM or a seed.'''
+text = '''To relay {people.owner}'s explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names that call and its time. Retire or replace a row only to relay {people.owner}'s explicit call, with `bin/hold-row retire '<row>' '<source>'` or `bin/hold-row replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
 
 [[section]]
 title = '''Patent hold'''
@@ -69,7 +57,7 @@ text = '''Rules apply to commits this run creates. Commits that arrived from ups
 
 [[section.rule]]
 id = "text-titles"
-text = '''PR titles use Conventional Commit syntax. Use `fix(...)` or `feat(...)`, not `refactor(...)`, when the change touches release-tracked crates.'''
+text = '''PR titles use Conventional Commit syntax. Use `fix(...)` or `feat(...)`, not `refactor(...)`, when the change touches release-tracked packages.'''
 
 [[section.rule]]
 id = "text-spdx"
@@ -77,7 +65,6 @@ text = '''New files carry the repository's SPDX/FSL header where neighbouring fi
 
 [[section.rule]]
 id = "salvage-fixes"
-source = "Zane, 13 Nov 15:31 SGT"
 text = '''A salvage PR's body says `{issues.salvaged_from}` and, on a line of its own, `{issues.fixes}` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges.'''
 
 [[section.rule]]
@@ -92,21 +79,16 @@ id = "checks-owner"
 text = '''You write the code and a short test plan. Verification is the `verifier` subagent's alone, end to end: what it owns is in `agents/verifier.md`. The verification line in your run report states only what actually ran and names anything skipped.'''
 
 [[section.rule]]
-id = "checks-platforms"
-text = '''{host.unbuildable:and} platform crates are not buildable on this machine. Say in the verdict which platform checks could not run.'''
-
-[[section.rule]]
 id = "checks-verifier"
 text = '''Before you call a diff done or open a PR, spawn the `verifier` subagent on the diff range. Check each finding, and report its `ran …; skipped …; result …` line in your run report. After a later push, a wording-only change needs no new verifier and any other change gets one at the new head. Only a read-only answer with no diff skips it, and says so.'''
 
 [[section.rule]]
-id = "checks-bench"
-source = 'Zane, 14 Nov 23:33 SGT: "lets bench releases instead of each individual pr, since it takes too long. we can just be aggressive with reverting our own prs"'
-text = '''A PR gets functional verification on its platform and never waits on an agent bench. Benches run per published cua-driver release, the newest against the last one benched, one trial at a time (`playbooks/release-bench.md`).'''
+id = "checks-platforms"
+text = '''Say in the verdict which platform checks could not run on this machine.'''
 
 [[section.rule]]
 id = "checks-target"
-text = '''Cargo builds into each workspace's own `target/`. Never commit it.'''
+text = '''Build output stays in each workspace's own build directory, such as `target/`. Never commit it.'''
 
 [[section]]
 title = '''Scope'''
@@ -117,7 +99,6 @@ text = '''Do not salvage or rewrite PRs by {people.me} or bots. PRs by a login w
 
 [[section.rule]]
 id = "issue-close"
-source = "Zane, 13 Nov 15:31 SGT"
 text = '''Close a `{merge.repo}` issue by hand only when one of our merged PRs fixed it, and only with a comment naming that PR: `gh issue close <n> -R {merge.repo} --comment "Fixed by #<pr>."`. Otherwise never close an issue by hand.'''
 
 [[section.rule]]
@@ -133,27 +114,22 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-source = "Zane, 11 Nov"
 text = '''In `{merge.repo}` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
 
 [[section.rule]]
 id = "merge-reruns"
-source = "Zane, 11 Nov"
-text = '''Reruns are decided without asking (only real failures go to Zane): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused.'''
+text = '''Reruns are decided without asking (only real failures go to {people.owner}): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused.'''
 
 [[section.rule]]
 id = "merge-fork-runs"
-source = "Zane, 12 Nov 11:45 SGT"
 text = '''Approve outside-contributor (fork) workflow runs on `{merge.repo}` that await approval, so CI runs: `gh api -X POST repos/{merge.repo}/actions/runs/<id>/approve`. Approving a run is not a review or a merge.'''
 
 [[section.rule]]
 id = "merge-reverts"
-source = "Zane, 14 Nov 23:33 SGT"
-text = '''Never revert a PR, except with a revert PR for one of our own PRs that a release bench found regressed, opened without asking; never revert a teammate's or outside contributor's PR.'''
+text = '''Never revert a PR, except with a revert PR for one of our own PRs that a release check found regressed, opened without asking; never revert a teammate's or outside contributor's PR.'''
 
 [[section.rule]]
 id = "merge-closes"
-source = "the close wording corrected on Zane's call, 16 Nov"
 text = '''Close only one of our own PRs that main or another PR has replaced.'''
 
 [[section.rule]]
@@ -182,8 +158,8 @@ paragraphs = true
 
 [[section.rule]]
 id = "change-rules"
-text = '''Never reword a hold, patent or merge rule without Zane's explicit ok.'''
+text = '''Never reword a hold, patent or merge rule without {people.owner}'s explicit ok.'''
 
 [[section.rule]]
 id = "no-invented-limits"
-text = '''No invented limits: a restriction must trace to Zane's words or these rules. If you think one is needed, put it under questions: instead of applying it.'''
+text = '''No invented limits: a restriction must trace to {people.owner}'s words or these rules. If you think one is needed, put it under questions: instead of applying it.'''

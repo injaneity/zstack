@@ -1,12 +1,25 @@
 {
   "name": "zstack",
   "version": "0.3.0",
-  "description": "pstack trimmed for pi: rigorous agent workflows, with one verifier subagent that owns verification.",
+  "description": "A harness-agnostic stack for coding agents: one thread writes the code, delegates explore, design and verify, and a guard enforces the rules.",
   "license": "MIT",
-  "keywords": ["pi-package", "skills", "workflow", "principles"],
+  "keywords": [
+    "pi-package",
+    "skills",
+    "workflow",
+    "principles"
+  ],
   "pi": {
-    "extensions": ["./extensions/subagent/index.ts", "./extensions/tool-guard/index.ts", "./extensions/rule-guard/index.ts"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"]
+    "extensions": [
+      "./extensions/subagent/index.ts",
+      "./extensions/tool-guard/index.ts",
+      "./extensions/rule-guard/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
   }
 }

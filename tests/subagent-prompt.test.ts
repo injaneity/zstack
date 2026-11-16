@@ -45,5 +45,5 @@ test("an agent's {{rule <id>}} lines become bin/policy's rendering of those rule
 	}
 	assert.equal(expandRules("a\n{{rule x-y}}\nb {{rule z}}\n", () => "- X\n"), "a\n- X\nb {{rule z}}\n");
 	assert.deepEqual(ruleIds("{{rule a-b}}\n {{rule c}}\n{{rule d}}"), ["a-b", "d"]);
-	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on teleport, keyvault and pairing normally\.$/m);
+	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on skyhook, vaultkey and sealing normally\.$/m);
 });

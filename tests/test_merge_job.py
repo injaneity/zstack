@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-VM = Path(__file__).resolve().parent.parent / "hosts" / "vm"
+VM = Path(__file__).resolve().parent.parent / "services"
 
 
 def load(name):
@@ -29,18 +29,18 @@ H, H2 = "a" * 40, "b" * 40
 HOLDS = """# comment
 hold           | 5675          | yes | open PR, never touch
 hands-off-user | someone       | no  | hands-off login
-skip-author    | app/cua-agents | no | bot
-review-only    | f-trycua      | no  | teammate: first review only
+skip-author    | app/app-agents | no | bot
+review-only    | f-teammate      | no  | teammate: first review only
 hands-off-path | impl_.rs      | yes | mode=split-undone | only if it undoes #2886
-hands-off-path | never.rs      | no  | Zane reviews every change to it
-exception      | impl_.rs      | yes | #5686 follow-up | the MSAA path | Zane 26 Oct
+hands-off-path | never.rs      | no  | Robin reviews every change to it
+exception      | impl_.rs      | yes | #5686 follow-up | the MSAA path | Robin 26 Oct
 """
 FIX = mj.parse_holds(HOLDS)
 
 
 def cr(name, status="COMPLETED", conclusion="SUCCESS", started="2026-10-25T01:00:00Z", run="111", workflow="CI"):
     return {"__typename": "CheckRun", "name": name, "workflowName": workflow, "status": status, "conclusion": conclusion,
-            "startedAt": started, "detailsUrl": f"https://github.com/trycua/cua/actions/runs/{run}/job/9"}
+            "startedAt": started, "detailsUrl": f"https://github.com/acme/app/actions/runs/{run}/job/9"}
 
 
 def pr(**kw):
@@ -80,7 +80,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(verdict(pr(statusCheckRollup=late))[0], "merge")
 
     def test_skipped_missing_or_red_platform_jobs_pass_when_ci_gate_is_green(self):
-        win = "libs/cua-driver/rust/crates/platform-windows/src/lib.rs"
+        win = "libs/app-driver/rust/crates/platform-windows/src/lib.rs"
         for rollup in ([cr("ci-gate")], [cr("ci-gate"), cr("Rust Windows shard 1/3", conclusion="SKIPPED")],
                        [cr("ci-gate"), cr("Rust Windows shard 1/3", conclusion="FAILURE", workflow="CI: Rust Windows")],
                        [cr("ci-gate"), cr("e2e", status="IN_PROGRESS", conclusion=None)]):
@@ -89,7 +89,7 @@ class Gate(unittest.TestCase):
     def test_cla_never_blocks(self):
         for cla in (cr("cla", conclusion="FAILURE"), cr("cla", status="IN_PROGRESS", conclusion=None),
                     {"__typename": "StatusContext", "context": "cla", "state": "FAILURE"}):
-            for path in ("libs/cua-spacesd/src/x.rs", "libs/cua-driver/src/x.rs"):
+            for path in ("libs/app-spacesd/src/x.rs", "libs/app-driver/src/x.rs"):
                 p = pr(files=[path], statusCheckRollup=[cr("ci-gate"), cla])
                 self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk light"), (cla, path))
         self.assertFalse(hasattr(mj, "NON_REQUIRED_CHECKS"))
@@ -100,33 +100,33 @@ class Gate(unittest.TestCase):
             self.assertEqual(verdict(pr(body=body, labels=labels)), ("wait", "session", "no risk tier (light|standard|deep|human)"), body)
 
     def test_hold_rows_and_unreadable_holds(self):
-        self.assertEqual(verdict(pr(number=5675)), ("wait", "zane", "hold: #5675 has a hold row in the holds file"))
+        self.assertEqual(verdict(pr(number=5675)), ("wait", "owner", "hold: #5675 has a hold row in the holds file"))
         self.assertEqual(verdict(pr(number=5675, isDraft=True)), ("wait", "hold: #5675 has a hold row in the holds file; draft"))
-        self.assertEqual(verdict(pr(), holds=None), ("wait", "zane", "holds file unreadable: every PR counts as held"))
+        self.assertEqual(verdict(pr(), holds=None), ("wait", "owner", "holds file unreadable: every PR counts as held"))
 
     def test_hands_off_path(self):
         self.assertEqual(verdict(pr(files=["a/tools/never.rs", "b.rs"])),
-                         ("wait", "zane", "touches never.rs (hands-off path, mode never; see the holds file)"))
+                         ("wait", "owner", "touches never.rs (hands-off path, mode never; see the holds file)"))
         self.assertEqual(verdict(pr(files=["a/never.rs.bak", "a/my_never.rs"]))[0], "merge")
 
     def test_a_split_undone_row_holds_nothing_and_a_hold_row_stops_the_pr(self):
         p = pr(files=["libs/x/src/tools/impl_.rs"])
         self.assertEqual(verdict(p), ("merge", "green, ci-gate SUCCESS, risk light"))
-        held = mj.parse_holds(HOLDS + "hold | 5900 | no | Zane reviews this one\n")
-        self.assertEqual(verdict(p, holds=held), ("wait", "zane", "hold: #5900 has a hold row in the holds file"))
+        held = mj.parse_holds(HOLDS + "hold | 5900 | no | Robin reviews this one\n")
+        self.assertEqual(verdict(p, holds=held), ("wait", "owner", "hold: #5900 has a hold row in the holds file"))
 
     def test_deep_and_human_need_a_preapprove_row_at_exactly_the_head(self):
-        pre = mj.parse_holds(HOLDS + f"preapprove | #5900 | no | {H} | Zane, test\n")
+        pre = mj.parse_holds(HOLDS + f"preapprove | #5900 | no | {H} | Robin, test\n")
         for tier in ("deep", "human"):
             want = tier
             p = pr(body=f"risk: {tier}\n")
-            self.assertEqual(verdict(p), ("wait", "zane", f"declared {want}: needs Zane (no preapprove row)"))
+            self.assertEqual(verdict(p), ("wait", "owner", f"declared {want}: needs Robin (no preapprove row)"))
             self.assertEqual(verdict(p, holds=pre), ("merge", f"green, ci-gate SUCCESS, risk {want}, preapproved at {H[:9]}"))
             self.assertEqual(verdict(dict(p, headRefOid=H2), holds=pre),
-                             ("wait", "zane", f"declared {want}: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})"))
-            self.assertEqual(verdict(dict(p, number=5901), holds=pre)[:2], ("wait", "zane"))
+                             ("wait", "owner", f"declared {want}: needs Robin (preapproved at {H[:9]}, head is {H2[:9]})"))
+            self.assertEqual(verdict(dict(p, number=5901), holds=pre)[:2], ("wait", "owner"))
             self.assertEqual(verdict(dict(p, isDraft=True))[0], "wait")
-        self.assertEqual(verdict(pr(labels=["risk:deep"]))[:2], ("wait", "zane"))
+        self.assertEqual(verdict(pr(labels=["risk:deep"]))[:2], ("wait", "owner"))
 
     def test_strictest_declared_tier(self):
         self.assertEqual(mj.declared_risk(["risk:light", "risk:deep"], ""), "deep")
@@ -160,23 +160,23 @@ class NextAction(unittest.TestCase):
         p = pr(number=7338, body="risk: deep\n", statusCheckRollup=self.RED)
         self.assertEqual(verdict(p), ("rerun", "red once: ci-gate, rust"))
         self.assertEqual(verdict(p, rerun_head=H),
-                         ("wait", "session", "red after rerun: ci-gate, rust; declared deep: needs Zane (no preapprove row)"))
-        self.assertEqual(verdict(dict(p, statusCheckRollup=[cr("ci-gate")])), ("wait", "zane", "declared deep: needs Zane (no preapprove row)"))
+                         ("wait", "session", "red after rerun: ci-gate, rust; declared deep: needs Robin (no preapprove row)"))
+        self.assertEqual(verdict(dict(p, statusCheckRollup=[cr("ci-gate")])), ("wait", "owner", "declared deep: needs Robin (no preapprove row)"))
         pending = [cr("ci-gate", status="IN_PROGRESS", conclusion=None)]
-        self.assertEqual(verdict(dict(p, statusCheckRollup=pending))[1], "zane")
+        self.assertEqual(verdict(dict(p, statusCheckRollup=pending))[1], "owner")
         for held in (dict(p, number=5675), dict(p, files=["never.rs"])):
-            self.assertEqual(verdict(held)[:2], ("wait", "zane"))
-        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
+            self.assertEqual(verdict(held)[:2], ("wait", "owner"))
+        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "owner"))
 
     def test_a_conflicting_deep_pr_with_no_preapproval_is_the_sessions_first(self):
         p = pr(number=7637, body="risk: deep\n", mergeable="CONFLICTING", statusCheckRollup=[cr("ci-gate")])
-        self.assertEqual(verdict(p), ("wait", "session", "declared deep: needs Zane (no preapprove row); merge conflict"))
-        self.assertEqual(verdict(dict(p, mergeable="MERGEABLE"))[:2], ("wait", "zane"))
+        self.assertEqual(verdict(p), ("wait", "session", "declared deep: needs Robin (no preapprove row); merge conflict"))
+        self.assertEqual(verdict(dict(p, mergeable="MERGEABLE"))[:2], ("wait", "owner"))
         for held in (dict(p, number=5675), dict(p, files=["never.rs"])):
-            self.assertEqual(verdict(held)[:2], ("wait", "zane"))
-        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "zane"))
+            self.assertEqual(verdict(held)[:2], ("wait", "owner"))
+        self.assertEqual(verdict(p, paused="manual")[:2], ("wait", "owner"))
         for body in ("risk: light\n", "risk: deep\n"):
-            self.assertEqual(verdict(dict(p, author="someone", body=body))[:2], ("wait", "zane"), body)
+            self.assertEqual(verdict(dict(p, author="someone", body=body))[:2], ("wait", "owner"), body)
 
     def test_pending_waits(self):
         pending = pr(statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None), cr("x", conclusion="FAILURE")])
@@ -186,7 +186,7 @@ class NextAction(unittest.TestCase):
     def test_a_draft_is_never_readied_or_merged(self):
         held = "draft"
         p6970 = pr(number=6970, isDraft=True, mergeable="UNKNOWN", statusCheckRollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
-                   body="**awaits Zane's decision; do not merge.**\nrisk: standard\n")
+                   body="**awaits Robin's decision; do not merge.**\nrisk: standard\n")
         self.assertEqual(verdict(p6970), ("wait", f"ci-gate PENDING; {held}; mergeable UNKNOWN"))
         p7050 = pr(number=7050, isDraft=True, statusCheckRollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)],
                    body="Draft: a sample. Please do not merge until the audit is reviewed.\nrisk: light\n")
@@ -200,18 +200,18 @@ class NextAction(unittest.TestCase):
     def test_github_mergeability_and_pause(self):
         self.assertEqual(verdict(pr(mergeable="CONFLICTING")), ("wait", "session", "merge conflict"))
         self.assertEqual(verdict(pr(mergeable="UNKNOWN")), ("wait", "mergeable UNKNOWN"))
-        self.assertEqual(verdict(pr(), paused="manual"), ("wait", "zane", "tick paused: manual"))
+        self.assertEqual(verdict(pr(), paused="manual"), ("wait", "owner", "tick paused: manual"))
 
 
 class Holds(unittest.TestCase):
     def test_rows_parse(self):
         self.assertEqual(FIX, {"hold": {5675}, "paths": ["never.rs"], "preapproved": {}})
         self.assertEqual(mj.parse_holds("hands-off-path | x.rs | no | mode=never | b\n")["paths"], ["x.rs"])
-        h = mj.parse_holds(f"preapprove | #5650 | no | {H} | Zane\npreapprove | 5690 | no | {H2} | x\n")
+        h = mj.parse_holds(f"preapprove | #5650 | no | {H} | Robin\npreapprove | 5690 | no | {H2} | x\n")
         self.assertEqual(h["preapproved"], {5650: H, 5690: H2})
 
     def test_a_row_that_names_no_pr_is_not_read_and_cannot_hold_every_pr(self):
-        for row in ("review-only | f-trycua | no | teammate", "skip-author | app/cua-agents | no | bot", "review-only | f-trycua | maybe",
+        for row in ("review-only | f-teammate | no | teammate", "skip-author | app/app-agents | no | bot", "review-only | f-teammate | maybe",
                     "exception | impl_.rs | yes | #5686 follow-up"):
             self.assertEqual(mj.parse_holds(row), {"hold": set(), "paths": [], "preapproved": {}}, row)
 
@@ -266,7 +266,7 @@ class Stage(unittest.TestCase):
         self.lists, self.reads, self.queue_events = [], [], {}
         self.entries = {}
 
-    def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE", author="injaneity"):
+    def add(self, n, head=H, rollup=None, body="risk: light\n", draft=False, files=("README.md",), mergeable="MERGEABLE", author="octo"):
         self.prs[n] = {"number": n, "author": author, "headRefOid": head, "isDraft": draft, "title": f"pr {n}", "labels": [], "body": body,
                        "mergeable": mergeable, "state": "OPEN", "mergedAt": None, "files": [{"path": x} for x in files],
                        "statusCheckRollup": list(self.GREEN if rollup is None else rollup)}
@@ -297,14 +297,14 @@ class Stage(unittest.TestCase):
             query = kv.pop("query")
             if "search(" in query:
                 size, at = int(re.search(r"search\([^)]*first: (\d+)", query).group(1)), int(kv.get("after", 0))
-                mine = [n for n, p in self.prs.items() if p["state"] == "OPEN" and p["author"] == "injaneity"]
+                mine = [n for n, p in self.prs.items() if p["state"] == "OPEN" and p["author"] == "octo"]
                 return {"data": {"search": {"nodes": [self.node(n) for n in mine[at:at + size]],
                                             "pageInfo": {"hasNextPage": at + size < len(mine), "endCursor": str(at + size)}}}}
             n = int(kv["n"])
             if "mergeQueueEntry" in query:
                 return {"data": {"repository": {"pullRequest": {"id": f"PR_{n}", "mergeQueueEntry": self.entries.get(n)}}}}
             if "AddedToMergeQueueEvent" in query:
-                ev = self.queue_events.get(n, [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
+                ev = self.queue_events.get(n, [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "octo"}},
                                                {"__typename": "RemovedFromMergeQueueEvent", "reason": "merged"}])
                 return {"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": ev}}}}}
             node = self.node(n, kv.get("files"), kv.get("checks"))
@@ -330,7 +330,7 @@ class Stage(unittest.TestCase):
         if args[:3] == ["gh", "pr", "merge"] and not self.queue:
             self.prs[int(args[3])].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
         elif args[:3] == ["gh", "pr", "merge"]:
-            self.entries[int(args[3])] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": args[-1]}}
+            self.entries[int(args[3])] = {"enqueuer": {"login": "octo"}, "headCommit": {"oid": args[-1]}}
         elif args[:3] == ["gh", "api", "graphql"]:
             assert "dequeuePullRequest" in args[-1], args
             self.entries.pop(int(args[4].split("_")[1]))
@@ -361,48 +361,48 @@ class Stage(unittest.TestCase):
         self.add(5179, author="Andrew9603")
         self.add(5417, head=H2)
         self.prs[5417]["state"] = "CLOSED"
-        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n"
-                                             f"preapprove | #5417 | no | {H2} | Zane, test\n")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Robin, test\n"
+                                             f"preapprove | #5417 | no | {H2} | Robin, test\n")
         self.run_()
-        self.assertEqual(self.calls, [["gh", "pr", "merge", "5178", "-R", "trycua/cua", "--squash", "--match-head-commit", H]])
+        self.assertEqual(self.calls, [["gh", "pr", "merge", "5178", "-R", "acme/app", "--squash", "--match-head-commit", H]])
         self.assertNotIn(5179, self.reads)
 
     def test_an_outside_pr_preapproved_at_another_head_waits(self):
         self.add(5178, head=H2, body="risk: human\n", author="Andrew9603")
-        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Robin, test\n")
         self.run_()
         self.assertEqual(self.calls, [])
-        self.assertIn("who=zane", self.events()[-1])
+        self.assertIn("who=owner", self.events()[-1])
 
     def test_an_outside_light_pr_at_a_new_head_waits(self):
         self.add(5178, head=H2, author="Andrew9603")
-        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Robin, test\n")
         self.run_()
         self.assertEqual(self.calls, [])
-        self.assertIn(f"PR by Andrew9603: needs Zane (preapproved at {H[:9]}, head is {H2[:9]})", self.events()[-1])
+        self.assertIn(f"PR by Andrew9603: needs Robin (preapproved at {H[:9]}, head is {H2[:9]})", self.events()[-1])
 
     def test_a_queued_outside_pr_whose_row_went_is_dequeued(self):
         self.add(5178, body="risk: human\n", author="Andrew9603")
-        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Zane, test\n")
+        (self.d / "hold-prs.txt").write_text(HOLDS + f"preapprove | #5178 | no | {H} | Robin, test\n")
         self.queue = True
         self.run_()
         self.assertIn(5178, self.entries)
         for holds in (HOLDS, "hodl | 1 | no | typo\n"):
-            self.entries[5178] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
+            self.entries[5178] = {"enqueuer": {"login": "octo"}, "headCommit": {"oid": H}}
             st = json.loads((self.d / "tick/state.json").read_text())
-            st["queued"]["cua#5178"] = {"head": H, "why": "green"}
+            st["queued"]["app#5178"] = {"head": H, "why": "green"}
             (self.d / "tick/state.json").write_text(json.dumps(st))
             (self.d / "hold-prs.txt").write_text(holds)
             self.run_()
             self.assertNotIn(5178, self.entries, holds)
-            self.assertIn("merge-dequeued cua#5178", "\n".join(self.events()))
+            self.assertIn("merge-dequeued app#5178", "\n".join(self.events()))
 
     def test_green_pr_is_squash_merged_at_its_head(self):
         self.add(6301)
         self.run_()
-        self.assertEqual(self.calls, [["gh", "pr", "merge", "6301", "-R", "trycua/cua", "--squash", "--match-head-commit", H]])
-        self.assertEqual(self.events(), [f"merge-queued cua#6301 squash at {H[:9]}: green, ci-gate SUCCESS, risk light",
-                                         f"merged cua#6301 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
+        self.assertEqual(self.calls, [["gh", "pr", "merge", "6301", "-R", "acme/app", "--squash", "--match-head-commit", H]])
+        self.assertEqual(self.events(), [f"merge-queued app#6301 squash at {H[:9]}: green, ci-gate SUCCESS, risk light",
+                                         f"merged app#6301 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok\n"))
 
     def test_a_queued_merge_is_logged_merged_once_only_when_github_says_merged(self):
@@ -411,20 +411,20 @@ class Stage(unittest.TestCase):
         for _ in range(3):
             self.run_()
         self.assertEqual(len(self.of(["gh", "pr", "merge"])), 3)
-        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7082"]])
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "app#7082"]])
         self.prs[7082].update(state="MERGED", mergedAt="2026-11-09T22:46:48Z")
         self.run_()
         self.run_()
         ev = [x for x in self.events() if x.startswith("merged ")]
-        self.assertEqual(ev, [f"merged cua#7082 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
+        self.assertEqual(ev, [f"merged app#7082 squash at {H[:9]}, mergedAt 2026-11-09T22:46:48Z: green, ci-gate SUCCESS, risk light"])
         self.assertEqual(json.loads((self.d / "tick/state.json").read_text())["queued"], {})
 
     def test_a_run_that_died_before_saving_state_does_not_log_merged_twice(self):
         self.add(7083)
         self.run_()
-        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"cua#7083": {"head": H, "why": "green"}}}))
+        (self.d / "tick/state.json").write_text(json.dumps({"queued": {"app#7083": {"head": H, "why": "green"}}}))
         self.run_()
-        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7083"], ["merged", "cua#7083"]])
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "app#7083"], ["merged", "app#7083"]])
 
     def test_a_new_head_while_queued_is_queued_again_and_a_close_drops_it(self):
         self.queue = True
@@ -437,7 +437,7 @@ class Stage(unittest.TestCase):
         self.run_()
         self.run_()
         self.assertEqual([x.split(" ", 2)[:2] for x in self.events()],
-                         [["merge-queued", "cua#7090"], ["merge-queued", "cua#7090"], ["merge-dropped", "cua#7090"]])
+                         [["merge-queued", "app#7090"], ["merge-queued", "app#7090"], ["merge-dropped", "app#7090"]])
         self.assertIn("at bbbbbbbbb", self.events()[1])
 
     def dequeues(self):
@@ -449,13 +449,13 @@ class Stage(unittest.TestCase):
         self.add(7201)
         self.run_()
         self.assertEqual(set(self.entries), {7200, 7201})
-        (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7200 | no | Zane stops it\n")
+        (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7200 | no | Robin stops it\n")
         self.run_()
         self.run_()
         self.assertEqual(self.dequeues(), ["id=PR_7200"])
         self.assertEqual(set(self.entries), {7201})
-        self.assertIn("merge-dequeued cua#7200 at aaaaaaaaa: hold: #7200 has a hold row in the holds file", self.events())
-        self.assertNotIn("cua#7200", json.loads((self.d / "tick/state.json").read_text())["queued"])
+        self.assertIn("merge-dequeued app#7200 at aaaaaaaaa: hold: #7200 has a hold row in the holds file", self.events())
+        self.assertNotIn("app#7200", json.loads((self.d / "tick/state.json").read_text())["queued"])
         self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["7200", "7201", "7201", "7201"])
 
     def test_paused_or_unreadable_holds_dequeue_the_jobs_entry_and_a_dry_run_only_says_so(self):
@@ -465,7 +465,7 @@ class Stage(unittest.TestCase):
         (self.d / "tick/PAUSED").write_text("manual\n")
         out = self.run_(dry=True)
         self.assertEqual(self.dequeues(), [])
-        self.assertIn("would-dequeue cua#7210", out)
+        self.assertIn("would-dequeue app#7210", out)
         self.run_()
         self.assertEqual(self.dequeues(), ["id=PR_7210"])
         (self.d / "tick/PAUSED").unlink()
@@ -479,33 +479,33 @@ class Stage(unittest.TestCase):
         self.add(7220)
         self.add(7221)
         self.run_()
-        self.entries[7220]["enqueuer"] = {"login": "cua-agents[bot]"}
+        self.entries[7220]["enqueuer"] = {"login": "app-agents[bot]"}
         self.add(7221, head=H2)
-        self.entries[7221] = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}
+        self.entries[7221] = {"enqueuer": {"login": "octo"}, "headCommit": {"oid": H}}
         (self.d / "hold-prs.txt").write_text(HOLDS + "hold | 7220 | no | x\nhold | 7221 | no | x\n")
         self.run_()
         self.assertEqual(self.dequeues(), [])
 
     def test_should_dequeue_needs_the_jobs_entry_at_the_head_and_an_off_gate_reason(self):
-        mine, q = {"enqueuer": {"login": "injaneity"}, "headCommit": {"oid": H}}, {"head": H}
+        mine, q = {"enqueuer": {"login": "octo"}, "headCommit": {"oid": H}}, {"head": H}
         hold, ci = [mj.Reason("hold", "h")], [mj.Reason("ci", "c")]
         self.assertTrue(mj.should_dequeue(hold, q, mine, H))
         self.assertTrue(mj.should_dequeue(ci, q, mine, H))
         self.assertTrue(mj.should_dequeue([mj.Reason("paused", "p")], q, mine, H))
         for reasons, queued, entry in (([], q, mine), ([mj.Reason("mergeable", "m")], q, mine), (hold, q, None), (hold, None, mine),
-                                       (hold, {"head": H2}, mine), (hold, q, {**mine, "enqueuer": {"login": "cua-agents[bot]"}}),
+                                       (hold, {"head": H2}, mine), (hold, q, {**mine, "enqueuer": {"login": "app-agents[bot]"}}),
                                        (hold, q, {**mine, "headCommit": {"oid": H2}})):
             self.assertFalse(mj.should_dequeue(reasons, queued, entry, H), (reasons, queued, entry))
 
     def test_red_is_rerun_once_then_waits_on_the_session_and_wakes_nobody(self):
         self.add(6308, rollup=self.RED)
         self.run_()
-        self.assertEqual(self.of(["gh", "run", "rerun"]), [["gh", "run", "rerun", r, "--failed", "-R", "trycua/cua"] for r in ("777", "778")])
+        self.assertEqual(self.of(["gh", "run", "rerun"]), [["gh", "run", "rerun", r, "--failed", "-R", "acme/app"] for r in ("777", "778")])
         self.run_()
         self.run_()
         self.assertEqual(len(self.of(["gh", "run", "rerun"])), 2)
         self.assertEqual(self.woken(), [])
-        self.assertEqual([x for x in self.events() if "6308" in x][-1], "wait cua#6308 who=session: red after rerun: ci-gate, rust")
+        self.assertEqual([x for x in self.events() if "6308" in x][-1], "wait app#6308 who=session: red after rerun: ci-gate, rust")
 
     def test_holds_hands_off_risk_and_drafts(self):
         self.add(5675)
@@ -515,13 +515,13 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.woken(), [])
-        self.assertEqual(sorted(self.events()), ["wait cua#5675 who=zane: hold: #5675 has a hold row in the holds file",
-                                                 "wait cua#6306 who=zane: touches never.rs (hands-off path, mode never; see the holds file)",
-                                                 "wait cua#6309 who=zane: declared deep: needs Zane (no preapprove row)",
-                                                 "wait cua#6312 draft"])
+        self.assertEqual(sorted(self.events()), ["wait app#5675 who=owner: hold: #5675 has a hold row in the holds file",
+                                                 "wait app#6306 who=owner: touches never.rs (hands-off path, mode never; see the holds file)",
+                                                 "wait app#6309 who=owner: declared deep: needs Robin (no preapprove row)",
+                                                 "wait app#6312 draft"])
         out = self.run_(dry=True)
-        self.assertIn(f"dry-run cua#6309 {H[:9]} wait who=zane: declared deep: needs Zane (no preapprove row)", out)
-        self.assertIn(f"dry-run cua#6312 {H[:9]} wait: draft", out)
+        self.assertIn(f"dry-run app#6309 {H[:9]} wait who=owner: declared deep: needs Robin (no preapprove row)", out)
+        self.assertIn(f"dry-run app#6312 {H[:9]} wait: draft", out)
 
     def test_an_unknown_mergeability_is_read_again_in_the_same_run(self):
         self.add(6330)
@@ -538,7 +538,7 @@ class Stage(unittest.TestCase):
         self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
         self.assertEqual(len(self.sleeps), mj.MERGEABLE_REREADS)
-        self.assertIn("wait cua#6331 mergeable UNKNOWN", self.events())
+        self.assertIn("wait app#6331 mergeable UNKNOWN", self.events())
 
     def test_a_host_that_is_not_merged_main_wakes_a_person_once_and_keeps_merging(self):
         self.add(6340)
@@ -601,13 +601,13 @@ class Stage(unittest.TestCase):
         real = self.gh
         with patch.object(mj, "gh_json", lambda a: seen.append(a) or real(a)):
             out = self.run_(dry=True)
-        q = "q=repo:trycua/cua is:pr is:open author:injaneity"
+        q = "q=repo:acme/app is:pr is:open author:octo"
         self.assertEqual([a for a in seen if any("search(" in x for x in a)],
                          [["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}"],
                           ["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}", "-f", "after=10"],
                           ["api", "graphql", "-f", q, "-f", f"query={mj.OPEN_PRS}", "-f", "after=20"]])
         self.assertIn("search(query: $q, type: ISSUE, first: 10, after: $after)", mj.OPEN_PRS)
-        self.assertEqual(sorted(int(x.split()[1].split("#")[1]) for x in out.splitlines() if x.startswith("dry-run cua#")),
+        self.assertEqual(sorted(int(x.split()[1].split("#")[1]) for x in out.splitlines() if x.startswith("dry-run app#")),
                          list(range(6400, 6423)))
         self.assertFalse([x for x in self.events() if x.startswith("error")])
 
@@ -645,7 +645,7 @@ class Stage(unittest.TestCase):
             self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
         self.assertEqual(self.reads.count(6364), 4)
-        self.assertIn("error cua#6364 merge: RuntimeError: cua#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
+        self.assertIn("error app#6364 merge: RuntimeError: app#6364: read 1 of 1 files, 156 of 153 checks and 0 of 0 labels", self.events())
 
     def test_a_pr_with_117_checks_reads_all_117_and_decides_red(self):
         self.add(6366, rollup=[cr(f"lane {i}") for i in range(116)] + [cr("ci-gate", conclusion="FAILURE")])
@@ -684,7 +684,7 @@ class Stage(unittest.TestCase):
             self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
         self.assertEqual(self.reads.count(6368), 4)
-        self.assertIn(f"error cua#6368 merge: HeadMoved: cua#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
+        self.assertIn(f"error app#6368 merge: HeadMoved: app#6368: head moved from {H2[:9]} to {'c' * 9} while paging", self.events())
 
     def test_fewer_checks_than_the_count_reads_again_once_and_merges_on_a_whole_read(self):
         self.add(6365)
@@ -715,7 +715,7 @@ class Stage(unittest.TestCase):
             self.run_()
         self.assertEqual(self.reads.count(6369), 2)
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
-        self.assertIn("error cua#6369 merge: RuntimeError: cua#6369: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
+        self.assertIn("error app#6369 merge: RuntimeError: app#6369: read 1 of 1 files, 2 of 3 checks and 0 of 0 labels", self.events())
 
     def test_a_file_or_label_count_off_reads_again_once(self):
         for n, key in ((6370, "files"), (6371, "labels")):
@@ -744,33 +744,33 @@ class Stage(unittest.TestCase):
         self.prs[6362]["labels"] = [f"area-{i}" for i in range(100)] + ["risk:deep"]
         self.run_()
         self.assertEqual(self.dequeues(), ["id=PR_6362"])
-        self.assertIn("error cua#6362 merge: RuntimeError: cua#6362: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
+        self.assertIn("error app#6362 merge: RuntimeError: app#6362: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
 
     def test_a_pr_with_more_labels_than_one_page_is_an_error_never_a_merge(self):
         self.add(6361)
         self.prs[6361]["labels"] = [f"area-{i}" for i in range(100)] + ["risk:deep"]
         self.run_()
         self.assertEqual(self.of(["gh", "pr", "merge"]), [])
-        self.assertIn("error cua#6361 merge: RuntimeError: cua#6361: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
+        self.assertIn("error app#6361 merge: RuntimeError: app#6361: read 1 of 1 files, 2 of 2 checks and 100 of 101 labels", self.events())
 
     def test_an_unchanged_decision_is_logged_once(self):
         self.add(6302, rollup=[cr("ci-gate", status="IN_PROGRESS", conclusion=None)])
         self.run_()
         self.run_()
-        self.assertEqual(self.events(), ["wait cua#6302 ci-gate PENDING"])
+        self.assertEqual(self.events(), ["wait app#6302 ci-gate PENDING"])
 
     def test_paused_or_unreadable_holds_moves_nothing(self):
         self.add(6320)
         (self.d / "tick/PAUSED").write_text("manual pause\n")
         self.run_()
         self.assertEqual(self.calls, [])
-        self.assertIn("wait cua#6320 who=zane: tick paused: manual pause", self.events())
+        self.assertIn("wait app#6320 who=owner: tick paused: manual pause", self.events())
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" ok paused\n"))
         (self.d / "tick/PAUSED").unlink()
         (self.d / "hold-prs.txt").write_text("hodl | 1 | no | typo\n")
         self.run_()
         self.assertEqual(self.calls, [])
-        self.assertIn("wait cua#6320 who=zane: holds file unreadable: every PR counts as held", self.events())
+        self.assertIn("wait app#6320 who=owner: holds file unreadable: every PR counts as held", self.events())
         self.assertEqual([b["kind"] for b in self.woken()], ["holds-unreadable"])
 
     def test_dry_run_prints_every_pr_and_changes_nothing(self):
@@ -781,9 +781,9 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(sorted(os.listdir(self.d)), ["hold-prs.txt", "tick"])
         self.assertEqual(os.listdir(self.d / "tick"), [])
-        self.assertIn(f"dry-run cua#6313 {H[:9]} merge: green, ci-gate SUCCESS, risk light", out)
-        self.assertIn(f"dry-run cua#5675 {H[:9]} wait who=zane: hold: #5675 has a hold row in the holds file", out)
-        self.assertIn(f"dry-run cua#6312 {H[:9]} wait: draft", out)
+        self.assertIn(f"dry-run app#6313 {H[:9]} merge: green, ci-gate SUCCESS, risk light", out)
+        self.assertIn(f"dry-run app#5675 {H[:9]} wait who=owner: hold: #5675 has a hold row in the holds file", out)
+        self.assertIn(f"dry-run app#6312 {H[:9]} wait: draft", out)
 
     def test_drafts_stay_drafts_across_runs(self):
         self.add(6970, draft=True, mergeable="UNKNOWN", rollup=[cr("ci-gate", status="QUEUED", conclusion=None)],
@@ -799,7 +799,7 @@ class Stage(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.woken(), [])
         self.assertEqual(sorted(x.split(" ", 2)[1] for x in self.events() if x.startswith("wait")),
-                         ["cua#6970", "cua#6970", "cua#7035", "cua#7035", "cua#7050", "cua#7050"])
+                         ["app#6970", "app#6970", "app#7035", "app#7035", "app#7050", "app#7050"])
 
     def test_one_prs_failure_does_not_skip_the_rest(self):
         self.add(6323, rollup=[cr(f"lane {i}") for i in range(150)] + [cr("ci-gate")])
@@ -813,7 +813,7 @@ class Stage(unittest.TestCase):
         with patch.object(mj, "gh_json", flaky):
             self.run_()
         self.assertEqual([c[3] for c in self.of(["gh", "pr", "merge"])], ["6324"])
-        self.assertIn("error cua#6323 merge: RuntimeError: gh api graphql: HTTP 502", self.events())
+        self.assertIn("error app#6323 merge: RuntimeError: gh api graphql: HTTP 502", self.events())
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
 
     def test_each_urgent_kind_posts_once_across_two_passes_and_a_closed_pr_none(self):
@@ -824,13 +824,13 @@ class Stage(unittest.TestCase):
                 self.add(1)
                 with contextlib.redirect_stdout(io.StringIO()):
                     for kind in mj.URGENT:
-                        job.wake(kind, "cua#1", H, "why")
+                        job.wake(kind, "app#1", H, "why")
                     self.prs[1]["state"] = "CLOSED"
-                    self.assertTrue(job.wake("merge-failed", "cua#1", H2, "closed meanwhile"))
+                    self.assertTrue(job.wake("merge-failed", "app#1", H2, "closed meanwhile"))
                     with self.assertRaises(AssertionError):
-                        job.wake("merge-blocked", "cua#1", H, "not a wake any more")
+                        job.wake("merge-blocked", "app#1", H, "not a wake any more")
                 job.run()
-        self.assertEqual(posts, [(k, "cua#1") for k in mj.URGENT])
+        self.assertEqual(posts, [(k, "app#1") for k in mj.URGENT])
         self.assertFalse((self.d / "buffer.jsonl").exists())
 
     def test_a_wake_that_failed_or_was_paused_is_sent_on_a_later_pass_then_never_again(self):
@@ -840,15 +840,15 @@ class Stage(unittest.TestCase):
             (self.d / "tick/PAUSED").write_text("manual\n")
             for _ in range(4):
                 job = mj.Job(dry=False)
-                job.wake("merge-failed", "cua#1", H, "why")
+                job.wake("merge-failed", "app#1", H, "why")
                 job.run()
                 (self.d / "tick/PAUSED").unlink(missing_ok=True)
-        self.assertEqual([x for x in self.events() if x.startswith("urgent cua#1 ") and not x.startswith("urgent cua#1 merge-failed:")],
-                         ["urgent cua#1 not sent: paused", "urgent cua#1 webhook failed: OSError", "urgent cua#1 webhook sent (200)"])
+        self.assertEqual([x for x in self.events() if x.startswith("urgent app#1 ") and not x.startswith("urgent app#1 merge-failed:")],
+                         ["urgent app#1 not sent: paused", "urgent app#1 webhook failed: OSError", "urgent app#1 webhook sent (200)"])
 
     def test_an_unexpected_merge_whose_wake_failed_is_sent_on_a_later_pass_even_after_the_window_moves(self):
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-05T00:00:00+08:00"}}))
-        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "app/cua-agents"}, "mergedAt": "2026-11-05T01:00:00Z",
+        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "app/app-agents"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         got = iter(["webhook failed: HTTP 502", "webhook sent (200)"])
         with patch.object(mj, "post_webhook", lambda *a: next(got)):
@@ -857,8 +857,8 @@ class Stage(unittest.TestCase):
             self.assertEqual((st["merges"]["since"], st["merges"]["seen"]), ("2026-11-05T09:00:00+08:00", {}))
             self.run_()
             self.run_()
-        self.assertEqual([x for x in self.events() if x.startswith("urgent cua#10 ") and "unexpected-merge:" not in x],
-                         ["urgent cua#10 webhook failed: HTTP 502", "urgent cua#10 webhook sent (200)"])
+        self.assertEqual([x for x in self.events() if x.startswith("urgent app#10 ") and "unexpected-merge:" not in x],
+                         ["urgent app#10 webhook failed: HTTP 502", "urgent app#10 webhook sent (200)"])
         self.assertGreater(json.loads((self.d / "tick/state.json").read_text())["merges"]["since"], "2026-11-06")
 
     def test_merge_watch_seeds_then_alerts_once_for_a_merge_it_did_not_make(self):
@@ -870,17 +870,17 @@ class Stage(unittest.TestCase):
         (self.d / "tick/state.json").write_text(json.dumps(st))
         m = lambda n, by, head=H: {"number": n, "headRefOid": head, "mergedBy": {"login": by}, "mergedAt": "2026-11-05T01:00:00Z",   # noqa: E731
                                    "title": f"pr {n}", "mergeCommit": {"oid": "c" * 40}}
-        self.merged = [m(10, "injaneity"), m(11, "injaneity"), m(12, "zane"), m(13, "app/cua-agents"), m(14, "injaneity", head=H2)]
+        self.merged = [m(10, "octo"), m(11, "octo"), m(12, "owner"), m(13, "app/app-agents"), m(14, "octo", head=H2)]
         self.run_()
         self.run_()
-        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", f"cua#{n}") for n in (10, 12, 13, 14)])
-        self.assertIn("merged by app/cua-agents", self.woken()[2]["reason"])
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", f"app#{n}") for n in (10, 12, 13, 14)])
+        self.assertIn("merged by app/app-agents", self.woken()[2]["reason"])
         self.assertIn("not by the tick", self.woken()[0]["reason"])
         ev = self.events()
         self.assertFalse(any(x.startswith("merge-noted") for x in ev))
-        self.assertIn("urgent cua#10 webhook not configured", ev)
-        self.assertFalse(any("cua#11 " in x for x in ev))
-        self.assertIn(["pr", "list", "-R", "trycua/cua", "--state", "merged", "--author", "injaneity"], [c[:8] for c in self.lists])
+        self.assertIn("urgent app#10 webhook not configured", ev)
+        self.assertFalse(any("app#11 " in x for x in ev))
+        self.assertIn(["pr", "list", "-R", "acme/app", "--state", "merged", "--author", "octo"], [c[:8] for c in self.lists])
         st = json.loads((self.d / "tick/state.json").read_text())
         self.assertGreater(st["merges"]["since"], "2026-11-05T00:00:00+08:00")
         self.assertEqual(st["merges"]["seen"], {})
@@ -893,13 +893,13 @@ class Stage(unittest.TestCase):
         st = json.loads((self.d / "tick/state.json").read_text())
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
-        self.merged = [{"number": 7180, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+        self.merged = [{"number": 7180, "headRefOid": H, "mergedBy": {"login": "octo"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
         self.prs[7180].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
         self.run_()
         self.assertEqual(self.woken(), [])
-        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "cua#7180"], ["merged", "cua#7180"]])
+        self.assertEqual([x.split(" ", 2)[:2] for x in self.events()], [["merge-queued", "app#7180"], ["merged", "app#7180"]])
 
     def test_a_head_pushed_after_the_job_queued_it_and_merged_by_someone_else_wakes(self):
         self.queue = True
@@ -909,14 +909,14 @@ class Stage(unittest.TestCase):
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
         self.prs[7230].update(headRefOid=H2, state="MERGED", mergedAt="2026-11-05T01:00:00Z")
-        self.merged = [{"number": 7230, "headRefOid": H2, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+        self.merged = [{"number": 7230, "headRefOid": H2, "mergedBy": {"login": "octo"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
-        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7230")])
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "app#7230")])
         self.assertNotIn("7230", json.loads((self.d / "tick/state.json").read_text())["landed"])
         ev = self.events()
-        self.assertFalse([x for x in ev if x.startswith("merged cua#7230")], ev)
-        self.assertIn(f"merge-dropped cua#7230 merged at {H2[:9]} through injaneity queue entry, the job queued {H[:9]}: not the job's merge", ev)
+        self.assertFalse([x for x in ev if x.startswith("merged app#7230")], ev)
+        self.assertIn(f"merge-dropped app#7230 merged at {H2[:9]} through octo queue entry, the job queued {H[:9]}: not the job's merge", ev)
 
     def test_another_actors_entry_at_the_job_s_own_head_is_not_the_job_s_merge(self):
         self.queue = True
@@ -926,14 +926,14 @@ class Stage(unittest.TestCase):
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
         add, gone = "AddedToMergeQueueEvent", "RemovedFromMergeQueueEvent"
-        self.queue_events[7231] = [{"__typename": add, "enqueuer": {"login": "injaneity"}}, {"__typename": gone, "reason": "checks_timed_out"},
-                                   {"__typename": add, "enqueuer": {"login": "cua-agents[bot]"}}, {"__typename": gone, "reason": "merged"}]
+        self.queue_events[7231] = [{"__typename": add, "enqueuer": {"login": "octo"}}, {"__typename": gone, "reason": "checks_timed_out"},
+                                   {"__typename": add, "enqueuer": {"login": "app-agents[bot]"}}, {"__typename": gone, "reason": "merged"}]
         self.prs[7231].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
-        self.merged = [{"number": 7231, "headRefOid": H, "mergedBy": {"login": "cua-agents[bot]"}, "mergedAt": "2026-11-05T01:00:00Z",
+        self.merged = [{"number": 7231, "headRefOid": H, "mergedBy": {"login": "app-agents[bot]"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
-        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7231")])
-        self.assertFalse([x for x in self.events() if x.startswith("merged cua#7231")])
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "app#7231")])
+        self.assertFalse([x for x in self.events() if x.startswith("merged app#7231")])
 
     def test_a_merge_outside_the_queue_after_the_job_s_entry_dropped_is_not_the_job_s(self):
         self.queue = True
@@ -942,27 +942,27 @@ class Stage(unittest.TestCase):
         st = json.loads((self.d / "tick/state.json").read_text())
         st["merges"]["since"] = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps(st))
-        self.queue_events[7232] = [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "injaneity"}},
+        self.queue_events[7232] = [{"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": "octo"}},
                                    {"__typename": "RemovedFromMergeQueueEvent", "reason": "checks_timed_out"}]
         self.prs[7232].update(state="MERGED", mergedAt="2026-11-05T01:00:00Z")
-        self.merged = [{"number": 7232, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z",
+        self.merged = [{"number": 7232, "headRefOid": H, "mergedBy": {"login": "octo"}, "mergedAt": "2026-11-05T01:00:00Z",
                         "title": "t", "mergeCommit": {"oid": "c" * 40}}]
         self.run_()
-        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "cua#7232")])
+        self.assertEqual([(b["kind"], b["id"]) for b in self.woken()], [("unexpected-merge", "app#7232")])
 
     def test_queue_merged_by_reads_the_entry_that_merged(self):
         add = lambda who: {"__typename": "AddedToMergeQueueEvent", "enqueuer": {"login": who}}   # noqa: E731
         gone = lambda why: {"__typename": "RemovedFromMergeQueueEvent", "reason": why}   # noqa: E731
-        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("checks_timed_out"), add("injaneity"), gone("merged")]), "injaneity")
-        self.assertEqual(mj.queue_merged_by([add("cua-agents[bot]"), gone("merged")]), "cua-agents[bot]")
-        self.assertIsNone(mj.queue_merged_by([add("injaneity"), gone("checks_timed_out")]))
+        self.assertEqual(mj.queue_merged_by([add("app-agents[bot]"), gone("checks_timed_out"), add("octo"), gone("merged")]), "octo")
+        self.assertEqual(mj.queue_merged_by([add("app-agents[bot]"), gone("merged")]), "app-agents[bot]")
+        self.assertIsNone(mj.queue_merged_by([add("octo"), gone("checks_timed_out")]))
         self.assertIsNone(mj.queue_merged_by([]))
-        self.assertIsNone(mj.queue_merged_by([add("injaneity")]))
+        self.assertIsNone(mj.queue_merged_by([add("octo")]))
 
     def test_merge_watch_keeps_its_window_when_a_fetch_is_cut_short(self):
         since = "2026-11-05T00:00:00+08:00"
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": since, "seen": {}}}))
-        self.merged = [{"number": n, "headRefOid": H, "mergedBy": {"login": "zane"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+        self.merged = [{"number": n, "headRefOid": H, "mergedBy": {"login": "owner"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
                         "mergeCommit": {"oid": "c" * 40}} for n in range(3)]
         with patch.object(mj, "WATCH_LIMIT", 3):
             self.run_()
@@ -972,18 +972,18 @@ class Stage(unittest.TestCase):
         with patch.object(mj, "WATCH_LIMIT", 3):
             self.run_()
         self.assertEqual([b["kind"] for b in self.woken()], ["unexpected-merge"] * 3 + ["merge-watch-overflow"])
-        self.assertIn("the fetch limit: check merges of PRs by injaneity by hand", self.woken()[-1]["reason"])
+        self.assertIn("the fetch limit: check merges of PRs by octo by hand", self.woken()[-1]["reason"])
         self.assertTrue((self.d / "tick/last-run").read_text().endswith(" 1 error(s)\n"))
 
     def test_paused_logs_an_unexpected_merge_but_does_not_post(self):
         (self.d / "tick/state.json").write_text(json.dumps({"merges": {"since": "2026-11-05T00:00:00+08:00"}}))
         (self.d / "tick/PAUSED").write_text("manual\n")
-        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "injaneity"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
+        self.merged = [{"number": 10, "headRefOid": H, "mergedBy": {"login": "octo"}, "mergedAt": "2026-11-05T01:00:00Z", "title": "t",
                         "mergeCommit": {"oid": "c" * 40}}]
         with patch.object(mj, "post_webhook", Mock(side_effect=AssertionError("no POST while paused"))):
             self.run_()
         self.assertEqual([b["kind"] for b in self.woken()], ["unexpected-merge"])
-        self.assertIn("urgent cua#10 not sent: paused", self.events())
+        self.assertIn("urgent app#10 not sent: paused", self.events())
 
 
 class RunOnMain(unittest.TestCase):
@@ -993,7 +993,7 @@ class RunOnMain(unittest.TestCase):
                 patch.dict(os.environ, clear=False) as env:
             env.pop("ZSTACK_ENSURED", None)
             mj.run_on_main()
-            self.assertTrue(run.call_args[0][0][0].endswith("/bin/ensure-package-main"))
+            self.assertTrue(run.call_args[0][0][0].endswith("/services/ensure-main"))
             self.assertEqual(ex.call_args[0][1][1:], [str(VM / "merge_job.py")])
             self.assertEqual(ex.call_args[0][2]["ZSTACK_ENSURED"], "1")
             run.reset_mock(), ex.reset_mock()
@@ -1045,10 +1045,10 @@ class Webhook(unittest.TestCase):
                     raise OSError("down")
                 return R()
             with patch.object(wake, "KEY_FILE", f"{d}/k"), patch.object(wake.urllib.request, "urlopen", urlopen):
-                got = mj.post_webhook("unexpected-merge", "cua#10", "why")
+                got = mj.post_webhook("unexpected-merge", "app#10", "why")
                 self.assertEqual(got, "webhook sent (200)")
                 seen.update(calls=0, down=True)
-                self.assertEqual(mj.post_webhook("unexpected-merge", "cua#10", "why"), "webhook failed: OSError")
+                self.assertEqual(mj.post_webhook("unexpected-merge", "app#10", "why"), "webhook failed: OSError")
             self.assertEqual((seen["calls"], seen["timeout"]), (1, 8))
             self.assertEqual(seen["auth"], "Bearer sekrit")
             self.assertEqual((seen["body"]["kind"], seen["body"]["pr"]), ("unexpected-merge", 10))
@@ -1096,7 +1096,7 @@ class Cli(unittest.TestCase):
     def test_explain_records_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, "h").write_text(HOLDS)
-            p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "injaneity"}, title="t")
+            p = pr(number=6400, body="risk: deep\n", mergeable="CONFLICTING", state="OPEN", author={"login": "octo"}, title="t")
             node = {**{k: p[k] for k in ("number", "headRefOid", "isDraft", "title", "body", "mergeable", "author")},
                     "labels": {"totalCount": 0, "nodes": []},
                     "files": {"totalCount": 1, "nodes": [{"path": "README.md"}], "pageInfo": {"hasNextPage": False}},
@@ -1110,7 +1110,7 @@ class Cli(unittest.TestCase):
                 self.assertFalse(mj.Job(dry=True).explain(6400))
             self.assertEqual(sorted(os.listdir(d)), ["h"])
         text = out.getvalue()
-        self.assertIn("cua#6400 OPEN by injaneity at", text)
+        self.assertIn("app#6400 OPEN by octo at", text)
         self.assertNotIn("PR by", text)
         self.assertIn("gate: fail", text)
         self.assertIn("gate [risk] declared deep", text)
@@ -1126,20 +1126,20 @@ class PatentPush(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def test_held_hits(self):
-        self.assertEqual(pp.held_hits(["libs/cua-spacesd/src/pairing.rs"], ""), ["libs/cua-spacesd/src/pairing.rs"])
-        self.assertTrue(pp.held_hits(["a.rs"], "+++ b/a.rs\n+let v = KeyVault::open();\n"))
-        self.assertTrue(pp.held_hits(["a.rs"], "-// teleport the session\n"))
-        self.assertEqual(pp.held_hits(["libs/cua-relay/src/lib.rs"], "+relay.unregister()\n"), [])
-        self.assertEqual(pp.held_hits(["src/fix.rs"], "diff --git a/src/fix.rs b/src/fix.rs\n+// repairing the cache\n"), [])
-        lock = "libs/cua-spacesd/tests/teleport-e2e/Cargo.lock"
-        self.assertEqual(pp.held_hits([lock], f"diff --git a/{lock} b/{lock}\n+name = \"teleport-e2e\"\n"), [])
+        self.assertEqual(pp.held_hits(["libs/app-spacesd/src/sealing.rs"], ""), ["libs/app-spacesd/src/sealing.rs"])
+        self.assertTrue(pp.held_hits(["a.rs"], "+++ b/a.rs\n+let v = VaultKey::open();\n"))
+        self.assertTrue(pp.held_hits(["a.rs"], "-// skyhook the session\n"))
+        self.assertEqual(pp.held_hits(["libs/app-relay/src/lib.rs"], "+relay.unregister()\n"), [])
+        self.assertEqual(pp.held_hits(["src/fix.rs"], "diff --git a/src/fix.rs b/src/fix.rs\n+// resealing the cache\n"), [])
+        lock = "libs/app-spacesd/tests/skyhook-e2e/Cargo.lock"
+        self.assertEqual(pp.held_hits([lock], f"diff --git a/{lock} b/{lock}\n+name = \"skyhook-e2e\"\n"), [])
 
     def test_choose_remote(self):
-        pub, stg = "https://github.com/trycua/cua", "https://github.com/trycua/cua-staging.git"
+        pub, stg = "https://github.com/acme/app", "https://github.com/acme/app-private.git"
         self.assertEqual(pp.choose_remote(pub, [], lambda: False), "push")
-        self.assertEqual(pp.choose_remote(pub, ["src/pairing.rs"], lambda: False), "hold")
-        self.assertEqual(pp.choose_remote(pub, ["src/pairing.rs"], lambda: True), "staging")
-        self.assertEqual(pp.choose_remote(stg, ["src/pairing.rs"], lambda: False), "push")
+        self.assertEqual(pp.choose_remote(pub, ["src/sealing.rs"], lambda: False), "hold")
+        self.assertEqual(pp.choose_remote(pub, ["src/sealing.rs"], lambda: True), "staging")
+        self.assertEqual(pp.choose_remote(stg, ["src/sealing.rs"], lambda: False), "push")
 
     def repo(self, tmp):
         def g(*a, cwd=None):
@@ -1174,14 +1174,14 @@ class PatentPush(unittest.TestCase):
         r = subprocess.run(["git", "push", "origin", branch], cwd=work, capture_output=True, text=True)
         return r, g("ls-remote", pub, f"refs/heads/{branch}"), root
 
-    def test_a_pairing_diff_is_not_pushed_publicly_and_wakes_once(self):
+    def test_a_sealing_diff_is_not_pushed_publicly_and_wakes_once(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote, root = self.push(tmp, "onigiri/x", "src/pairing.rs", "fn pair() {}\n")
+            r, remote, root = self.push(tmp, "onigiri/x", "src/sealing.rs", "fn pair() {}\n")
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
             self.assertEqual([x.split(" ", 3)[1:3] for x in mj.read(f"{root}/events.log").splitlines()],
-                             [["patent-held", "cua:onigiri/x"]])
+                             [["patent-held", "app:onigiri/x"]])
             self.assertIn('"kind": "blocked"', r.stdout + r.stderr)
             self.assertFalse(os.path.exists(f"{root}/buffer.jsonl"))
             g = subprocess.run(["git", "push", "origin", "onigiri/x"], cwd=f"{tmp}/work", capture_output=True, text=True)
@@ -1189,34 +1189,12 @@ class PatentPush(unittest.TestCase):
             self.assertNotIn('"kind": "blocked"', g.stdout + g.stderr)
             self.assertEqual(len(mj.read(f"{root}/events.log").splitlines()), 1)
 
-    def test_a_public_push_from_a_run_records_its_head_in_that_runs_dir_only(self):
-        with tempfile.TemporaryDirectory() as root:
-            os.makedirs(f"{root}/review/r1")
-            pub, stg = "https://github.com/trycua/cua.git", "https://github.com/trycua/cua-staging"
-            line = lambda sha, more="": io.StringIO(f"refs/heads/fix/x {sha} refs/heads/fix/x {'0' * 40}\n{more}")   # noqa: E731
-            with patch.object(pp, "diff_hits", return_value=[]):
-                for sid, url in (("r1", pub), ("r1", stg), (None, pub), ("gone", pub), ("../r1", pub)):
-                    with patch.dict(os.environ, {"PI_SESSION_ID": sid} if sid else {}, clear=False):
-                        if not sid:
-                            os.environ.pop("PI_SESSION_ID", None)
-                        self.assertEqual(pp.main(["origin", url], line("a" * 40), root=root, out=io.StringIO()), 0)
-            with patch.object(pp, "diff_hits", return_value=["src/pairing.rs"]), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
-                pp.main(["origin", pub], line("b" * 40), staging_ok=lambda: False, root=root, out=io.StringIO())
-            held = lambda sha, cwd=None: ["src/pairing.rs"] if sha == "d" * 40 else []   # noqa: E731
-            with patch.object(pp, "diff_hits", side_effect=held), patch.dict(os.environ, {"PI_SESSION_ID": "r1"}):
-                two = line("c" * 40, f"refs/heads/y {'d' * 40} refs/heads/y {'0' * 40}\n")
-                self.assertEqual(pp.main(["origin", pub], two, staging_ok=lambda: False, root=root, out=io.StringIO()), 1)
-            rows = [x.split() for x in Path(f"{root}/review/r1/pushed").read_text().splitlines()]
-            self.assertEqual([x[:2] for x in rows], [["a" * 40, "fix/x"]])
-            self.assertRegex(rows[0][2], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$")
-            self.assertEqual(sorted(os.listdir(f"{root}/review")), ["r1"])
-
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(pp.wake, "post", side_effect=["webhook failed: OSError", "webhook sent (200)"]) as post:
-                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
-                self.assertTrue(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
-                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/pairing.rs"], root))
+                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
+                self.assertTrue(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
+                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
             self.assertEqual(post.call_count, 2)
             self.assertEqual([x.split(" ", 7)[6] for x in mj.read(f"{root}/events.log").splitlines()], ["failed:", "sent"])
 
@@ -1232,14 +1210,14 @@ class PatentPush(unittest.TestCase):
             Path(tmp, "bin/python3").symlink_to(sys.executable)
             env = {"PATH": f"{tmp}/bin:/usr/bin:/bin", "HOME": tmp, "GH_CONFIG_DIR": f"{tmp}/gh", "ONIGIRI_WAKE_DRY": "1"}
             g("worktree", "add", "-qb", "onigiri/w", f"{tmp}/wt", cwd=work)
-            Path(tmp, "wt/pairing.rs").write_text("fn pair() {}\n")
+            Path(tmp, "wt/sealing.rs").write_text("fn pair() {}\n")
             g("add", ".", cwd=f"{tmp}/wt")
             g("commit", "-qm", "x", cwd=f"{tmp}/wt")
             r = subprocess.run(["git", "push", "origin", "onigiri/w"], cwd=f"{tmp}/wt", capture_output=True, text=True, env=env)
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(g("ls-remote", pub, "refs/heads/onigiri/w"), "")
-            self.assertEqual([x.split(" ", 3)[1:3] for x in mj.read(f"{tmp}/events.log").splitlines()], [["patent-held", "cua:onigiri/w"]])
+            self.assertEqual([x.split(" ", 3)[1:3] for x in mj.read(f"{tmp}/events.log").splitlines()], [["patent-held", "app:onigiri/w"]])
             g("checkout", "-qb", "onigiri/ok", cwd=work)
             Path(work, "relay.rs").write_text("fn relay() {}\n")
             g("add", ".", cwd=work)
@@ -1267,29 +1245,29 @@ class PatentPush(unittest.TestCase):
 
     def test_a_held_commit_reverted_later_in_the_push_is_still_held(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// keyvault probe\n"}, {"a.rs": None}])
+            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// vaultkey probe\n"}, {"a.rs": None}])
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote = self.commits(tmp, "onigiri/mv", [{"src/pairing.rs": "fn x() {}\n"}, ("mv", "src/pairing.rs", "src/link.rs")])
+            r, remote = self.commits(tmp, "onigiri/mv", [{"src/sealing.rs": "fn x() {}\n"}, ("mv", "src/sealing.rs", "src/link.rs")])
             self.assertNotEqual(r.returncode, 0)
             self.assertEqual(remote, "")
 
     def test_rename_source_and_target_paths_both_count(self):
-        ns = "R100\tsrc/pairing.rs\tsrc/link.rs\nM\tREADME\n"
-        self.assertEqual(pp.status_paths(ns), ["src/pairing.rs", "src/link.rs", "README"])
-        self.assertEqual(pp.held_hits(pp.status_paths(ns), ""), ["src/pairing.rs"])
-        self.assertEqual(pp.held_hits(pp.status_paths("R090\tsrc/a.rs\tsrc/teleport.rs\n"), ""), ["src/teleport.rs"])
+        ns = "R100\tsrc/sealing.rs\tsrc/link.rs\nM\tREADME\n"
+        self.assertEqual(pp.status_paths(ns), ["src/sealing.rs", "src/link.rs", "README"])
+        self.assertEqual(pp.held_hits(pp.status_paths(ns), ""), ["src/sealing.rs"])
+        self.assertEqual(pp.held_hits(pp.status_paths("R090\tsrc/a.rs\tsrc/skyhook.rs\n"), ""), ["src/skyhook.rs"])
 
     def test_a_combined_diff_counts_only_the_merges_own_lines(self):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
-              " +// teleport from main\n++// resolved\n")
+              " +// skyhook from main\n++// resolved\n")
         self.assertEqual(pp.held_hits([], cc), [])
-        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// keyvault in the resolution")))
-        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- teleport removed\n"))
+        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// vaultkey in the resolution")))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- skyhook removed\n"))
 
     def test_merging_main_that_already_has_held_work_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1303,7 +1281,7 @@ class PatentPush(unittest.TestCase):
             for k, v in (("user.name", "u"), ("user.email", "u@u"), ("commit.gpgsign", "false")):
                 g("config", k, v, cwd=up)
             Path(up, "src").mkdir()
-            Path(up, "src/pairing.rs").write_text("fn pair() {}\n")
+            Path(up, "src/sealing.rs").write_text("fn pair() {}\n")
             g("add", ".", cwd=up)
             g("commit", "-qm", "upstream", cwd=up)
             g("push", "-q", "origin", "HEAD:main", cwd=up)

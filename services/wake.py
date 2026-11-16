@@ -11,15 +11,23 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-URL = "https://api2.cursor.sh/automations/webhook/788bf148-65fb-5299-ae09-83cd6ae301a5"
-KEY_FILE = os.path.expanduser("~/.config/onigiri-urgent-webhook")
+PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def config():
+    r = subprocess.run([sys.executable, "-I", os.path.join(PKG, "bin", "policy"), "get", "wake"], capture_output=True, text=True)
+    return json.loads(r.stdout) if r.returncode == 0 else {}
+
+
+URL, KEY_FILE = config().get("url", ""), os.path.expanduser(config().get("key_file", ""))
+
 SGT = ZoneInfo("Asia/Singapore")
 KINDS = ("blocked", "failed", "done")
 FIELDS = {"pr": r"\d+", "rc": r"\d+", "report": r".+", "prs": r"\S+"}
 
 
 def root():
-    return os.path.abspath(os.environ.get("ONIGIRI_ROOT") or "/srv/onigiri")
+    return os.path.abspath(os.path.expanduser(os.environ.get("ONIGIRI_ROOT") or "~/zstack"))
 
 
 def now():
@@ -32,7 +40,7 @@ def send(body, attempts=3, timeout=5):
             key = f.read().strip()
     except OSError:
         key = ""
-    if not key:
+    if not key or not URL:
         return "webhook not configured"
     req = urllib.request.Request(URL, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})

@@ -1,25 +1,25 @@
 ---
 name: onigiri-mode
-description: "Read in full before any coding task: Zane's coding mode, for the pi session doing the work and the chat orchestrator that files it. Coding runs in pi, one session per task, routed to a playbook. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
+description: "Read in full before any coding task: how a coding thread works under zstack, whatever harness runs it. One thread owns one task and writes all its code; delegates explore, design and verify. Use for /onigiri-mode, /skill:onigiri-mode, or any real change rather than a quick answer."
 license: MIT
 ---
 
 # onigiri mode
 
-**Hard rule (Zane, 1 Nov 2026).** Coding work runs in pi on the machine set aside for it. Whoever reads this does not hand-write code anywhere else: not in a chat, not on the box, not through some other agent. Inside a pi session the same rule means one session, one task, no supervisor, no nested pi. Nothing restarts the session, and it never starts another `pi` or hands part of the task to one. The only child processes are the ones the `subagent` tool starts (Subagents below). They never edit source and cannot start a child of their own.
+**Hard rule.** One thread owns one task and writes all of its code. Nothing restarts it, and it never hands part of the task to another coding thread. The only helpers are the three delegates under Subagents below. They never edit source and cannot start a helper of their own.
 
 ## Who is reading
 
-- **A pi session** does the work. Every section below applies except "Chat orchestrator".
-- **The chat orchestrator** never edits repo files, runs builds, tests or `cargo`, or pushes, whether on the box or through a subagent. It files the task to pi, relays what comes back, and watches the PR. Read "Chat orchestrator". The other sections say what a pi session will do, so a brief doesn't need to repeat them.
+- **A coding thread** does the work. Every section below applies. Its model is `models.coding` in `config/policy.toml`.
+- **The orchestrator** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It plans the work, launches coding threads, reads what they return and relays it. Its instructions are `orchestrator/playbook.md` in the package, not this skill.
 
 ## Hard rules
 
-The rules are `config/rules.toml` in the zstack package, and nowhere else. `bin/pi-run` renders them with `bin/policy rules` and appends them to every session's system prompt, so a session it started already has them. Any other reader, the orchestrator included, runs `bin/policy rules` now. The values the code enforces are `config/policy.toml`, and the runtime state files are `config/state.toml`; this skill and its playbooks name those keys and never restate their values.
+The rules are `config/rules.toml` in the zstack package, and nowhere else. The plugin or launcher that started you put `bin/policy rules --thread` in your context, so you already have them. The values the code enforces are `config/policy.toml`; this skill and its playbook name those keys and never restate their values.
 
 ## Work
 
-Your model is `models.coding` in `config/policy.toml`, and it needs no instruction in how to read code, design or debug. These lines are only the choices that are Zane's:
+Your model needs no instruction in how to read code, design or debug. These lines are only the choices this stack makes:
 
 - **A question** gets a cited answer, not a fix. A cause you did not prove on the running thing is the strongest hypothesis, and you call it that.
 - **A bug** is reproduced on the real surface before any fix. When a cheap local test exists, its failing test is the first commit. Reply with what broke, the root cause, and the failing-then-passing repro verbatim.
@@ -31,7 +31,7 @@ Your model is `models.coding` in `config/policy.toml`, and it needs no instructi
 
 ## Subagents
 
-zstack's `subagent` tool (`docs/SUBAGENT.md`) runs the agents in the package's `agents/`. Each child's provider and model come from the package's `config/policy.toml` `[models]` by agent name. If that provider's login fails, the child runs on your model, and the tool's result starts with a warning line. The `verifier` never does: without its own seat it returns an error and nothing runs.
+The three delegates are the role files in the package's `agents/`. Each runs on the provider and model `config/policy.toml` `[models]` gives its name, never on a model you pick. Start one with the delegate tool your harness has: T3 Code's `delegate_task`, or pi's `subagent` tool (`docs/SUBAGENT.md`). The `verifier` never runs on your own model: without its seat it returns an error and nothing runs.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|
@@ -39,21 +39,19 @@ zstack's `subagent` tool (`docs/SUBAGENT.md`) runs the agents in the package's `
 | Design | `designer`, twice (`variant` 1 and 2) | A change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
 | Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Every diff and every done claim that rests on one, and a review of someone else's PR, as Hard rules' Checks says. |
 
-- **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one `subagent` call per angle with `agent: explorer`. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
+- **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one delegate call per angle. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
 - **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. A fix round's brief carries only its findings and the new range, never your logs or reasoning.
 - **Nowhere else.** Do everything else yourself.
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.
-- **No nesting.** A child has no `subagent` tool, and a brief never asks its `bash` to start `pi`. Without the tool or the agent, do that step yourself and say so.
+- **No nesting.** A delegate starts no delegate of its own, and a brief never asks one to start an agent from its shell. Without the tool or the role, do that step yourself and say so.
 - **No new gate.** A verifier's pass is evidence for your run report, not a merge gate. The merge rule in Hard rules is unchanged.
 
 ## Autonomy
 
 Reversible work proceeds without asking. Never block on a question you could answer by looking. If asked to do something you think is wrong, say why, then do the version that holds up.
 
-A pi run is one-shot. It stops when the task ends and never runs under a supervisor (launchd `KeepAlive`, systemd `Restart=`, a loop). A new provider gets a fresh session id, never another provider's session.
-
-When `$ONIGIRI_WAKE` is set, failures wake the orchestrator. The launcher wakes it when you exit non-zero, and a periodic pickup collects every finished run with `bin/pi-run collect <id>`. A brief with a line exactly `wake: finish` also gets a `done` wake when the run exits 0, carrying the rc, the report path and the PR links in the report. Put your PR URLs in your final report. A run that cannot go on runs `"$ONIGIRI_WAKE" blocked "<message>" [pr=N]` (or `failed`) and stops. Any other kind is refused. A question for Zane goes in a `questions:` list in your final report, never in a wake. It is best effort and never fails your run.
+End with a final report: the PR URLs, then `follow-ups:` and `questions:` lists. A question for the owner goes under `questions:`, and the orchestrator relays it. A thread that cannot go on says so in its report and stops.
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 
@@ -61,11 +59,7 @@ Pause for the irreversible: force-pushes to shared branches, deploys, data delet
 
 ## Playbooks
 
-Each is `playbooks/<name>.md`. Read the matched one in full, and list its numbered steps in your first message. A step you skip stays in the list as `skip: <reason>`.
-
-- **Pull requests** (`pull-requests`). Open a PR at the end of every change. On request, land one or verify someone else's.
-- **Release bench** (`release-bench`). Bench a published cua-driver release against the last one benched, and revert our own PR that regressed it. The pickup starts it; no PR waits on a bench.
-- **Hourly** (`hourly`). The pickup: `bin/pickup` on the mini's schedule, and the chat's judgment steps with `bin/hourly`. Never a pi session.
+- **Pull requests** (`pull-requests`). `playbooks/pull-requests.md`: open a PR at the end of every change, and on request land one or verify someone else's. Read it in full, and list its numbered steps in your first message. A step you skip stays in the list as `skip: <reason>`.
 
 Editing a skill is a change like any other. Match the neighbouring SKILL.md files (frontmatter with `name` and `description`, one job) and check every link resolves.
 
@@ -75,19 +69,3 @@ The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this 
 
 - No admin bypass. Force-pushes follow Hard rules' Scope and Merging.
 - Never print secrets or tokens. Never commit local agent config.
-
-## Chat orchestrator
-
-For the chat only. A pi session skips this section.
-
-- **Setup.** `pi install git:github.com/injaneity/zstack`.
-- **Hourly.** The routine is one line: "run zstack hourly at main; relay what it returns". That pass is `playbooks/hourly.md`.
-- **Launch.** Write the brief with `<zstack>/bin/new-brief <id> <role>` (task text on stdin), then `bin/pi-run queue <id>` for the next hourly pass, or run `<zstack>/bin/pi-run <id> <role> <brief-file>` now. It detaches pi in `review/<id>/` and returns. The role picks the model from `config/policy.toml` `[models]`, never a skill. `bin/pi-run` loads the host file named by `ONIGIRI_HOST` or `~/.config/onigiri/host` itself, and refuses to start (exit 4) when the role's provider has no credential. Run it on the machine that does the work, never in the chat.
-- **The brief** carries the task, its constraints and the repo path. `bin/new-brief` adds the rest: the Hard rules pointer, `follow-ups:` and `questions:`, the no-invented-limits line and `wake: finish`, so the run wakes you with a `done` event when it exits 0, not only on failure. pi picks its own playbook. Report back what pi did, with the PR URL.
-- **A 429** (Claude Code or ChatGPT usage limit), or an incomplete Claude Code upstream response, puts the run back in the queue with `resume_at`, with no failed wake and its slot freed. The hourly drain resumes it in the same session, at most `cap` times per run id (`config/policy.toml` `[resume]`). The next such stop ends the run failed and sends the failed wake with pi's last line and the log path.
-- **A red PR** belongs to the thread that pushed its head (Zane, 11 Nov: "the thread itself should be responsible for resolving it"). Once the merge job's one rerun is red too, `bin/hourly queue` reopens that run in its own session with the failure, at most `fix_attempts` times per PR (`config/policy.toml` `[ci]`). It reaches you only when no run pushed that head, the attempts are spent, or the thread's `questions:` ask for you.
-- **A deliberate stop** (Zane's call, or a brief replaced by a `.vN`) is `bin/pi-run stop <id> <why>`, before any rename. It sends no `failed` wake.
-- **A failed run** (rc != 0) wakes you when it exits. A lost one (KILL or OOM) wakes you when the hourly pass collects it. To retry, file it again under a fresh id: `pi-run` refuses to start a collected id, because nothing restarts a session. Its own PR's red CI is the one thing that reopens it.
-- **After the PR opens**, whatever owns merging under Hard rules takes over. Watch the PR, don't redo the work.
-- `docs/HOST.md` is one reference deployment (a VM, a relay, a cron tick). It is an example, not a requirement.
-- **Don't build process.** No flow engine, gates, or lanes. zstack plus pi is the whole thing.

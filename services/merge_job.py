@@ -21,7 +21,7 @@ ROOT = wake.root()
 DIR = f"{ROOT}/tick"
 EVENTS, HOLDS_FILE = f"{ROOT}/events.log", f"{ROOT}/hold-prs.txt"
 STATE, PAUSED, LAST = f"{DIR}/state.json", f"{DIR}/PAUSED", f"{DIR}/last-run"
-PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _spec = importlib.util.spec_from_file_location("policy", os.path.join(PKG, "bin", "policy"),
                                                loader=importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy")))
 policy = importlib.util.module_from_spec(_spec)
@@ -30,13 +30,13 @@ try:
     POLICY = policy.load()
 except policy.PolicyError as e:
     sys.exit(f"merge_job: {e}")
-REPO, ME = POLICY["merge"]["repo"], POLICY["people"]["me"]
+REPO, ME, PERSON = POLICY["merge"]["repo"], POLICY["people"]["me"], POLICY["people"]["owner"]
 OWNER, SHORT = REPO.split("/")
 GATE_CHECK = POLICY["merge"]["gate_check"]
 NOT_RERUN = set(POLICY["merge"]["never_rerun"])
 TIERS = POLICY["merge"]["tiers"]
 PREAPPROVE_TIERS = set(POLICY["merge"]["preapprove_tiers"])
-FLOOR_GB = POLICY["hourly"]["floor_gb"]
+FLOOR_GB = POLICY["merge"]["floor_gb"]
 WATCH_LIMIT = 500
 WATCH_OVERLAP_S = 6 * 3600
 MERGEABLE_REREADS, MERGEABLE_WAIT_S = 3, 5
@@ -158,12 +158,12 @@ def gate(pr, holds, notes=None):
     if tier is None:
         R.append(Reason("no-tier", f"no risk tier ({'|'.join(TIERS)})"))
     elif tier in PREAPPROVE_TIERS and pre != head:
-        R.append(Reason("risk", f"declared {tier}: needs Zane"
+        R.append(Reason("risk", f"declared {tier}: needs {PERSON}"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     else:
         notes.append(f"risk {tier}" + (f", preapproved at {head[:9]}" if tier in PREAPPROVE_TIERS else ""))
     if (author := pr.get("author", ME)) != ME and pre != head:
-        R.append(Reason("risk", f"PR by {author or '?'}: needs Zane"
+        R.append(Reason("risk", f"PR by {author or '?'}: needs {PERSON}"
                         + (f" (preapproved at {pre[:9]}, head is {head[:9]})" if pre else " (no preapprove row)")))
     return R
 
@@ -180,7 +180,7 @@ def blockers(pr, paused):
 
 
 URGENT = ("unexpected-merge", "parity", "holds-unreadable", "merge-watch-overflow", "merge-failed", "disk")
-ZANE_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}
+OWNER_CODES = {"paused", "holds-unreadable", "hold", "hands-off", "risk"}
 SESSION_CODES = {"no-tier", "conflict"}
 
 
@@ -192,8 +192,8 @@ def next_action(reasons, notes, pr, rerun_head=None):
     if "draft" in codes:
         return "wait", "none", why
     stuck = ("conflict" in codes and pr.get("author", ME) == ME) or ("ci" in codes and check_state(pr.get("statusCheckRollup"))[0] == "red")
-    if codes & ZANE_CODES and not (codes & ZANE_CODES == {"risk"} and stuck):
-        return "wait", "zane", why
+    if codes & OWNER_CODES and not (codes & OWNER_CODES == {"risk"} and stuck):
+        return "wait", "owner", why
     if codes & SESSION_CODES:
         return "wait", "session", why
     if "ci" not in codes:
@@ -241,7 +241,7 @@ def read_rest(node):
                         *(["-f", f"checks={checks['pageInfo']['endCursor']}"] if c else []),
                         "-f", f"query={MORE}"])["data"]["repository"]["pullRequest"]
         if page["headRefOid"] != node["headRefOid"]:
-            raise HeadMoved(f"cua#{node['number']}: head moved from {node['headRefOid'][:9]} to {page['headRefOid'][:9]} while paging")
+            raise HeadMoved(f"app#{node['number']}: head moved from {node['headRefOid'][:9]} to {page['headRefOid'][:9]} while paging")
         if f:
             files["nodes"] += page["files"]["nodes"]
             files["pageInfo"] = page["files"]["pageInfo"]
@@ -274,7 +274,7 @@ def from_graphql(node):
     contexts = contexts_of(node).get("contexts") or {"totalCount": 0, "nodes": []}
     labels = node["labels"]
     if miscounted(node):
-        raise RuntimeError(f"cua#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
+        raise RuntimeError(f"app#{node['number']}: read {len(files['nodes'])} of {files['totalCount']} files, "
                            f"{len(contexts['nodes'])} of {contexts['totalCount']} checks and "
                            f"{len(labels['nodes'])} of {labels['totalCount']} labels")
     checks = []
@@ -362,7 +362,7 @@ def free_gb():
 
 def parity_problem():
     try:
-        r = subprocess.run([f"{PKG}/hosts/check-parity"], env={**ENV, "ONIGIRI_ROOT": ROOT}, capture_output=True, text=True, timeout=300)
+        r = subprocess.run([f"{PKG}/services/check-parity"], env={**ENV, "ONIGIRI_ROOT": ROOT}, capture_output=True, text=True, timeout=300)
     except Exception as e:
         return f"check-parity did not run: {type(e).__name__}: {str(e)[:150]}"
     return None if r.returncode == 0 else "; ".join(x for x in (r.stdout + r.stderr).splitlines() if x.startswith("FAIL"))[:300] \
@@ -657,7 +657,7 @@ def main(argv=None):
 def run_on_main():
     if os.environ.pop("ZSTACK_ENSURED", None):
         return
-    if subprocess.run([f"{PKG}/bin/ensure-package-main"], stdout=subprocess.DEVNULL).returncode == 0:
+    if subprocess.run([f"{PKG}/services/ensure-main"], stdout=subprocess.DEVNULL).returncode == 0:
         os.execve(sys.executable, [sys.executable, os.path.abspath(__file__)], {**os.environ, "ZSTACK_ENSURED": "1"})
 
 

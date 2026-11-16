@@ -4,9 +4,9 @@ import * as path from "node:path";
 
 export const fold = (q: string) => (process.platform === "darwin" ? q.toLowerCase() : q);
 
-export function holdsPaths(env: { ONIGIRI_ROOT?: string } = process.env): string[] {
-	const root = env.ONIGIRI_ROOT || "~/onigiri";
-	return [...new Set([`${root}/hold-prs.txt`, "/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"])];
+export function holdsPaths(env: { ONIGIRI_ROOT?: string } = process.env, configured?: string): string[] {
+	const root = env.ONIGIRI_ROOT || "~/zstack";
+	return [...new Set([`${root}/hold-prs.txt`, ...(configured ? [configured] : [])])];
 }
 
 export function isHoldsPath(p: string, holds: string[], home = os.homedir()): boolean {

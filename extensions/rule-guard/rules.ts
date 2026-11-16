@@ -40,7 +40,7 @@ export function reviewOnlyLogins(texts: (string | undefined)[]): ReadonlySet<str
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
-const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, use `bin/hold-row add '<row>; Zane <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
+const HOLDS_WAY = "Only the owner edits hold-prs.txt (Hard rules, Work). To relay the owner's explicit call, use `bin/hold-row add '<row>; <owner> <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
 
 function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
 	const named = fold(base(w)) === HOLDS;

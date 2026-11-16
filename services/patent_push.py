@@ -5,17 +5,15 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-PKG = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _pol = os.path.join(PKG, "bin", "policy")
 _spec = importlib.util.spec_from_file_location("policy", _pol, loader=importlib.machinery.SourceFileLoader("policy", _pol))
 policy = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(policy)
 try:
     POLICY = policy.load()
-    PATENT, ME = POLICY["patent"], POLICY["people"]["me"]
+    PATENT, ME, OWNER = POLICY["patent"], POLICY["people"]["me"], POLICY["people"]["owner"]
 except policy.PolicyError as e:
     sys.exit(f"patent hold: config/policy.toml is unreadable ({e}), so nothing is pushed until it is fixed. Do not retry "
              "the push, push elsewhere or skip the hook; say so in your report.")
@@ -147,7 +145,7 @@ def staging_push_ok():
 
 
 def wake_hold(branch, sha, hits, root=ROOT):
-    ident, log = f"cua:{branch}", f"{root}/events.log"
+    ident, log = f"app:{branch}", f"{root}/events.log"
     mark = f" patent-held {ident} at {sha} "
     try:
         if any(mark in line and line.split(mark, 1)[1].startswith(("webhook sent", "not sent: dry run")) for line in open(log)):
@@ -156,30 +154,16 @@ def wake_hold(branch, sha, hits, root=ROOT):
         pass
     reason = (f"held for the private repo: the diff touches {WORDS} ({'; '.join(hits)[:200]}), "
               f"so it was not pushed to public {PUBLIC}. {STAGING} is not pushable as {ME}, so the branch "
-              f"stays local. Zane: grant push on {STAGING} or say where it goes.")
+              f"stays local. {OWNER}: grant push on {STAGING} or say where it goes.")
     status = wake.post("blocked", f"{ident} {reason}")
     with open(log, "a") as f:
         f.write(f"{wake.now()}{mark}{status}: {reason}\n".replace("\r", " "))
     return status.startswith(("webhook sent", "not sent: dry run"))
 
 
-def record_push(sid, refs, root=ROOT):
-    d = os.path.join(root, "review", sid or "")
-    if not refs or not sid or not re.fullmatch(policy.RUN_ID, sid) or not os.path.isdir(d):
-        return False
-    at = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    with open(os.path.join(d, "pushed"), "a") as f:
-        f.write("".join(f"{sha} {branch} {at}\n" for sha, branch in refs))
-    return True
-
-
-def is_public(url):
-    return on_github(PUBLIC, url)
-
-
 def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
     url = argv[1] if len(argv) > 1 else ""
-    refuse, ok = 0, []
+    refuse = 0
     for line in stdin.read().splitlines():
         f = line.split()
         if len(f) != 4 or f[1] == ZERO:
@@ -193,7 +177,6 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         hits = diff_hits(sha, cwd)
         act = choose_remote(url, hits, staging_ok or staging_push_ok)
         if act == "push":
-            ok.append((sha, remote_ref.removeprefix("refs/heads/")))
             continue
         refuse = 1
         branch = remote_ref.removeprefix("refs/heads/")
@@ -204,12 +187,10 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
                           f"repo {STAGING}, not to {url}. Open or update its PR there: gh pr create -R {STAGING} "
                           f"--head {branch}. Never push it to {PUBLIC}.\n")
                 continue
-        woke = "Zane has been woken" if wake_hold(branch, sha, hits, root) else "Zane was woken earlier, or the wake failed (events.log)"
+        woke = f"{OWNER} has been woken" if wake_hold(branch, sha, hits, root) else f"{OWNER} was woken earlier, or the wake failed (events.log)"
         out.write(f"patent hold: {branch} touches {WORDS} and must not go to public "
                   f"{PUBLIC}. It stays local, and {woke}. Do not retry the push, push "
                   f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
-    if not refuse and is_public(url):
-        record_push(os.environ.get("PI_SESSION_ID"), ok, root)
     return refuse
 
 
