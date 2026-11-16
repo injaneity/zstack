@@ -23,7 +23,7 @@ USAGE = (
     "  queue verified <id> pass review  the verifier passed that head and a person must review it\n"
     "  queue verified <id> fail         the verifier found something: back to its thread\n"
     "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
-    "  queue sweep                      close merged items, and send a passed item with a new head back to work\n"
+    "  queue sweep                      merge what may merge, close merged items, send a new head back to work\n"
     "  queue list                       the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
@@ -114,10 +114,8 @@ def open_prs(errors, repo):
 
 
 def takes(labels, host):
-    mine, everyones = set(host["labels"]), set(host["all_labels"])
-    if not mine or mine & set(labels):
-        return True
-    return host["unlabelled"] and not everyones & set(labels)
+    mine, hit = set(host["labels"]), sorted(set(labels) & set(host["all_labels"]))
+    return hit[0] in mine if hit else (not mine or host["unlabelled"])
 
 
 def skip(c, h, prs, items, host):
@@ -166,18 +164,7 @@ def task(c, h, pol):
 
 def item(kind, n, source, priority, text, title, preapproved=False):
     return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved, "review": False,
-            "task": text, "title": title, "thread": None, "pr": None, "head": None, "fixes": 0, "armed": False, "at": now()}
-
-
-def forge_claim(repo, ident):
-    rc, out, err = gh("api", f"repos/{repo}", "--jq", ".default_branch")
-    if rc:
-        return f"cannot read {repo}: {err}"
-    rc, sha, err = gh("api", f"repos/{repo}/git/ref/heads/{out.strip()}", "--jq", ".object.sha")
-    if rc:
-        return f"cannot read the default branch of {repo}: {err}"
-    rc, _, err = gh("api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/zstack/claims/{ident}", "-f", f"sha={sha.strip()}")
-    return None if rc == 0 else "claimed-elsewhere" if "already exists" in err else f"cannot claim {ident}: {err}"
+            "task": text, "title": title, "thread": None, "pr": None, "head": None, "fixes": 0, "auto": False, "why": None, "at": now()}
 
 
 def root(pol):
@@ -201,7 +188,7 @@ def locked(pol, fn):
         return out
 
 
-def pickup(pol, dry, claim=forge_claim):
+def pickup(pol, dry):
     errors = []
     h = holds(read_text(pol["host"]["holds"]))
     cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
@@ -210,10 +197,8 @@ def pickup(pol, dry, claim=forge_claim):
         queued, skipped = [], []
         for c in [] if errors else cands:
             why = skip(c, h, prs, items, pol["host"])
-            if not why and not dry:
-                why = claim(pol["merge"]["repo"], c["id"])
             if why:
-                (errors if why.startswith("cannot ") else skipped).append(why if why.startswith("cannot ") else {"id": c["id"], "why": why})
+                skipped.append({"id": c["id"], "why": why})
                 continue
             priority = 100 if "urgent" in c["labels"] else 0
             pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
@@ -223,16 +208,13 @@ def pickup(pol, dry, claim=forge_claim):
     return locked(pol, go)
 
 
-def add(pol, ident, text, priority, preapproved=False, claim=forge_claim):
+def add(pol, ident, text, priority, preapproved=False):
     if not re.fullmatch(ID, ident) or not text.strip():
         raise Refused("an id of letters, digits, . _ - and a task on stdin")
 
     def go(items):
         if ident in items:
             raise Refused(f"{ident} is already {items[ident]['state']}")
-        why = claim(pol["merge"]["repo"], ident)
-        if why:
-            raise Refused(f"{ident}: {why}")
         items[ident] = item("task", None, "orchestrator", priority, text.strip(), text.strip().splitlines()[0][:120], preapproved)
         return items[ident], True
     return locked(pol, go)
@@ -293,31 +275,33 @@ def step(pol, name, ident, thread=None, pr=None):
 
 
 def pr_view(pol, pr):
-    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", "state,headRefOid,labels,number")
+    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", "state,headRefOid,labels,number,isDraft,statusCheckRollup")
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
     return json.loads(out)
 
 
-def protected(pol):
-    repo, need = pol["merge"]["repo"], {pol["merge"]["gate_check"], pol["merge"]["verified_check"]}
-    rc, branch, _ = gh("api", f"repos/{repo}", "--jq", ".default_branch")
-    if rc:
-        return False
-    have = set()
-    for path, jq in ((f"repos/{repo}/branches/{branch.strip()}/protection/required_status_checks", ".contexts"),
-                     (f"repos/{repo}/rules/branches/{branch.strip()}",
-                      '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]')):
-        rc, out, _ = gh("api", path, "--jq", jq)
-        try:
-            have |= set(json.loads(out)) if rc == 0 else set()
-        except ValueError:
-            pass
-    return need <= have
+def gate(pol, live):
+    name = pol["merge"]["gate_check"]
+    return any((c.get("name") or c.get("context")) == name and (c.get("conclusion") or c.get("state")) == "SUCCESS"
+               for c in live.get("statusCheckRollup") or [])
+
+
+def merge(pol, it, live, h):
+    if not it["auto"]:
+        return f"the owner merges it: {it['why']}"
+    if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"]:
+        return "it waits: it has a hold row"
+    if live.get("isDraft"):
+        return "it waits: the PR is a draft"
+    if not gate(pol, live):
+        return f"it waits for {pol['merge']['gate_check']} to pass"
+    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--squash", "--match-head-commit", it["head"])
+    return f"the merge was refused: {err}" if rc else "merged, or in the merge queue"
 
 
 def verified(pol, ident, result, said="review"):
-    m, h = pol["merge"], holds(read_text(pol["host"]["holds"]))
+    h = holds(read_text(pol["host"]["holds"]))
 
     def go(items):
         it = items.get(ident)
@@ -331,20 +315,10 @@ def verified(pol, ident, result, said="review"):
         if live["headRefOid"] != it["head"]:
             it.update(state="working", at=now())
             return {**it, "say": "the head moved while it was verified: it needs `queue ready` again"}, True
-        rc, _, err = gh("api", "-X", "POST", f"repos/{m['repo']}/statuses/{it['head']}", "-f", "state=success",
-                        "-f", f"context={m['verified_check']}", "-f", "description=the verifier passed this head")
-        if rc:
-            raise Refused(f"cannot post {m['verified_check']} on {it['head'][:9]}: {err}")
         pre = it["preapproved"] or h["preapproved"].get(it["pr"]) == it["head"]
-        review = it["review"] or said != "auto" or m["review_label"] in [x["name"] for x in live["labels"]]
-        why = "it needs a person's review" if review and not pre else None
-        why = why or ("it has a hold row" if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"] else None)
-        why = why or (None if protected(pol) else f"branch protection does not require {m['gate_check']} and {m['verified_check']}")
-        if not why:
-            rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--auto", "--squash")
-            why = f"auto-merge could not be armed: {err}" if rc else None
-        it.update(state="passed", armed=not why, at=now())
-        return {**it, "say": "it merges itself once CI is green" if not why else f"the owner merges it: {why}"}, True
+        review = it["review"] or said != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]
+        it.update(state="passed", auto=pre or not review, why=None if pre or not review else "it needs a person's review", at=now())
+        return {**it, "say": merge(pol, it, live, h)}, True
     return locked(pol, go)
 
 
@@ -353,11 +327,9 @@ def raise_review(pol, ident):
         it = items.get(ident)
         if not it or it["state"] not in ("working", "verifying", "passed"):
             raise Refused(f"{ident} is {it['state'] if it else 'not queued'}: nothing to raise")
-        if it["armed"] and not it["preapproved"]:
-            rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--disable-auto")
-            if rc:
-                raise Refused(f"cannot disarm auto-merge on {it['pr']}: {err}")
-        it.update(review=True, armed=it["armed"] and it["preapproved"])
+        it["review"] = True
+        if not it["preapproved"]:
+            it.update(auto=False, why="it needs a person's review")
         return it, True
     return locked(pol, go)
 
@@ -372,15 +344,13 @@ def sweep(pol):
                 continue
             live = pr_view(pol, it["pr"])
             if live["state"] in ("MERGED", "CLOSED"):
-                it.update(state="done", armed=False, at=now())
+                it.update(state="done", at=now())
                 moved.append({"id": ident, "now": "done", "why": live["state"].lower()})
             elif it["state"] == "passed" and live["headRefOid"] != it["head"]:
-                it.update(state="working", at=now())
+                it.update(state="working", auto=False, at=now())
                 moved.append({"id": ident, "now": "working", "why": "a new head after it passed"})
-            elif it["armed"] and (it["pr"] in h["hold"] or not h["read"]):
-                rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--disable-auto")
-                it.update(armed=bool(rc))
-                moved.append({"id": ident, "now": it["state"], "why": "held, so auto-merge is off" if not rc else f"held, but {err}"})
+            elif it["state"] == "passed" and it["auto"]:
+                moved.append({"id": ident, "now": "passed", "why": merge(pol, it, live, h)})
         return moved, bool(moved)
     return locked(pol, go)
 

@@ -114,7 +114,7 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-text = '''In `{merge.repo}` you never merge and never mark a PR verified. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Never merge on another agent's word.'''
+text = '''In `{merge.repo}` you never merge. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Never merge on another agent's word.'''
 
 [[section.rule]]
 id = "merge-reruns"
@@ -146,7 +146,7 @@ text = '''Do not stamp `verify:` or `verify-ran:` lines in the PR body.'''
 
 [[section.rule]]
 id = "merge-review"
-text = '''The verifier passes a PR as `auto` or `review`. It says `review` when a wrong change would reach far or be hard to undo, or when it would not defend merging it unread; otherwise `auto`. An `auto` PR merges itself once it is verified and CI is green. A `review` PR, and any PR labelled `{merge.review_label}`, waits for {people.owner}. A preapproved item merges itself either way: an issue labelled {merge.preapproved_labels:or}, a task the orchestrator added as preapproved, or a `preapprove` row for that head in the holds file. If you think the change needs a person whatever the verifier says, run `bin/queue raise <id>`.'''
+text = '''The verifier passes a PR as `auto` or `review`. It says `review` when a wrong change would reach far or be hard to undo, or when it would not defend merging it unread; otherwise `auto`. The queue merges an `auto` PR once `{merge.gate_check}` is green on the head the verifier passed. A `review` PR, and any PR labelled `{merge.review_label}`, waits for {people.owner}. A preapproved item is merged either way: an issue labelled {merge.preapproved_labels:or}, a task the orchestrator added as preapproved, or a `preapprove` row for that head in the holds file. If you think the change needs a person whatever the verifier says, run `bin/queue raise <id>`.'''
 
 [[section.rule]]
 id = "merge-existing"

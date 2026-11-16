@@ -74,7 +74,6 @@ REPO = {
     },
     "merge": {
         "gate_check": (lambda v: text(v), "a check name"),
-        "verified_check": (lambda v: text(v), "a status name"),
         "review_label": (lambda v: text(v), "a label name"),
         "preapproved_labels": (names, "a list of distinct label names"),
     },
@@ -193,12 +192,21 @@ def load(want=None):
     name = by[pick(list(machine["repos"]), want).lower()]
     place = next(v for k, v in machine["repos"].items() if k.lower() == name.lower())
     project = validate_repo(name, read(os.path.join(CONFIG, "repos", name, "policy.toml")))
-    every = set()
+    every, mine = set(), os.path.basename(machine_file())
     for f in sorted(os.listdir(os.path.join(CONFIG, "machines"))):
         other = read(os.path.join(CONFIG, "machines", f)).get("repos") if f.endswith(".toml") else None
         for k, v in (other.items() if isinstance(other, dict) else []):
-            if k.lower() == name.lower() and isinstance(v, dict) and names(v.get("labels")):
-                every |= set(v["labels"])
+            if k.lower() != name.lower() or not isinstance(v, dict) or not names(v.get("labels")):
+                continue
+            every |= set(v["labels"])
+            if "default.toml" in (f, mine) or f == mine:
+                continue
+            both = sorted(set(v["labels"]) & set(place["labels"]))
+            clash = "both pick up every item" if not v["labels"] or not place["labels"] else \
+                f"both pick up the label {both[0]}" if both else \
+                "both pick up unlabelled items" if v.get("unlabelled") and place["unlabelled"] else None
+            if clash:
+                raise PolicyError(f"machines/{mine} and machines/{f} overlap on {name}: {clash}, so two machines would take one item")
     root = place["root"]
     return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO},
             "merge": {"repo": name, **project["merge"]}, "repos": known,

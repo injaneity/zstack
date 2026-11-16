@@ -37,7 +37,7 @@ def code():
 def restated(text, pol, repo=False):
     hits = []
     words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]], "people.owner": [pol["people"]["owner"]],
-             "merge.gate_check": [pol["merge"]["gate_check"]], "merge.verified_check": [pol["merge"]["verified_check"]],
+             "merge.gate_check": [pol["merge"]["gate_check"]],
              "patent.private_repo": [pol["patent"]["private_repo"]]}
     if repo:
         words["merge.repo"] = [pol["merge"]["repo"]]
@@ -157,7 +157,7 @@ class NoRestatedValues(unittest.TestCase):
                 self.assertIn(key, [k for k, _ in restated(line, POLICY, repo=True)])
 
     def test_the_check_catches_what_the_playbook_said_before(self):
-        old = {"no progress for 2.5h": "run.idle_min", "the zstack/verified status": "merge.verified_check",
+        old = {"no progress for 2.5h": "run.idle_min",
                "issues assigned to octo": "people.me", "green ci-gate at a stable head": "merge.gate_check",
                "only real failures go to Robin": "people.owner",
                "Work on sealing, Skyhook and Vaultkey normally": "patent.held_words"}

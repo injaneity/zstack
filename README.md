@@ -7,9 +7,9 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 ## the three parts
 
 - **The stack** is what every coding thread loads: `skills/`, `agents/`, the Hard rules, and the guard that enforces them. It names no repo. It reaches the rest only through `bin/policy`.
-- **The queue** is one program per machine, `bin/queue`, with its steps model-checked in `model/Queue.tla`. Work enters two ways: the pickup reads the repo for issues assigned to us and reviews requested of us, and the orchestrator above the machines adds a task by hand. Each machine takes the labels its config names, and a claim on the forge keeps two machines off one item. The highest priority goes first.
+- **The queue** is one program per machine, `bin/queue`, with its steps model-checked in `model/Queue.tla`. Work enters two ways: the pickup reads the repo for issues assigned to us and reviews requested of us, and the orchestrator above the machines adds a task by hand. Each machine takes the labels its config names, and `bin/policy check` refuses two machines whose labels overlap. The highest priority goes first.
 - **The dispatcher** is one scheduled thread per machine (`dispatch/playbook.md`). It launches what the queue prints, has the verifier check each PR, and relays the results. It decides nothing.
-- **Merging** is the queue's. The verifier passes a head as `auto` or `review`. The queue posts a `verified` status on that head. An `auto` PR, or a preapproved one, then merges itself once CI is green; a `review` PR waits for the owner. A new push clears the status.
+- **Merging** is the queue's. The verifier passes a head as `auto` or `review`. Once `merge.gate_check` is green on that same head, the queue merges an `auto` PR, or a preapproved one, itself; a `review` PR waits for the owner. A new push sends the PR back to the verifier.
 - **The services** are not threads: the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and the two checks that keep a machine's checkout at main (`services/ensure-main`, `services/check-parity`).
 
 ## install
@@ -46,7 +46,7 @@ A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fill
 ## set up a machine
 
 1. Write your config (above) and set `ZSTACK_CONFIG` where every thread sees it: under `env` in `~/.claude/settings.json`, and in the shell profile. Run `bin/policy check`.
-2. In the target repo's branch protection or ruleset, require the two status checks `merge.gate_check` and `merge.verified_check` name, and allow auto-merge. Without both, the queue arms nothing and every PR waits for the owner.
+2. Check that `merge.gate_check` names the CI check that must be green before a merge. The queue merges with the machine's own `gh` login, so that login needs push access.
 3. Link the pre-push hook into the clone: `ln -s <zstack>/services/pre-push <clone>/.git/hooks/pre-push`. `services/check-parity` checks it.
 4. Create `<root>/hold-prs.txt` (it may hold only a comment). The queue starts nothing while it is unreadable.
 5. Schedule one thread in the zstack project that follows `dispatch/playbook.md`, every few minutes.

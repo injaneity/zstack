@@ -24,15 +24,14 @@ skip_lockfiles = [
 ]
 private_repo = "acme/app-private"
 
-# How a PR merges (bin/queue; Hard rules, Merging). `gate_check` is the CI check that must be green and
-# `verified_check` the status bin/queue posts on a head the verifier passed; branch protection must require both.
-# The verifier passes a PR as `auto` or `review`. An `auto` PR merges itself once both checks are green; a `review` PR
+# How a PR merges (bin/queue; Hard rules, Merging). `gate_check` is the CI check that must be green on a head
+# before bin/queue merges it.
+# The verifier passes a PR as `auto` or `review`. bin/queue merges an `auto` PR once `gate_check` is green on the verified head; a `review` PR
 # waits for the owner. `review_label` on a PR forces `review`. A preapproved item merges itself whatever the verifier or
 # its thread says: an issue carrying one of `preapproved_labels`, a task added with `--preapproved`, or a `preapprove`
 # row for the PR's head in the holds file. A hold row stops any of them.
 [merge]
 gate_check = "ci-gate"
-verified_check = "zstack/verified"
 review_label = "needs-review"
 preapproved_labels = ["preapproved"]
 

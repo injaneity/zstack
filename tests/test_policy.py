@@ -92,6 +92,22 @@ class Policy(unittest.TestCase):
         self.assertEqual(self.run_("get", "run.idle_min").stdout, "7\n")
         self.assertIn("on box", self.run_("check").stdout)
 
+    def test_two_machines_whose_pickup_overlaps_on_a_repo_are_refused(self):
+        m = self.pkg / "config" / "machines"
+        base = SHIPPED[FILES[0]]
+        self.env["ZSTACK_MACHINE"] = "mac"
+        for mac, linux, why in (
+                ('labels = ["macOS"]\nunlabelled = false', 'labels = ["Linux"]\nunlabelled = true', None),
+                ('labels = ["macOS"]\nunlabelled = true', 'labels = ["Linux"]\nunlabelled = true', "both pick up unlabelled items"),
+                ('labels = ["macOS", "arm"]\nunlabelled = false', 'labels = ["arm"]\nunlabelled = true', "both pick up the label arm"),
+                ('labels = []\nunlabelled = false', 'labels = ["Linux"]\nunlabelled = true', "both pick up every item")):
+            (m / "mac.toml").write_text(base.replace("labels = []\nunlabelled = true", mac))
+            (m / "linux.toml").write_text(base.replace("labels = []\nunlabelled = true", linux))
+            r = self.run_("check")
+            with self.subTest(why=why):
+                self.assertEqual(r.returncode, 1 if why else 0, r.stderr)
+                self.assertIn(why or "", r.stderr)
+
     def test_a_repos_own_rules_are_added_to_the_stacks(self):
         (self.pkg / "config" / "repos" / "acme" / "app" / "rules.toml").write_text(
             'schema = 1\n[[section]]\ntitle = "Project"\n[[section.rule]]\nid = "project-gate"\ntext = "Wait for {merge.gate_check}."\n')

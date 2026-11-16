@@ -6,10 +6,16 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
-        "no-claim",
-        "two machines whose filters overlap both queue one item (no claim on the forge)",
-        [('Enter(m, i) == q[m][i] = "none" /\\ claim[i] = None /\\ i \\notin held', 'Enter(m, i) == q[m][i] = "none" /\\ i \\notin held')],
+        "overlapping-filters",
+        "two machines whose label filters overlap both queue one item",
+        [('"mac" :> {"i1", "i3"}', '"mac" :> {"i1", "i2", "i3"}')],
         "OneMachinePerItem",
+    ),
+    (
+        "merge-a-held-item",
+        "a hold row added after an item passed does not stop its merge",
+        [('status[i] = "pass" /\\ i \\notin held /\\ Merge(i, "auto")', 'status[i] = "pass" /\\ Merge(i, "auto")')],
+        "AutoMergeIsVerifiedAndAllowed",
     ),
     (
         "recover-forgets-the-thread",
@@ -47,7 +53,7 @@ M = [
     (
         "arm-a-review-item",
         "auto-merge is armed for an item the verifier passed as needing review",
-        [("IF NeedsReview(i) \\/ i \\in held THEN armed \\ {i} ELSE armed \\cup {i}", "armed \\cup {i}")],
+        [("IF NeedsReview(i) THEN armed \\ {i} ELSE armed \\cup {i}", "armed \\cup {i}")],
         "AutoMergeIsVerifiedAndAllowed",
     ),
     (
@@ -59,7 +65,7 @@ M = [
     (
         "preapproved-merges-unverified",
         "a preapproved item merges itself on a head the verifier never passed",
-        [('i \\in armed /\\ status[i] = "pass" /\\ Merge(i, "auto")', 'i \\in armed /\\ (i \\in Pre \\/ status[i] = "pass") /\\ Merge(i, "auto")')],
+        [('i \\in armed /\\ status[i] = "pass" /\\ i', 'i \\in armed /\\ (i \\in Pre \\/ status[i] = "pass") /\\ i')],
         "AutoMergeIsVerifiedAndAllowed",
         ("  Pre = {}", '  Pre = {"i2"}'),
     ),
