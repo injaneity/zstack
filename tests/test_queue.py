@@ -136,6 +136,19 @@ class Entry(Case):
         with self.assertRaisesRegex(queue.Refused, "claimed-elsewhere"):
             self.add("taken", "x")
 
+    def test_a_review_brief_follows_the_repos_preference_and_a_teammate_is_never_salvaged(self):
+        self.holds.write_text("review-only | mate | no | x\n")
+        h = queue.holds(self.holds.read_text())
+        outside, mate = queue.task(cand(5, "review", author="guest"), h, self.pol), queue.task(cand(6, "review", author="Mate"), h, self.pol)
+        for want in ("salvage a fixable PR", "`Salvaged from #5`", "keeps guest's commits as authored", "Never re-author"):
+            self.assertIn(want, outside)
+        self.assertIn("review-only: a first review and nothing else", mate)
+        self.assertNotIn("alvage", mate)
+        self.pol["review"]["outside"] = "request-changes"
+        sent_back = queue.task(cand(5, "review", author="guest"), h, self.pol)
+        self.assertIn("request changes on a fixable PR", sent_back)
+        self.assertNotIn("Salvaged from", sent_back)
+
     def test_an_urgent_label_goes_ahead_of_the_rest(self):
         self.pick([cand(1), cand(2, labels=["urgent"])])
         self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "app-2")

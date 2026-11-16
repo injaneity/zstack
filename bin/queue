@@ -152,16 +152,19 @@ def task(c, h, pol):
     salvage = pol["review"]["outside"] == "salvage"
     outside = "salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes" if salvage else \
         "request changes on a fixable PR, and do not rewrite it as a PR of ours"
-    who = "teammate (review-only: a first review and nothing else)" if c["author"]["login"].lower() in h["review_only"] else \
-        f"outside contributor ({outside})"
+    teammate = c["author"]["login"].lower() in h["review_only"]
+    who = "teammate (review-only: a first review and nothing else)" if teammate else f"outside contributor ({outside})"
     text = (f"{repo}#{c['n']} at head {c['head']} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first "
             f"review, requested of {me}. Run playbooks/pull-requests.md Verify. Post nothing under the owner's name: put every "
             "comment for the author under a `drafts:` section of your final report.")
-    if not salvage:
+    if teammate or not salvage:
         return text
-    return (f"{text}\nA salvage PR's body carries `{iss['salvaged_from'].format(pr=c['n'])}` and a "
-            f"`{iss['fixes'].format(issue='<n>')}` line for each issue #{c['n']} fixes or was opened for, so the forge closes "
-            "them when the salvage merges. Keep the contributor's commits as they authored them.")
+    frm = iss["salvaged_from"].format(pr=c["n"])
+    return (f"{text}\nA salvage PR's body carries `{frm}` and a `{iss['fixes'].format(issue='<n>')}` line for each issue "
+            f"#{c['n']} fixes or was opened for, so the forge closes them when the salvage merges.\n"
+            f"A salvage keeps {c['author']['login']}'s commits as authored: cherry-pick or rebase their commits, then put our "
+            "fixes on top as separate commits. Never re-author their work or squash it into our commit. If no code of theirs "
+            f"survives, the body's `{frm}` line is what credits them.")
 
 
 def item(kind, n, source, priority, text, title):
