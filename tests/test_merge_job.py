@@ -1160,7 +1160,7 @@ class PatentPush(unittest.TestCase):
         hook.write_text(f"#!{sys.executable}\nimport importlib.util, sys\n"
                         f"s = importlib.util.spec_from_file_location('pp', {str(VM / 'patent_push.py')!r})\n"
                         "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp)\n"
-                        f"sys.exit(pp.main(sys.argv, sys.stdin, staging_ok=lambda: False, root={root!r}))\n")
+                        f"sys.exit(pp.main(sys.argv[1:], sys.stdin, staging_ok=lambda: False, root={root!r}))\n")
         hook.chmod(0o755)
         return g, pub, work, root
 
@@ -1210,6 +1210,20 @@ class PatentPush(unittest.TestCase):
             self.assertEqual([x[:2] for x in rows], [["a" * 40, "fix/x"]])
             self.assertRegex(rows[0][2], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$")
             self.assertEqual(sorted(os.listdir(f"{root}/review")), ["r1"])
+
+    def test_the_hook_script_with_gits_remote_and_url_arguments_records_a_public_push(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            g, _, work, root = self.repo(tmp)
+            os.makedirs(f"{root}/review/r1")
+            Path(work, "relay.rs").write_text("fn relay() {}\n")
+            g("add", ".", cwd=work)
+            g("commit", "-qm", "y", cwd=work)
+            sha = g("rev-parse", "HEAD", cwd=work).strip()
+            env = {**os.environ, "ONIGIRI_ROOT": root, "PI_SESSION_ID": "r1"}
+            r = subprocess.run([str(VM / "pre-push"), "origin", "https://github.com/trycua/cua.git"], cwd=work, env=env,
+                               input=f"refs/heads/fix/x {sha} refs/heads/fix/x {'0' * 40}\n", capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual([x.split()[:2] for x in Path(f"{root}/review/r1/pushed").read_text().splitlines()], [[sha, "fix/x"]])
 
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
