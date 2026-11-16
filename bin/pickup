@@ -462,12 +462,27 @@ def fast_forward(dry):
     return failed
 
 
+def prune_targets(dry, hosts):
+    chat = []
+    for h in [h for h, f in hosts.items() if "error" not in f]:
+        if dry:
+            print(f"would prune collected runs' target/ dirs on {h}")
+            continue
+        p = hourly.on(h, ["bin/pi-run", "prune"])
+        for sid, why in (x.split("\t", 1) for x in p.stdout.splitlines() if "\t" in x):
+            print(f"prune {h} {sid}: {why}")
+            hourly.log(h, "prune", f"{sid}/target", why)
+        if p.returncode:
+            chat.append([f"target-prune:{h}", f"collected runs' target/ dirs on {h} not all pruned this pass: {pr.tail(p, 150)}"])
+    return chat
+
+
 def run_pass(dry):
     state, errors = read_state(), []
     ff = fast_forward(dry)
     hosts = hourly.all_facts()
     collect(hosts, dry, state, errors)
-    pruned = prune_lume(dry, state)
+    pruned = prune_lume(dry, state) + prune_targets(dry, hosts)
     merge_errors = []
     waits = hourly.merge_waits(merge_errors)
     errors += merge_errors

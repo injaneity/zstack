@@ -663,6 +663,28 @@ class Pickup(unittest.TestCase):
         self.assertIn(f"prune {live_}:", self.pickup())
         self.assertNotIn(live_, self.vms())
 
+    def test_every_pass_prunes_collected_runs_targets_on_each_host_and_logs_one_row_each(self):
+        self.peer()
+        vm = self.t / "vm"
+        vm.write_text(vm.read_text().replace("*) cat ", "*pi-run\\ prune*) echo x >> \"$T/vm-prune\"; "
+                                             "printf 'cua-1\\tfreed 9.0 GB: deleted wt/target\\n';;\n*) cat ", 1))
+        self.run_dir("done", "collected")
+        t = self.root / "review" / "done" / "wt" / "target"
+        t.mkdir(parents=True)
+        (t.parent / ".git").write_text("gitdir: /elsewhere\n")
+        (t / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        self.assertIn("would prune collected runs' target/ dirs on vm", self.pickup("--dry"))
+        self.assertTrue(t.exists())
+        out = self.pickup()
+        self.assertFalse(t.exists())
+        self.assertEqual((self.t / "vm-prune").read_text().splitlines(), ["x"])
+        self.assertIn("prune vm cua-1: freed 9.0 GB: deleted wt/target", out)
+        rows = sorted((r[1], r[2].split(":")[0]) for r in self.rows("prune"))
+        self.assertEqual(rows, [("cua-1/target", "freed 9.0 GB"), ("done/target", "freed 0.0 GB")])
+        vm.write_text(vm.read_text().replace("deleted wt/target\\n';;", "deleted wt/target\\n'; echo boom >&2; exit 1;;", 1))
+        self.pickup()
+        self.assertIn("collected runs' target/ dirs on vm not all pruned this pass: boom", json.dumps(self.wakes()))
+
     def test_a_run_that_named_a_worker_keeps_it_after_its_file_is_gone(self):
         name = f"cua-e2e-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(time.time() - 30 * 3600))}-000000aa"
         self.lume([(name, "stopped")])

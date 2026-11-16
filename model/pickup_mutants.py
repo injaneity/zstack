@@ -5,6 +5,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
+    ("target-prune-skipped", "collected runs' target/ dirs were pruned only at collect, never on a pass (zstack#122)",
+     [("/\\ build' = (IF build = \"done\" THEN \"gone\" ELSE build)", "/\\ build' = build")], "a temporal property", "Targets"),
+    ("target-prune-live", "a pass prunes a target/ dir of a run that is not collected",
+     [("/\\ build' = (IF build = \"done\" THEN \"gone\" ELSE build)", "/\\ build' = \"gone\"")], "TargetPruneIsSafe", "Targets"),
     ("no-lock", "two passes run at once (no flock on pickup.lock)",
      [("Lock(p) == pc[p] = \"trying\" /\\ lock = NoPass\n", "Lock(p) == pc[p] = \"trying\"\n")], "NoOverlap"),
     ("fingerprint-skip", "a pass with nothing changed skips its picks (bin/hourly's skip: before #68)",
