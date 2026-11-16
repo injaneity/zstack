@@ -166,4 +166,4 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv, sys.stdin))
+    sys.exit(main(sys.argv[1:], sys.stdin))
