@@ -75,7 +75,9 @@ preapprove_tiers = ["deep", "human"]
 # every review brief, and each pass lists for the chat an open salvage that lacks a `fixes` or `refs` line for an issue
 # GitHub links to its source, an open salvage whose `fixes` names an issue the source's body never claims on a closing
 # line, and, for salvages merged on or after `since`, an issue left open or a source PR still open (playbooks/hourly.md
-# step 7).
+# step 7). "Was opened for" counts as a claim: a source by the issue's own author, opened after the issue, keeps `fixes`
+# even when its body says only `Refs` (cua#3450 for cua#3449, cua#4876 for cua#4843), so the pass does not list it. A
+# different author's `Refs` is always listed, because the pass cannot read intent beyond authorship and order.
 # `since` is the first salvage's merge day (cua#2406), so the pass covers every salvage (Zane, 13 Nov 2026 18:51 SGT).
 [issues]
 repo = "trycua/cua"
