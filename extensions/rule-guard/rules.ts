@@ -23,6 +23,7 @@ export interface Host {
 	ghRepo?: string;
 	authorOf?(repo: string, n: number): string | undefined;
 	reviewOnly?(): ReadonlySet<string> | null;
+	readText?(file: string, dir: string | undefined): string | undefined;
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
@@ -243,6 +244,39 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	return hit ? `${act} in ${hit}` : undefined;
 }
 
+const TITLE = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()\s][^()]*\))?!?: \S/;
+const LOCAL_PATH = /(^|[\s`'"(=])(\/home\/|\/Users\/)[\w.-]+\//;
+const TEXT_WAY = "Fix the title or body and run it again (Hard rules, Commits and PR text; Merging: merge-no-verify-lines).";
+
+export function prTextProblems(title: string | undefined, body: string | undefined): string[] {
+	const out: string[] = [];
+	if (title !== undefined && !title.startsWith("$") && !TITLE.test(title)) out.push("a PR title that is not Conventional Commit syntax (`fix(scope): …`)");
+	if (body === undefined) return out;
+	if (/^verify(-ran)?:/m.test(body)) out.push("a PR body with a `verify:` or `verify-ran:` line");
+	if (/^co-authored-by:/im.test(body)) out.push("a PR body with a `Co-authored-by` trailer");
+	if (LOCAL_PATH.test(body)) out.push("a PR body with a local machine path");
+	return out;
+}
+
+function ghPrText(c: Cmd, owned: Owned, host: Host): string | undefined {
+	const w = c.words;
+	if (!owned?.size || w[0] !== "gh" || w[1] !== "pr" || (w[2] !== "create" && w[2] !== "edit")) return undefined;
+	const opt = (names: string[]) => {
+		for (let i = 3; i < w.length; i++) {
+			const m = w[i].match(/^(--[\w-]+)=(.*)$/s);
+			if (m && names.includes(m[1])) return m[2];
+			if (names.includes(w[i])) return w[i + 1] ?? "";
+		}
+		return undefined;
+	};
+	const file = opt(["-F", "--body-file"]);
+	const body = opt(["-b", "--body"]) ?? (file && file !== "-" ? c.at.map((d) => host.readText?.(file, d)).find((t) => t !== undefined) : undefined);
+	const problems = prTextProblems(opt(["-t", "--title"]), body);
+	if (!problems.length) return undefined;
+	const repos = targetRepos(c, host);
+	return repos.some((r) => r !== undefined && r !== null && owned.has(r)) ? problems.join(", and ") : undefined;
+}
+
 const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
 
 function apiFields(w: string[]): { key: string; value: string; file: boolean }[] {
@@ -342,6 +376,8 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
 		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
+		const words = ghPrText(c, owned, host);
+		if (words) return `blocked: ${words}. ${TEXT_WAY}`;
 		const close = ghIssueClose(c, issues, host);
 		if (close) return `blocked: ${close}. ${closeWay(issues)}`;
 		const mate = ghTeammateClose(c, issues, host);

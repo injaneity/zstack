@@ -11,7 +11,8 @@ USAGE = (
     '  policy seats          every role and seat\n'
     '  policy get <key>      one policy.toml value by dotted key (`slots.hand`, `models.designer`): a string or number as is, else JSON\n'
     '  policy dump           policy.toml as JSON, for readers that are not Python (the subagent extension, rule-guard)\n'
-    "  policy rules          the Hard rules as markdown, for a session's system prompt\n"
+    "  policy rules          every Hard rule as markdown, as the orchestrator reads them\n"
+    "  policy rules --thread the same without the rules marked for the orchestrator: a coding session's system prompt\n"
     '  policy rules <id>...  only the named rules, one bullet each, for an agent whose agents/<name>.md lists them (`rules:`)'
 )
 try:
@@ -172,7 +173,9 @@ def validate_rules(data, pol):
         if not isinstance(sec["rule"], list) or not sec["rule"]:
             raise PolicyError(f"rules: section {sec['title']!r} has no rule")
         for r in sec["rule"]:
-            keys(f"{sec['title']} rule", r, ("id", "text"))
+            keys(f"{sec['title']} rule", r, ("id", "text"), ("source", "for"))
+            if not text(r.get("source", "x")) or r.get("for", "orchestrator") != "orchestrator":
+                raise PolicyError(f"rules: {r.get('id')!r} source must be text, and for is \"orchestrator\" or absent")
             if not (isinstance(r["id"], str) and re.fullmatch(r"[a-z]+(-[a-z]+)*", r["id"])) or not text(r["text"]) or "\n" in r["text"]:
                 raise PolicyError(f"rules: {sec['title']} rule {r.get('id')!r} needs a kebab-case id and one line of text")
             if r["id"] in seen:
@@ -197,7 +200,7 @@ def rules(path=RULES):
     return validate_rules(read(path), load())
 
 
-def render(data, ids=()):
+def render(data, ids=(), thread=False):
     if ids:
         by = {r["id"]: r["text"] for s in data["section"] for r in s["rule"]}
         if miss := [i for i in ids if i not in by]:
@@ -205,9 +208,12 @@ def render(data, ids=()):
         return "".join(f"- {by[i]}\n" for i in ids)
     out = ["## Hard rules", "", data["intro"]]
     for s in data["section"]:
+        shown = [r for r in s["rule"] if not (thread and r.get("for"))]
+        if not shown:
+            continue
         out += ["", f"### {s['title']}", ""]
         out += ("\n\n" if s.get("paragraphs") else "\n").join(
-            r["text"] if s.get("paragraphs") else f"- {r['text']}" for r in s["rule"]).split("\n")
+            r["text"] if s.get("paragraphs") else f"- {r['text']}" for r in shown).split("\n")
     return "\n".join(out) + "\n"
 
 
@@ -268,7 +274,7 @@ def main(argv):
             load(), rules(), state()
             return print(f"policy: {os.path.dirname(PATH)}/{{policy,rules,state}}.toml are valid") or 0
         if argv[:1] == ["rules"]:
-            return print(render(rules(), argv[1:]), end="") or 0
+            return print(render(rules(), [x for x in argv[1:] if x != "--thread"], "--thread" in argv), end="") or 0
         if argv == ["dump"]:
             return print(json.dumps(load())) or 0
         if len(argv) == 2 and argv[0] == "seat":

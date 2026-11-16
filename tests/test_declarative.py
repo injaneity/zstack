@@ -93,6 +93,21 @@ class Rules(unittest.TestCase):
                      "Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed."):
             self.assertIn(line[:-1], md)
 
+    def test_a_coding_session_gets_every_rule_but_the_orchestrators_and_no_one_reads_who_said_it(self):
+        full, thread = policy.render(RULES), policy.render(RULES, thread=True)
+        marked = [r for s in RULES["section"] for r in s["rule"] if r.get("for")]
+        self.assertTrue(marked)
+        for r in marked:
+            self.assertIn(r["text"], full)
+            self.assertNotIn(r["text"], thread)
+        self.assertEqual(len(full.splitlines()) - len(thread.splitlines()), len(marked))
+        for r in (r for s in RULES["section"] for r in s["rule"] if r.get("source")):
+            self.assertNotIn(r["source"], full)
+        self.assertIsNone(re.search(r"\(Zane, \d", full))
+        bad = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": "t", "for": "everyone"}]}]}
+        with self.assertRaisesRegex(policy.PolicyError, "for is"):
+            policy.validate_rules(bad, POLICY)
+
     def test_render_of_named_rules_is_one_bullet_each_in_order(self):
         self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",

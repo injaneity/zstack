@@ -23,7 +23,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 pr = importlib.util.module_from_spec(spec)
 loader.exec_module(pr)
 
-RULES = subprocess.run([sys.executable, str(PKG / "bin" / "policy"), "rules"], capture_output=True, text=True, check=True).stdout
+RULES = subprocess.run([sys.executable, str(PKG / "bin" / "policy"), "rules", "--thread"], capture_output=True, text=True, check=True).stdout
 FAKE_PI = """#!/bin/bash
 if [ "$1" = --list-models ]; then echo "provider model"; [ -n "$TEST_TOKEN" ] && echo "claude-code m"; exit 0; fi
 trap 'echo TERM > "$T/got-sig"; exit 143' TERM

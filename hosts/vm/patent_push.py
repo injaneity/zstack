@@ -93,6 +93,48 @@ def diff_hits(sha, cwd=None):
     return list(dict.fromkeys(hits))[:5]
 
 
+SPDX = "SPDX-License-Identifier"
+
+
+def has_spdx(sha, path, cwd):
+    rc, text = git("show", f"{sha}:{path}", cwd=cwd)
+    return rc == 0 and SPDX in "\n".join(text.splitlines()[:10])
+
+
+def lint(sha, cwd=None):
+    rc, base = git("merge-base", sha, "refs/remotes/origin/main", cwd=cwd)
+    rc1, status = git("diff", "--name-status", "--no-renames", "--no-color", base.strip(), sha, cwd=cwd) if rc == 0 and base.strip() else (1, "")
+    if rc1:
+        return []
+    out, added = [], []
+    for row in status.splitlines():
+        kind, _, path = row.partition("\t")
+        if kind.startswith("D"):
+            continue
+        parts = path.split("/")
+        if parts[-1] == ".onigiri.json":
+            out.append(f"{path} is onigiri config and is never committed (Hard rules, scope-no-config)")
+        if "target" in parts[:-1]:
+            out.append(f"{path} is build output under target/ (Hard rules, checks-target)")
+        if kind.startswith("A"):
+            added.append(path)
+    for path in added:
+        folder, ext = os.path.dirname(path), os.path.splitext(path)[1]
+        rc2, names = git("ls-tree", "--name-only", base.strip(), (folder + "/") if folder else ".", cwd=cwd)
+        near = [n for n in names.splitlines() if ext and n.endswith(ext) and n != path][:20]
+        if rc2 == 0 and not has_spdx(sha, path, cwd) and any(has_spdx(base.strip(), n, cwd) for n in near):
+            out.append(f"{path} is new and lacks the SPDX header its neighbours carry (Hard rules, text-spdx)")
+    _, ident = git("var", "GIT_COMMITTER_IDENT", cwd=cwd)
+    me = ident[ident.find("<") + 1:ident.find(">")]
+    rc3, log = git("log", "--no-merges", "--format=%H%x00%ce%x00%B%x01", sha, "--not", "refs/remotes/origin/main", cwd=cwd)
+    for entry in log.split("\x01") if rc3 == 0 else []:
+        c, _, rest = entry.strip().partition("\x00")
+        who, _, body = rest.partition("\x00")
+        if c and who == me and re.search(r"^co-authored-by:", body, re.I | re.M):
+            out.append(f"commit {c[:12]} carries a Co-authored-by trailer (Hard rules, text-no-trailers)")
+    return list(dict.fromkeys(out))[:8]
+
+
 def staging_push_ok():
     home = os.environ.get("HOME") or "/home/box"
     env = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or f"{home}/.config/gh"}
@@ -143,6 +185,11 @@ def main(argv, stdin, cwd=None, staging_ok=None, root=ROOT, out=sys.stderr):
         if len(f) != 4 or f[1] == ZERO:
             continue
         local_ref, sha, remote_ref, _ = f
+        if problems := lint(sha, cwd):
+            refuse = 1
+            out.write(f"push refused: {remote_ref.removeprefix('refs/heads/')} breaks the Hard rules: " + "; ".join(problems)
+                      + ". Fix the commits and push again; do not skip the hook.\n")
+            continue
         hits = diff_hits(sha, cwd)
         act = choose_remote(url, hits, staging_ok or staging_push_ok)
         if act == "push":

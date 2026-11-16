@@ -555,7 +555,7 @@ def launch(sid, role, brief, extra):
         print(f"pi-run: dry run, would {'resume' if cont else 'start'} {sid} in {d} as role {role}: {provider} {model}")
         return 0
     try:
-        rules = pol.render(pol.rules())
+        rules = pol.render(pol.rules(), thread=True)
     except pol.PolicyError as e:
         die(2, f"no Hard rules: {e}")
     env.pop("PI_RUN_DRAIN", None)

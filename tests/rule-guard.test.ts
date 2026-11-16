@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, mergeOwned, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, prTextProblems, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
 
 const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
@@ -169,7 +169,7 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	allowed("gh pr ready 7040 -R trycua/cua --undo");
 	allowed("gh pr ready 33 -R injaneity/zstack", inCua);
 	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);
-	allowed("gh pr create --draft --title x --body y", inCua);
+	allowed("gh pr create --draft --title 'fix: x' --body y", inCua);
 	allowed("gh pr view 7040 --json isDraft", inCua);
 });
 
@@ -527,4 +527,25 @@ test("a PR or issue a review-only teammate opened is never closed, by the author
 	ok("gh api -X PATCH repos/trycua/cua/pulls/7030 -f state=open");
 	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
 	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
+});
+
+test("a PR title or body that breaks Commits and PR text is refused in the merge job's repo, and nowhere else", () => {
+	const files: Record<string, string> = { "/cua/wt/body.md": "## Summary\nx\n\nverify: ran\n", "/cua/wt/ok.md": "## Summary\nthe scoped repository checks passed\nrisk: light\n" };
+	const h = { ...host, readText: (f: string, d: string | undefined) => files[path.posix.resolve(d ?? "/", f)] };
+	const no = (c: string, why: RegExp, cwd = inCua) => assert.match(checkBash(c, OWNED, h, cwd) ?? "", why, c);
+	const ok = (c: string, cwd = inCua) => assert.equal(checkBash(c, OWNED, h, cwd), undefined, c);
+	no('gh pr create --title "Fix the driver" --body "x"', /^blocked: a PR title that is not Conventional Commit/);
+	no('gh pr create -R trycua/cua -t "fix: x" -b "built in /home/box/agent-data/onigiri/cua"', /local machine path/, "/zs");
+	no('gh pr edit 12 --body "x\nverify-ran: clippy"', /`verify:` or `verify-ran:` line/);
+	no('gh pr create --title "fix(driver): x" --body "x\n\nCo-authored-by: A <a@b.c>"', /Co-authored-by/);
+	no("gh pr create --title 'fix(driver): x' --body-file body.md", /`verify:`/);
+	no('gh pr create --title="refactor x" -F ok.md', /Conventional Commit/);
+	ok('gh pr create --title "fix(driver): keep the window focused" --body-file ok.md');
+	ok('gh pr create --title "feat!: drop the old flag" --body "risk: light"');
+	ok('gh pr create --title "$TITLE" --body-file missing.md');
+	ok("gh pr create --fill");
+	ok("gh pr edit 12 --add-label bug");
+	ok('gh pr create --title "Fix the driver" --body "/Users/me/x"', "/zs");
+	ok('gh pr view 12 --json title');
+	assert.deepEqual(prTextProblems("docs(readme): say where ~/Library/x and /usr/bin live", "see https://example.com/home/page and /usr/local/bin/x"), []);
 });

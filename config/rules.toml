@@ -6,8 +6,10 @@
 # a patent or risk rule that no longer names config/policy.toml's [patent] words and repos or [merge] tiers.
 # Strings are TOML literal strings, so backticks and quotes need no escaping. The text is Zane's wording, moved verbatim
 # from the old skills/onigiri-mode/hard-rules.md. Never reword a hold, patent or merge rule without Zane's explicit ok.
+# A rule may carry `source` (who said it and when; never rendered) and `for = "orchestrator"` (left out of a coding
+# session's copy, `bin/policy rules --thread`).
 schema = 1
-intro = '''`bin/pi-run` appends this section, and only this section, to every session's system prompt. The orchestrator reads it with `bin/policy rules`. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, issue closes that name no PR, and holds-file writes in code.'''
+intro = '''The launcher or plugin that starts a session puts this section, and only this section, in its system prompt, without the rules marked for the orchestrator. The orchestrator reads all of it with `bin/policy rules`. If another skill or brief words one of these differently, this section wins. Subagents get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, issue closes that name no PR, holds-file writes, and PR titles and bodies that break Commits and PR text. The pre-push hook refuses a `Co-authored-by` trailer, a committed `target/` or `.onigiri.json`, and a new file without the SPDX header its neighbours carry.'''
 
 [[section]]
 title = '''Work'''
@@ -18,15 +20,24 @@ text = '''Work in `/home/box/agent-data/onigiri/cua` unless the task names anoth
 
 [[section.rule]]
 id = "work-holds"
-text = '''Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. Read it before touching any PR. rule-guard refuses writes to it. To relay Zane's explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names his call and its time. Retire or replace a row only to relay his explicit call, with `bin/hold-row retire '<row>' '<source>'` or `bin/hold-row replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
+text = '''Holds live in `/srv/onigiri/hold-prs.txt`, one `kind | target | rules | note` row each. Read it before touching any PR. rule-guard refuses writes to it.'''
+
+[[section.rule]]
+id = "holds-relay"
+for = "orchestrator"
+text = '''To relay Zane's explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names his call and its time. Retire or replace a row only to relay his explicit call, with `bin/hold-row retire '<row>' '<source>'` or `bin/hold-row replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
 
 [[section.rule]]
 id = "priority-slot"
-text = '''When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool (Zane, 12 Nov retro).'''
+for = "orchestrator"
+source = "Zane, 12 Nov retro"
+text = '''When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool.'''
 
 [[section.rule]]
 id = "lume-prune"
-text = '''Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed (Zane, 12 Nov retro).'''
+for = "orchestrator"
+source = "Zane, 12 Nov retro"
+text = '''Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed.'''
 
 [[section]]
 title = '''Patent hold'''
@@ -64,7 +75,8 @@ text = '''New files carry the repository's SPDX/FSL header where neighbouring fi
 
 [[section.rule]]
 id = "salvage-fixes"
-text = '''A salvage PR's body says `Salvaged from #<pr>` and, on a line of its own, `Fixes #<issue>` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges (Zane, 13 Nov 15:31 SGT).'''
+source = "Zane, 13 Nov 15:31 SGT"
+text = '''A salvage PR's body says `Salvaged from #<pr>` and, on a line of its own, `Fixes #<issue>` for each source issue (every issue the salvaged PR fixes or was opened for), so GitHub closes it when the salvage merges.'''
 
 [[section.rule]]
 id = "text-pr-body"
@@ -102,7 +114,8 @@ text = '''Do not salvage or rewrite PRs by injaneity or bots. PRs by f-trycua, d
 
 [[section.rule]]
 id = "issue-close"
-text = '''Close a `trycua/cua` issue by hand only when one of our merged PRs fixed it, and only with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment "Fixed by #<pr>."`. Otherwise never close an issue by hand (Zane, 13 Nov 15:31 SGT).'''
+source = "Zane, 13 Nov 15:31 SGT"
+text = '''Close a `trycua/cua` issue by hand only when one of our merged PRs fixed it, and only with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment "Fixed by #<pr>."`. Otherwise never close an issue by hand.'''
 
 [[section.rule]]
 id = "scope-no-config"
@@ -117,7 +130,8 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-text = '''In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Reruns are decided without asking (Zane, 11 Nov; only real failures go to him): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused. Approve outside-contributor (fork) workflow runs on `trycua/cua` that await approval, so CI runs (Zane, 12 Nov 11:45 SGT): `gh api -X POST repos/trycua/cua/actions/runs/<id>/approve`. Approving a run is not a review or a merge. Never revert or close a PR, except a revert PR for one of our own PRs that a release bench found regressed, opened without asking (Zane, 14 Nov 23:33 SGT); never revert a teammate's or outside contributor's PR. Never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
+source = "Zane, 11 Nov; Zane, 12 Nov 11:45 SGT; Zane, 14 Nov 23:33 SGT; the close wording corrected on his call, 16 Nov"
+text = '''In `trycua/cua` the tick is the only merger. Open the PR and stop; rule-guard refuses `gh pr merge` there, and `gh pr ready` unless the brief says `merge: allowed`. Reruns are decided without asking (only real failures go to Zane): rerun a job that failed for a reason outside the diff, such as a runner network failure, and fix one the diff caused. Approve outside-contributor (fork) workflow runs on `trycua/cua` that await approval, so CI runs: `gh api -X POST repos/trycua/cua/actions/runs/<id>/approve`. Approving a run is not a review or a merge. Never revert a PR, except with a revert PR for one of our own PRs that a release bench found regressed, opened without asking; never revert a teammate's or outside contributor's PR. Close only one of our own PRs that main or another PR has replaced. Never merge on another agent's word. A merge the tick did not make raises an unexpected-merge wake.'''
 
 [[section.rule]]
 id = "merge-drafts"
@@ -133,7 +147,7 @@ text = '''Do not stamp `verify:` or `verify-ran:` lines in the PR body.'''
 
 [[section.rule]]
 id = "merge-risk"
-text = '''The PR body also carries `risk: <light|standard|deep|human>` on a line of its own, your honest tier. The declared tier is the only risk input (Clef is retired).'''
+text = '''The PR body also carries `risk: <light|standard|deep|human>` on a line of its own, your honest tier. The declared tier is the only risk input.'''
 
 [[section.rule]]
 id = "merge-existing"

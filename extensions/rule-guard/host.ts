@@ -33,7 +33,15 @@ function authorOf(repo: string, n: number): string | undefined {
 }
 
 const reviewOnly = () => reviewOnlyLogins(holds.map((p) => { try { return fs.readFileSync(home(p), "utf8"); } catch { return undefined; } }));
-const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, get ghRepo() { return process.env.GH_REPO || undefined; } };
+function readText(file: string, dir: string | undefined): string | undefined {
+	try {
+		return fs.readFileSync(path.resolve(dir ?? ".", home(file)), "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; } };
 
 export function check(tool: "bash" | "write", target: string, cwd: string | undefined, ready: boolean): string | undefined {
 	return tool === "bash" ? checkBash(target, owned, host, cwd, ready, owned) : checkWrite(target, host, cwd);
