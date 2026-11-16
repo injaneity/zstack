@@ -179,11 +179,14 @@ def issue_authors(errors, numbers):
     fields = " ".join(f"i{n}: issue(number: {n}) {{ createdAt author {{ login }} }}" for n in numbers)
     p = hourly.run(["gh", "api", "graphql", "-f", f'query=query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'])
     try:
-        repo = (json.loads(p.stdout or "null") or {}).get("data", {}).get("repository") or {}
+        got = json.loads(p.stdout or "null") or {}
+        repo, errs = (got.get("data") or {}).get("repository"), got.get("errors")
     except (ValueError, AttributeError):
-        repo = {}
-    if p.returncode or not repo:
-        errors.append(f"gh api graphql for {len(numbers)} salvage issues' authors: " + pr.tail(p, 150))
+        repo, errs = None, None
+    if p.returncode or errs or not isinstance(repo, dict):
+        errors.append(f"gh api graphql for {len(numbers)} salvage issues' authors: "
+                      + ("; ".join(e.get("message", str(e)) if isinstance(e, dict) else str(e) for e in errs or []) or pr.tail(p, 150))[:150])
+        return {}
     return {n: repo[f"i{n}"] for n in numbers if isinstance(repo.get(f"i{n}"), dict)}
 
 

@@ -25,8 +25,11 @@ T = os.environ["T"]
 iss = re.findall(r"issue\\(number: (\\d+)\\)", sys.argv[1])
 if iss:
     au = json.load(open(os.path.join(T, "issue_authors.json"))) if os.path.exists(os.path.join(T, "issue_authors.json")) else {}
-    print(json.dumps({"data": {"repository": {f"i{n}": {"createdAt": au.get(n, {}).get("createdAt", "2026-01-01T00:00:00Z"),
-        "author": {"login": au.get(n, {}).get("login", "reporter")}} for n in iss}}}))
+    bad = os.path.exists(os.path.join(T, "issue-authors-partial"))
+    one = lambda n: {"createdAt": au.get(n, {}).get("createdAt", "2026-01-01T00:00:00Z"),
+                     "author": {"login": au.get(n, {}).get("login", "reporter")}}
+    errs = {"errors": [{"type": "RATE_LIMITED", "message": "slow down"}]} if bad else {}
+    print(json.dumps({**errs, "data": {"repository": {f"i{n}": one(n) for n in iss}}}))
     sys.exit(0)
 src = {p["number"]: p for p in json.load(open(os.path.join(T, "sources.json")))}
 ns = [int(n) for n in re.findall(r"pullRequest\\(number: (\\d+)\\)", sys.argv[1])]
@@ -372,6 +375,11 @@ class Pickup(unittest.TestCase):
             f"- salvage cua#72{i} of cua#62{i} closes #5{i}, which cua#62{i} names but never claims on a line that starts "
             f"with a closing word: read cua#62{i}'s body, and change " + tail for i in (1, 2)]))
         self.assertNotIn("error:", report)
+        (self.t / "issue-authors-partial").touch()
+        self.pickup()
+        report = Path(next(f for f in self.wakes()[-1] if f.startswith("report="))[7:]).read_text()
+        self.assertIn("error: gh api graphql for 1 salvage issues' authors: slow down", report)
+        self.assertIn("salvage cua#720 of cua#620 closes #50", report)
 
     def test_a_review_only_teammates_pr_or_issue_is_never_listed_for_closing(self):
         self.peer(holds="review-only | F-Trycua | no | teammate\nreview-only | ddupont808 | no | teammate\n")
