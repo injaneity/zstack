@@ -1,7 +1,7 @@
 ---- MODULE Pickup ----
 EXTENDS Naturals, TLC
 
-CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules, Foreign, Workers
+CONSTANTS Items, Passes, NoPass, Auto, Hand, MaxChat, Rules, Foreign, Workers, Builds
 Active == {"collect", "prune", "delete", "remove", "targets", "drain", "pick", "report", "wake"}
 Min(a, b) == IF a < b THEN a ELSE b
 Sub(a, b) == IF a > b THEN a - b ELSE 0
@@ -47,7 +47,7 @@ Init == blocker \in [Items -> Rules \cup {"none"}] /\ taken = Foreign
   /\ auto = Sub(Auto, 1) /\ drained = Sub(Hand, 1) /\ chat = 0 /\ queued = FALSE /\ blind = FALSE /\ ended = FALSE
   /\ standing = FALSE /\ seen = FALSE /\ unsent = FALSE /\ pending = FALSE
   /\ lock = NoPass /\ pc = [p \in Passes |-> "off"] /\ free = 0 /\ had = FALSE /\ failed = FALSE /\ woke = FALSE /\ reads = 0 /\ rows = {}
-  /\ worker \in Workers /\ user \in (IF worker = "gone" THEN {"none"} ELSE {"none", "running"}) /\ listed = FALSE /\ vmlock = "none" /\ checked = FALSE /\ build = "live"
+  /\ worker \in Workers /\ user \in (IF worker = "gone" THEN {"none"} ELSE {"none", "running"}) /\ listed = FALSE /\ vmlock = "none" /\ checked = FALSE /\ build \in Builds
 
 Changes(i, b) == lock = NoPass /\ blocker[i] # b /\ blocker' = [blocker EXCEPT ![i] = b]
   /\ UNCHANGED <<worker, user, listed, vmlock, checked, build, taken, auto, drained, chat, queued, blind, ended, standing, seen, unsent, pending, PassVars>>
