@@ -24,7 +24,8 @@ USAGE = (
     "  queue verified <id> <pr> <head> fail\n"
     "                                   the verifier found something in that head: its thread fixes it\n"
     "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
-    "  queue sweep                      merge what may merge, close merged items, send a new head back to work\n"
+    "  queue sweep                      merge what may merge, close merged items and ended threads with no PR,\n"
+    "                                   send a new head back to work\n"
     "  queue list                       the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
@@ -332,12 +333,23 @@ def raise_review(pol, ident):
     return locked(pol, go)
 
 
+def ended(thread):
+    try:
+        p = subprocess.run(["t3", "thread", "show", "--json", "--messages", "0", thread], capture_output=True, text=True, env=ENV)
+        return not p.returncode and json.loads(p.stdout)["thread"]["status"] in ("completed", "interrupted")
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def sweep(pol):
     h = holds(read_text(pol["host"]["holds"]))
 
     def go(items):
         moved = []
         for ident, it in sorted(items.items()):
+            if it["state"] == "working" and not it["pr"] and it["thread"] and ended(it["thread"]):
+                it.update(state="done", at=now())
+                moved.append({"id": ident, "now": "done", "why": "its thread ended with no PR"})
             if it["state"] not in OPEN or not it["pr"]:
                 continue
             live = pr_view(pol, it["pr"])
