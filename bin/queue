@@ -245,7 +245,7 @@ def next_up(pol):
 
     def go(items):
         pick, waiting = first(items, h, pol["run"]["threads"])
-        return {"launch": {"id": pick, "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
+        return {"launch": {"id": pick, "clone": pol["host"]["clone"], "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
                 "verify": [{"id": k, "pr": v["pr"], "head": v["head"], "thread": v["thread"]} for k, v in sorted(items.items())
                            if v["state"] == "verifying"],
                 "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S)}, False

@@ -10,7 +10,7 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 - **The queue** is one program per machine, `bin/queue`, with its steps model-checked in `model/Queue.tla`. Work enters two ways: the pickup reads the repo for issues assigned to us and reviews requested of us, and the orchestrator above the machines adds a task by hand. Each machine takes the labels its config names, and `bin/policy check` refuses two machines whose labels overlap. The highest priority goes first.
 - **The dispatcher** is one scheduled thread per machine (`dispatch/playbook.md`). It launches what the queue prints, has the verifier check each PR, and relays the results. It decides nothing.
 - **Merging** is the queue's. The verifier passes a head as `auto` or `review`. Once `merge.gate_check` is green on that same head, the queue merges an `auto` PR, or a preapproved one, itself; a `review` PR waits for the owner. A new push sends the PR back to the verifier.
-- **The services** are not threads: the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and the two checks that keep a machine's checkout at main (`services/ensure-main`, `services/check-parity`).
+- **The services** are not threads: the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and `services/ensure-main`, which the dispatcher runs first in every pass to bring the machine's checkout to main.
 
 ## install
 
@@ -47,9 +47,9 @@ A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fill
 
 1. Write your config (above) and set `ZSTACK_CONFIG` where every thread sees it: under `env` in `~/.claude/settings.json`, and in the shell profile. Run `bin/policy check`.
 2. Check that `merge.gate_check` names the CI check that must be green before a merge. The queue merges with the machine's own `gh` login, so that login needs push access.
-3. Link the pre-push hook into the clone: `ln -s <zstack>/services/pre-push <clone>/.git/hooks/pre-push`. `services/check-parity` checks it.
+3. Link the pre-push hook into the clone: `ln -s <zstack>/services/pre-push <clone>/.git/hooks/pre-push`.
 4. Create `<root>/hold-prs.txt` (it may hold only a comment). The queue starts nothing while it is unreadable.
-5. Schedule one thread in the zstack project that follows `dispatch/playbook.md`, every few minutes.
+5. Schedule one thread in the zstack project, every few minutes, on the model `models.orchestrator` names, with a fresh session each run and this prompt: `You are this machine's zstack dispatcher. Read <zstack>/dispatch/playbook.md and do one pass exactly as it says.`
 
 ## what a coding thread gets
 

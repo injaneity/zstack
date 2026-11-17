@@ -53,7 +53,7 @@ jobs:
       - name: lint the services and tests
         run: |
           pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy bin/queue model
-          shellcheck services/pre-push services/check-parity services/ensure-main tests/check-parity.sh tests/ensure-main.sh tests/queue-model.sh
+          shellcheck services/pre-push services/ensure-main tests/ensure-main.sh tests/queue-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -67,8 +67,6 @@ jobs:
         run: node --test tests/claude-hook.test.ts
       - name: ensure-main fast-forwards the package to origin/main or refuses
         run: tests/ensure-main.sh
-      - name: check-parity fails a host whose package, hook or agents differ from main
-        run: tests/check-parity.sh
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
