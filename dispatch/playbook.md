@@ -7,7 +7,7 @@ Run every command below from the zstack package, which is the checkout this file
 ## One pass
 
 1. **Update.** Run `services/ensure-main`. It brings this checkout to main. If it refuses, relay its reason and end the pass.
-2. **Sweep.** Run `bin/queue sweep`. It merges each passed item that may merge once its CI check is green, closes items whose PR merged or closed, and sends a passed item with a new head back to work. Relay what it printed.
+2. **Sweep.** Run `bin/queue sweep`. It merges each passed item that may merge once its CI check is green, closes items whose PR merged or closed and items whose thread ended with no PR, and sends a passed item with a new head back to work. Relay what it printed.
 3. **Pick up.** Run `bin/queue pickup`. It reads the repo and queues what this machine takes, each with the reason anything was skipped. With any error it queues nothing: relay the error and go on.
 4. **Read the queue.** Run `bin/queue next`. It prints `launch` (one item with its `id`, `clone` and `brief`, or null with why under `waiting`) and `recover`.
 5. **Recover.** Each id under `recover` was started and never claimed. Look for a thread titled with that id. If one exists, run `bin/queue claim <id> <thread>`; if none does, run `bin/queue requeue <id>`.
