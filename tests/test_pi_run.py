@@ -33,6 +33,10 @@ echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
 ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake" 2>/dev/null
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
+if [ -e "$T/pytest" ]; then
+  printf '%s\n' "$PYTEST_DEBUG_TEMPROOT" "$PYTEST_ADDOPTS" > "$T/pytest-env"
+  mkdir -p "$PYTEST_DEBUG_TEMPROOT/pytest-of-x/pytest-0" && head -c 4096 /dev/zero > "$PYTEST_DEBUG_TEMPROOT/pytest-of-x/pytest-0/blob"
+fi
 [ -e "$T/say" ] && cat "$T/say"
 if [ -e "$T/daemons" ]; then
   "$T/bin/cua-driver" serve --socket "$T/own.sock" & echo $! > "$T/own-pid"
@@ -537,6 +541,39 @@ class Launcher(unittest.TestCase):
         self.assertTrue(live("shared"))
         self.assertTrue(live("other"))
         self.assertIn("stopped the cua-driver daemon(s) the run left serving a private socket", r.stderr)
+
+    def pytest_run(self, sid, **kw):
+        (self.t / "pytest").touch()
+        tmp = self.t / "tmp"
+        tmp.mkdir(exist_ok=True)
+        (tmp / "pytest-of-box").mkdir(exist_ok=True)
+        self.start(sid, TMPDIR=str(tmp), PYTEST_ADDOPTS="-x", **kw)
+        self.assertTrue(wait_for(lambda: (self.t / "pytest-env").exists()))
+        root, opts = (self.t / "pytest-env").read_text().splitlines()
+        self.assertEqual(root, str(tmp / f"pytest-{sid}"))
+        self.assertEqual(opts, "-x -o tmp_path_retention_policy=failed -o tmp_path_retention_count=1")
+        return tmp, Path(root)
+
+    def test_a_runs_pytest_temp_root_is_its_own_and_goes_when_it_ends_pass_or_fail(self):
+        for sid, rc in (("pyt-ok", 0), ("pyt-bad", 1)):
+            tmp, root = self.pytest_run(sid, rc=rc)
+            self.assertEqual(self.finished(sid)["rc"], rc)
+            self.assertFalse(root.exists())
+            self.assertTrue((tmp / "pytest-of-box").is_dir())
+            self.assertIn("pi-run: removed the run's pytest temp root (0.0 GB)\n", self.log(sid))
+            (self.t / "pytest-env").unlink()
+
+    def test_a_lost_runs_collect_removes_its_pytest_temp_root(self):
+        sid = "pyt-lost"
+        tmp, root = self.pytest_run(sid, hang=True)
+        self.assertTrue(wait_for(lambda: (root / "pytest-of-x" / "pytest-0" / "blob").exists()))
+        os.killpg(self.run_json(sid)["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == f"{sid} lost attempt=1 rc=None\n"))
+        self.assertTrue(root.exists())
+        r = self.pi_run("collect", sid, TMPDIR=str(tmp))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(root.exists())
+        self.assertIn("removed the run's pytest temp root", r.stderr)
 
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
