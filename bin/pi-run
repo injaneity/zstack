@@ -408,6 +408,27 @@ def stop_daemons(sid):
                      if any(state[x] is v for x in found))
 
 
+def pytest_root(env, sid):
+    return os.path.join(env.get("TMPDIR") or "/tmp", f"pytest-{sid}")
+
+
+def pytest_env(env, sid):
+    keep = "-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
+    opts = " ".join(x for x in (env.get("PYTEST_ADDOPTS", ""), keep) if x)
+    return {"PYTEST_DEBUG_TEMPROOT": pytest_root(env, sid), "PYTEST_ADDOPTS": opts}
+
+
+def drop_pytest_root(env, sid):
+    root = pytest_root(env, sid)
+    if not os.path.isdir(root) or os.path.islink(root):
+        return ""
+    size = disk_bytes(root)
+    shutil.rmtree(root, ignore_errors=True)
+    if os.path.exists(root):
+        return f"pytest temp root {root} not fully removed"
+    return f"removed the run's pytest temp root ({size / 1e9:.1f} GB)"
+
+
 def supervise(d, sid, cmd, env, cap, idle):
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -430,6 +451,7 @@ def supervise(d, sid, cmd, env, cap, idle):
     while True:
         if not got:
             try:
+                os.makedirs(env["PYTEST_DEBUG_TEMPROOT"], mode=0o700, exist_ok=True)
                 proc = subprocess.Popen(cmd, cwd=d, env=env)
             except OSError as e:
                 print(f"pi-run: cannot start pi: {e}", flush=True)
@@ -479,8 +501,8 @@ def supervise(d, sid, cmd, env, cap, idle):
             except OSError as e:
                 print(f"pi-run: wake not sent: {e}", flush=True)
         if done["state"] != "queued":
-            reaped = stop_daemons(sid)
-            reaped and print(f"pi-run: {reaped}", flush=True)
+            for line in (stop_daemons(sid), drop_pytest_root(env, sid)):
+                line and print(f"pi-run: {line}", flush=True)
         r.write(done)
     os._exit(rc)
 
@@ -560,7 +582,8 @@ def launch(sid, role, brief, extra):
         die(2, f"no Hard rules: {e}")
     env.pop("PI_RUN_DRAIN", None)
     env.pop("PI_RUN_COUNTED", None)
-    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0")
+    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0",
+               **pytest_env(env, sid))
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
            "--append-system-prompt", os.path.join(d, "rules.md"), *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
@@ -647,7 +670,7 @@ def collect(sid):
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
         reaped = stop_daemons(sid)
         r.write(done)
-        line = "; ".join(x for x in (reaped, prune(d)) if x)
+        line = "; ".join(x for x in (reaped, drop_pytest_root(env, sid), prune(d)) if x)
         if line:
             print(f"pi-run: {sid}: {line}", file=sys.stderr)
             with open(os.path.join(d, "run.log"), "a") as fh:
