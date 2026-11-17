@@ -181,6 +181,9 @@ def locked(pol, fn):
         path = os.path.join(base, "queue.json")
         text = read_text(path)
         state = json.loads(text) if text else {"items": {}}
+        for it in state["items"].values():
+            if it["state"] == "verifying":
+                it["state"] = "owner"
         out, changed = fn(state["items"])
         if changed:
             with open(path + ".tmp", "w") as f:
