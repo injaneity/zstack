@@ -700,7 +700,7 @@ class Pickup(unittest.TestCase):
         self.assertIn("merge conflict", brief)
         self.assertIn("the PR's author is injaneity, close it instead with "
                       "`gh pr close 6975 -R trycua/cua --comment \"Replaced by #N.\"`", brief)
-        self.assertIn("Close no other PR: one by anyone else that main already covers goes under `questions:`", brief)
+        self.assertIn("Close no other PR: one by anyone else, or one whose replacing PR you cannot name, goes under `questions:`", brief)
 
     def test_an_unstick_goes_before_an_older_urgent_issue_when_one_auto_slot_is_free(self):
         (self.t / "hang").touch()
