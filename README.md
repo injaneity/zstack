@@ -39,7 +39,7 @@ Config has three layers, and `bin/policy` is the one reader of all of them (`che
 - **A machine** is `machines/<hostname>.toml`: the models its roles run on, its thread cap, where it sends a wake, and each repo it works on with its clone, its state folder and the labels this machine picks up. `ZSTACK_MACHINE` names another file; `machines/default.toml` is the fallback.
 - **A repo** is `repos/<owner>/<name>/policy.toml`: its required checks, the labels that force a review or preapprove a merge, who "we" are, the patent hold's words, and whether an outside PR is salvaged or sent back. An optional `rules.toml` beside it adds sections to the Hard rules.
 
-`config/` ships an example of the last two: a machine working on `acme/app`. Keep your own in a private repo with the same `machines/` and `repos/` folders, clone it on each machine, and point `ZSTACK_CONFIG` at it. A missing or invalid one stops every reader. The repo in play is `ZSTACK_REPO`, else the `origin` of the directory a command runs in, else the machine's only repo.
+`config/` ships an example of the last two: a machine working on `acme/app`. Keep your own in a private repo with the same `machines/` and `repos/` folders, clone it on each machine, and point `ZSTACK_CONFIG` at it. A missing or invalid one stops every reader. The repo in play is `ZSTACK_REPO`, else the `origin` of the directory a command runs in, else the machine's only repo. `bin/queue` reads and merges PRs only in `merge.repo`; a PR to this package never goes through it, and the owner merges it.
 
 A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fills it in from the machine and repo in play. A rule marked `for = "orchestrator"` is left out of a coding thread's copy.
 
