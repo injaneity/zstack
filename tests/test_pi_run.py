@@ -588,6 +588,13 @@ class Launcher(unittest.TestCase):
         self.assertFalse(root.exists())
         self.assertTrue(live_root.exists())
         self.assertEqual(self.pi_run("prune").stdout, "")
+        (root / "stuck" / "x").mkdir(parents=True)
+        (root / "stuck").chmod(0o555)
+        self.addCleanup((root / "stuck").chmod, 0o755)
+        r = self.pi_run("prune")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("not fully removed", r.stdout)
+        self.assertTrue(r.stdout.startswith("pyt-left\tpytest temp root "), r.stdout)
 
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
@@ -751,6 +758,8 @@ class Launcher(unittest.TestCase):
         (self.t / "say").unlink()
         (self.t / "rc").write_text("0")
         brief = (self.t / "root/review/lim/brief.full.md").read_text()
+        first = Path(self.run_json("lim")["pytest_root"])
+        self.assertTrue(first.is_dir())
         r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1", TMPDIR=str(self.t / "moved"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed lim attempt 1", r.stdout)
@@ -764,6 +773,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
         self.assertEqual(run["pytest_root"], str(self.t / "moved" / "pi-run-pytest" / "lim"))
+        self.assertFalse(first.exists())
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
