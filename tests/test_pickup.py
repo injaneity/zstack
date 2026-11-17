@@ -696,7 +696,11 @@ class Pickup(unittest.TestCase):
         self.assertNotIn("cua-7300-unstick", out)
         self.pickup()
         self.assertEqual(sorted(r[1] for r in self.rows("launch")), ["cua-10", "cua-6975-unstick-f454fce", "cua-7229-unstick-4ef9df0"])
-        self.assertIn("merge conflict", (self.root / "review" / "cua-6975-unstick-f454fce" / "brief.md").read_text())
+        brief = (self.root / "review" / "cua-6975-unstick-f454fce" / "brief.md").read_text()
+        self.assertIn("merge conflict", brief)
+        self.assertIn("the PR's author is injaneity, close it instead with "
+                      "`gh pr close 6975 -R trycua/cua --comment \"Replaced by #N.\"`", brief)
+        self.assertIn("Close no other PR: one by anyone else, or one whose replacing PR you cannot name, goes under `questions:`", brief)
 
     def test_an_unstick_goes_before_an_older_urgent_issue_when_one_auto_slot_is_free(self):
         (self.t / "hang").touch()
