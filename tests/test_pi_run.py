@@ -550,12 +550,13 @@ class Launcher(unittest.TestCase):
         self.start(sid, TMPDIR=str(tmp), PYTEST_ADDOPTS="-x", **kw)
         self.assertTrue(wait_for(lambda: (self.t / "pytest-env").exists()))
         root, opts = (self.t / "pytest-env").read_text().splitlines()
-        self.assertEqual(root, str(tmp / f"pytest-{sid}"))
+        self.assertEqual(root, str(tmp / "pi-run-pytest" / sid))
+        self.assertEqual(self.run_json(sid)["pytest_root"], root)
         self.assertEqual(opts, "-x -o tmp_path_retention_policy=failed -o tmp_path_retention_count=1")
         return tmp, Path(root)
 
     def test_a_runs_pytest_temp_root_is_its_own_and_goes_when_it_ends_pass_or_fail(self):
-        for sid, rc in (("pyt-ok", 0), ("pyt-bad", 1)):
+        for sid, rc in (("pyt-ok", 0), ("pyt-bad", 1), ("of-box", 0)):
             tmp, root = self.pytest_run(sid, rc=rc)
             self.assertEqual(self.finished(sid)["rc"], rc)
             self.assertFalse(root.exists())
@@ -570,7 +571,7 @@ class Launcher(unittest.TestCase):
         os.killpg(self.run_json(sid)["pid"], signal.SIGKILL)
         self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == f"{sid} lost attempt=1 rc=None\n"))
         self.assertTrue(root.exists())
-        r = self.pi_run("collect", sid, TMPDIR=str(tmp))
+        r = self.pi_run("collect", sid, TMPDIR=str(self.t / "elsewhere"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(root.exists())
         self.assertIn("removed the run's pytest temp root", r.stderr)

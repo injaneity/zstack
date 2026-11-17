@@ -409,7 +409,7 @@ def stop_daemons(sid):
 
 
 def pytest_root(env, sid):
-    return os.path.join(env.get("TMPDIR") or "/tmp", f"pytest-{sid}")
+    return os.path.join(env.get("TMPDIR") or "/tmp", "pi-run-pytest", sid)
 
 
 def pytest_env(env, sid):
@@ -418,9 +418,8 @@ def pytest_env(env, sid):
     return {"PYTEST_DEBUG_TEMPROOT": pytest_root(env, sid), "PYTEST_ADDOPTS": opts}
 
 
-def drop_pytest_root(env, sid):
-    root = pytest_root(env, sid)
-    if not os.path.isdir(root) or os.path.islink(root):
+def drop_pytest_root(root):
+    if not root or not os.path.isdir(root) or os.path.islink(root):
         return ""
     size = disk_bytes(root)
     shutil.rmtree(root, ignore_errors=True)
@@ -501,7 +500,7 @@ def supervise(d, sid, cmd, env, cap, idle):
             except OSError as e:
                 print(f"pi-run: wake not sent: {e}", flush=True)
         if done["state"] != "queued":
-            for line in (stop_daemons(sid), drop_pytest_root(env, sid)):
+            for line in (stop_daemons(sid), drop_pytest_root(env["PYTEST_DEBUG_TEMPROOT"])):
                 line and print(f"pi-run: {line}", flush=True)
         r.write(done)
     os._exit(rc)
@@ -608,7 +607,7 @@ def launch(sid, role, brief, extra):
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
                    pool=pool, **f)
-        r.write(new if cont else {**new, "role": role, "extra": extra})
+        r.write(new if cont else {**new, "role": role, "extra": extra, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]})
     gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0
@@ -668,9 +667,9 @@ def collect(sid):
         if lost and done.get("wake"):
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
-        reaped = stop_daemons(sid)
+        reaped, dropped = stop_daemons(sid), drop_pytest_root(r.run.get("pytest_root"))
         r.write(done)
-        line = "; ".join(x for x in (reaped, drop_pytest_root(env, sid), prune(d)) if x)
+        line = "; ".join(x for x in (reaped, dropped, prune(d)) if x)
         if line:
             print(f"pi-run: {sid}: {line}", file=sys.stderr)
             with open(os.path.join(d, "run.log"), "a") as fh:
