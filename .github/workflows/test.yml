@@ -39,6 +39,8 @@ jobs:
         run: bin/pickup --dry
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
+        run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
       - name: model config resolves under 3.9
         run: tests/models.sh
 
@@ -58,6 +60,8 @@ jobs:
         run: bin/policy check && bin/policy rules > /dev/null
       - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: the mini's lume-e2e wrapper tests pass (no VM starts)
+        run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
       - name: zstack code carries no comments
         run: python3 tests/comments.py check
       - name: lint the VM host scripts
