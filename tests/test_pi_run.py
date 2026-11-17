@@ -547,6 +547,7 @@ class Launcher(unittest.TestCase):
         tmp = self.t / "tmp"
         tmp.mkdir(exist_ok=True)
         (tmp / "pytest-of-box").mkdir(exist_ok=True)
+        (self.t / "pytest-env").unlink(missing_ok=True)
         self.start(sid, TMPDIR=str(tmp), PYTEST_ADDOPTS="-x", **kw)
         self.assertTrue(wait_for(lambda: (self.t / "pytest-env").exists()))
         root, opts = (self.t / "pytest-env").read_text().splitlines()
@@ -562,7 +563,6 @@ class Launcher(unittest.TestCase):
             self.assertFalse(root.exists())
             self.assertTrue((tmp / "pytest-of-box").is_dir())
             self.assertIn("pi-run: removed the run's pytest temp root (0.0 GB)\n", self.log(sid))
-            (self.t / "pytest-env").unlink()
 
     def test_a_lost_runs_collect_removes_its_pytest_temp_root(self):
         sid = "pyt-lost"
@@ -575,6 +575,19 @@ class Launcher(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(root.exists())
         self.assertIn("removed the run's pytest temp root", r.stderr)
+
+    def test_prune_removes_a_pytest_temp_root_a_collected_run_left(self):
+        tmp, root = self.pytest_run("pyt-left")
+        self.finished("pyt-left")
+        self.pi_run("collect", "pyt-left")
+        (root / "late").mkdir(parents=True)
+        live, live_root = self.pytest_run("pyt-live", hang=True)
+        r = self.pi_run("prune")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "pyt-left\tremoved the run's pytest temp root (0.0 GB)\n")
+        self.assertFalse(root.exists())
+        self.assertTrue(live_root.exists())
+        self.assertEqual(self.pi_run("prune").stdout, "")
 
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
@@ -738,7 +751,7 @@ class Launcher(unittest.TestCase):
         (self.t / "say").unlink()
         (self.t / "rc").write_text("0")
         brief = (self.t / "root/review/lim/brief.full.md").read_text()
-        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1", TMPDIR=str(self.t / "moved"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed lim attempt 1", r.stdout)
         run = self.finished("lim")
@@ -750,6 +763,7 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "drain").read_text().strip(), "unset")
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
+        self.assertEqual(run["pytest_root"], str(self.t / "moved" / "pi-run-pytest" / "lim"))
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),

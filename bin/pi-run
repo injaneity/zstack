@@ -607,7 +607,8 @@ def launch(sid, role, brief, extra):
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
                    pool=pool, **f)
-        r.write(new if cont else {**new, "role": role, "extra": extra, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]})
+        new = {**new, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]}
+        r.write(new if cont else {**new, "role": role, "extra": extra})
     gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0
@@ -760,12 +761,13 @@ def prune_collected():
     failed = 0
     for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         d = os.path.join(root, sid)
-        if not ID.fullmatch(sid) or os.path.islink(d) or not os.path.isfile(os.path.join(d, "run.json")) or not build_dirs(d):
+        if not ID.fullmatch(sid) or os.path.islink(d) or not os.path.isfile(os.path.join(d, "run.json")):
             continue
         with Run(d) as r:
-            if (r.run or {}).get("state") != "collected":
+            tmp = (r.run or {}).get("pytest_root")
+            if (r.run or {}).get("state") != "collected" or not (build_dirs(d) or tmp and os.path.lexists(tmp)):
                 continue
-            line = prune(d)
+            line = "; ".join(x for x in (drop_pytest_root(tmp), prune(d)) if x)
             with open(os.path.join(d, "run.log"), "a") as fh:
                 fh.write(f"pi-run prune: {line}\n")
         failed |= line.startswith("prune failed")
