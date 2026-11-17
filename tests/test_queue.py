@@ -288,6 +288,14 @@ class Merge(Case):
                                  "c": ("passed", "it waits: it has a hold row")})
         self.assertEqual(self.forge.merges, [])
 
+    def test_an_item_left_verifying_by_an_older_queue_is_the_owners_and_the_sweep_closes_it(self):
+        legacy = {**queue.item("task", None, "orchestrator", 0, "t", "t"), "state": "verifying", "pr": 40, "head": H1}
+        (self.root / "queue.json").write_text(json.dumps({"items": {"a": legacy}}))
+        self.pr_open("a", 40)
+        self.assertEqual((queue.sweep(self.pol), queue.next_up(self.pol)["waiting"]), ([], "nothing is queued"))
+        self.forge.prs[40]["state"] = "MERGED"
+        self.assertEqual(queue.sweep(self.pol), [{"id": "a", "now": "done", "why": "merged"}])
+
     def test_the_steps_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
         self.assertEqual(queue.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "working"),
