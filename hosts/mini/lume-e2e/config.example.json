@@ -1,0 +1,8 @@
+{
+  "seed": "REPLACE-WITH-PREPARED-PRIVATE-SEED",
+  "seed_note": "Describe the source image, signing identity, permissions, and validation evidence.",
+  "guest_user": "lume",
+  "keychain_service": "cua-lume-e2e",
+  "keychain_account": "guest-signing-unlock",
+  "minimum_free_gib": 80
+}
