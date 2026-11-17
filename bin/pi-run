@@ -408,6 +408,26 @@ def stop_daemons(sid):
                      if any(state[x] is v for x in found))
 
 
+def pytest_root(env, sid):
+    return os.path.join(env.get("TMPDIR") or "/tmp", "pi-run-pytest", sid)
+
+
+def pytest_env(env, sid, root=None):
+    keep = "-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
+    opts = " ".join(x for x in (env.get("PYTEST_ADDOPTS", ""), keep) if x)
+    return {"PYTEST_DEBUG_TEMPROOT": root or pytest_root(env, sid), "PYTEST_ADDOPTS": opts}
+
+
+def drop_pytest_root(root):
+    if not root or not os.path.isdir(root) or os.path.islink(root):
+        return ""
+    size = disk_bytes(root)
+    shutil.rmtree(root, ignore_errors=True)
+    if os.path.exists(root):
+        return f"pytest temp root {root} not fully removed"
+    return f"removed the run's pytest temp root ({size / 1e9:.1f} GB)"
+
+
 def supervise(d, sid, cmd, env, cap, idle):
     os.setsid()
     log = os.open(os.path.join(d, "run.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -430,6 +450,7 @@ def supervise(d, sid, cmd, env, cap, idle):
     while True:
         if not got:
             try:
+                os.makedirs(env["PYTEST_DEBUG_TEMPROOT"], mode=0o700, exist_ok=True)
                 proc = subprocess.Popen(cmd, cwd=d, env=env)
             except OSError as e:
                 print(f"pi-run: cannot start pi: {e}", flush=True)
@@ -479,8 +500,8 @@ def supervise(d, sid, cmd, env, cap, idle):
             except OSError as e:
                 print(f"pi-run: wake not sent: {e}", flush=True)
         if done["state"] != "queued":
-            reaped = stop_daemons(sid)
-            reaped and print(f"pi-run: {reaped}", flush=True)
+            for line in (stop_daemons(sid), drop_pytest_root(env["PYTEST_DEBUG_TEMPROOT"])):
+                line and print(f"pi-run: {line}", flush=True)
         r.write(done)
     os._exit(rc)
 
@@ -560,7 +581,8 @@ def launch(sid, role, brief, extra):
         die(2, f"no Hard rules: {e}")
     env.pop("PI_RUN_DRAIN", None)
     env.pop("PI_RUN_COUNTED", None)
-    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0")
+    env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0",
+               **pytest_env(env, sid, cont and run.get("pytest_root")))
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
            "--append-system-prompt", os.path.join(d, "rules.md"), *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
@@ -585,6 +607,7 @@ def launch(sid, role, brief, extra):
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
                    pool=pool, **f)
+        new = {**new, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]}
         r.write(new if cont else {**new, "role": role, "extra": extra})
     gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
@@ -645,9 +668,9 @@ def collect(sid):
         if lost and done.get("wake"):
             subprocess.run([sys.executable, WAKE, "failed", f"{sid} was lost (KILL or OOM) at attempt {done['attempt']}",
                             *report_fields(d, done["attempt"])], env={**env, "PI_SESSION_ID": sid}, stdout=sys.stderr)
-        reaped = stop_daemons(sid)
+        reaped, dropped = stop_daemons(sid), drop_pytest_root(r.run.get("pytest_root"))
         r.write(done)
-        line = "; ".join(x for x in (reaped, prune(d)) if x)
+        line = "; ".join(x for x in (reaped, dropped, prune(d)) if x)
         if line:
             print(f"pi-run: {sid}: {line}", file=sys.stderr)
             with open(os.path.join(d, "run.log"), "a") as fh:
@@ -738,15 +761,17 @@ def prune_collected():
     failed = 0
     for sid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         d = os.path.join(root, sid)
-        if not ID.fullmatch(sid) or os.path.islink(d) or not os.path.isfile(os.path.join(d, "run.json")) or not build_dirs(d):
+        if not ID.fullmatch(sid) or os.path.islink(d) or not os.path.isfile(os.path.join(d, "run.json")):
             continue
         with Run(d) as r:
-            if (r.run or {}).get("state") != "collected":
+            tmp = (r.run or {}).get("pytest_root")
+            if (r.run or {}).get("state") != "collected" or not (build_dirs(d) or tmp and os.path.lexists(tmp)):
                 continue
-            line = prune(d)
+            parts = [x for x in (drop_pytest_root(tmp), prune(d)) if x]
+            line = "; ".join(parts)
             with open(os.path.join(d, "run.log"), "a") as fh:
                 fh.write(f"pi-run prune: {line}\n")
-        failed |= line.startswith("prune failed")
+        failed |= any(x.startswith("prune failed") or x.endswith("not fully removed") for x in parts)
         print(f"{sid}\t{line}")
     return failed
 

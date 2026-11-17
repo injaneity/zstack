@@ -33,6 +33,10 @@ echo "$ONIGIRI_READY_ALLOWED" > "$T/ready"
 ONIGIRI_WAKE_DRY=1 "$ONIGIRI_WAKE" blocked "need a key" pr=9 > "$T/session-wake" 2>/dev/null
 /usr/bin/python3 -c 'import signal; print(signal.getsignal(signal.SIGINT) == signal.SIG_IGN)' > "$T/int-ignored"
 echo $$ > "$T/pi-pid"
+if [ -e "$T/pytest" ]; then
+  printf '%s\n' "$PYTEST_DEBUG_TEMPROOT" "$PYTEST_ADDOPTS" > "$T/pytest-env"
+  mkdir -p "$PYTEST_DEBUG_TEMPROOT/pytest-of-x/pytest-0" && head -c 4096 /dev/zero > "$PYTEST_DEBUG_TEMPROOT/pytest-of-x/pytest-0/blob"
+fi
 [ -e "$T/say" ] && cat "$T/say"
 if [ -e "$T/daemons" ]; then
   "$T/bin/cua-driver" serve --socket "$T/own.sock" & echo $! > "$T/own-pid"
@@ -538,6 +542,60 @@ class Launcher(unittest.TestCase):
         self.assertTrue(live("other"))
         self.assertIn("stopped the cua-driver daemon(s) the run left serving a private socket", r.stderr)
 
+    def pytest_run(self, sid, **kw):
+        (self.t / "pytest").touch()
+        tmp = self.t / "tmp"
+        tmp.mkdir(exist_ok=True)
+        (tmp / "pytest-of-box").mkdir(exist_ok=True)
+        (self.t / "pytest-env").unlink(missing_ok=True)
+        self.start(sid, TMPDIR=str(tmp), PYTEST_ADDOPTS="-x", **kw)
+        self.assertTrue(wait_for(lambda: (self.t / "pytest-env").exists()))
+        root, opts = (self.t / "pytest-env").read_text().splitlines()
+        self.assertEqual(root, str(tmp / "pi-run-pytest" / sid))
+        self.assertEqual(self.run_json(sid)["pytest_root"], root)
+        self.assertEqual(opts, "-x -o tmp_path_retention_policy=failed -o tmp_path_retention_count=1")
+        return tmp, Path(root)
+
+    def test_a_runs_pytest_temp_root_is_its_own_and_goes_when_it_ends_pass_or_fail(self):
+        for sid, rc in (("pyt-ok", 0), ("pyt-bad", 1), ("of-box", 0)):
+            tmp, root = self.pytest_run(sid, rc=rc)
+            self.assertEqual(self.finished(sid)["rc"], rc)
+            self.assertFalse(root.exists())
+            self.assertTrue((tmp / "pytest-of-box").is_dir())
+            self.assertIn("pi-run: removed the run's pytest temp root (0.0 GB)\n", self.log(sid))
+
+    def test_a_lost_runs_collect_removes_its_pytest_temp_root(self):
+        sid = "pyt-lost"
+        tmp, root = self.pytest_run(sid, hang=True)
+        self.assertTrue(wait_for(lambda: (root / "pytest-of-x" / "pytest-0" / "blob").exists()))
+        os.killpg(self.run_json(sid)["pid"], signal.SIGKILL)
+        self.assertTrue(wait_for(lambda: self.pi_run("list").stdout == f"{sid} lost attempt=1 rc=None\n"))
+        self.assertTrue(root.exists())
+        r = self.pi_run("collect", sid, TMPDIR=str(self.t / "elsewhere"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(root.exists())
+        self.assertIn("removed the run's pytest temp root", r.stderr)
+
+    def test_prune_removes_a_pytest_temp_root_a_collected_run_left(self):
+        tmp, root = self.pytest_run("pyt-left")
+        self.finished("pyt-left")
+        self.pi_run("collect", "pyt-left")
+        (root / "late").mkdir(parents=True)
+        live, live_root = self.pytest_run("pyt-live", hang=True)
+        r = self.pi_run("prune")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "pyt-left\tremoved the run's pytest temp root (0.0 GB)\n")
+        self.assertFalse(root.exists())
+        self.assertTrue(live_root.exists())
+        self.assertEqual(self.pi_run("prune").stdout, "")
+        (root / "stuck" / "x").mkdir(parents=True)
+        (root / "stuck").chmod(0o555)
+        self.addCleanup((root / "stuck").chmod, 0o755)
+        r = self.pi_run("prune")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("not fully removed", r.stdout)
+        self.assertTrue(r.stdout.startswith("pyt-left\tpytest temp root "), r.stdout)
+
     def test_term_to_the_supervisor_reaches_pi_and_is_recorded(self):
         self.start("term", hang=True)
         wait_for(lambda: (self.t / "pi-pid").exists())
@@ -685,6 +743,7 @@ class Launcher(unittest.TestCase):
         (self.t / "w.md").write_text("task\nwake: finish\n")
         (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: "
                                     "This request would exceed your account's rate limit. Please try again later.)\n")
+        (self.t / "pytest").touch()
         self.start("lim", rc=1, brief="w.md")
         self.assertTrue(wait_for(lambda: (self.run_json("lim") or {}).get("state") == "queued"), self.run_json("lim"))
         run = self.run_json("lim")
@@ -700,7 +759,9 @@ class Launcher(unittest.TestCase):
         (self.t / "say").unlink()
         (self.t / "rc").write_text("0")
         brief = (self.t / "root/review/lim/brief.full.md").read_text()
-        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1")
+        first = Path(self.run_json("lim")["pytest_root"])
+        self.assertTrue(first.is_dir())
+        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1", TMPDIR=str(self.t / "moved"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("resumed lim attempt 1", r.stdout)
         run = self.finished("lim")
@@ -712,6 +773,19 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "drain").read_text().strip(), "unset")
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
+        self.assertEqual(run["pytest_root"], str(first))
+        self.assertEqual((self.t / "pytest-env").read_text().splitlines()[0], str(first))
+        self.assertFalse(first.exists())
+        self.assertFalse((self.t / "moved").exists())
+        legacy = self.t / "root/review/lim/run.json"
+        legacy.write_text(json.dumps({**{k: v for k, v in self.run_json("lim").items() if k != "pytest_root"},
+                                      "state": "queued", "resume_at": "2026-01-01T00:00:00Z"}))
+        (self.t / "hang").touch()
+        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1", TMPDIR=str(self.t / "moved"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.run_json("lim")["pytest_root"], str(self.t / "moved" / "pi-run-pytest" / "lim"))
+        (self.t / "hang").unlink()
+        self.finished("lim")
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
