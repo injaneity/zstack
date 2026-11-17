@@ -412,10 +412,10 @@ def pytest_root(env, sid):
     return os.path.join(env.get("TMPDIR") or "/tmp", "pi-run-pytest", sid)
 
 
-def pytest_env(env, sid):
+def pytest_env(env, sid, root=None):
     keep = "-o tmp_path_retention_policy=failed -o tmp_path_retention_count=1"
     opts = " ".join(x for x in (env.get("PYTEST_ADDOPTS", ""), keep) if x)
-    return {"PYTEST_DEBUG_TEMPROOT": pytest_root(env, sid), "PYTEST_ADDOPTS": opts}
+    return {"PYTEST_DEBUG_TEMPROOT": root or pytest_root(env, sid), "PYTEST_ADDOPTS": opts}
 
 
 def drop_pytest_root(root):
@@ -582,7 +582,7 @@ def launch(sid, role, brief, extra):
     env.pop("PI_RUN_DRAIN", None)
     env.pop("PI_RUN_COUNTED", None)
     env.update(ONIGIRI_WAKE=WAKE, PI_SESSION_ID=sid, ONIGIRI_READY_ALLOWED="1" if "merge: allowed" in brief_text.splitlines() else "0",
-               **pytest_env(env, sid))
+               **pytest_env(env, sid, cont and run.get("pytest_root")))
     cmd = ["pi", "--session-id", sid, "--provider", provider, "--model", model, "--name", f"role:{role}",
            "--append-system-prompt", os.path.join(d, "rules.md"), *extra, "-p", "--", text]
     os.makedirs(d, exist_ok=True)
@@ -607,11 +607,7 @@ def launch(sid, role, brief, extra):
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
                    pool=pool, **f)
-        old = (r.run or {}).get("pytest_root")
-        if old and old != env["PYTEST_DEBUG_TEMPROOT"]:
-            drop_pytest_root(old)
-        new = {**new, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]}
-        r.write(new if cont else {**new, "role": role, "extra": extra})
+        r.write(new if cont else {**new, "role": role, "extra": extra, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]})
     gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0

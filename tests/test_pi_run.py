@@ -743,6 +743,7 @@ class Launcher(unittest.TestCase):
         (self.t / "w.md").write_text("task\nwake: finish\n")
         (self.t / "say").write_text("Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: "
                                     "This request would exceed your account's rate limit. Please try again later.)\n")
+        (self.t / "pytest").touch()
         self.start("lim", rc=1, brief="w.md")
         self.assertTrue(wait_for(lambda: (self.run_json("lim") or {}).get("state") == "queued"), self.run_json("lim"))
         run = self.run_json("lim")
@@ -772,8 +773,10 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "drain").read_text().strip(), "unset")
         self.assertEqual((self.t / "root/review/lim/brief.full.md").read_text(), brief)
         self.assertEqual(self.log("lim").count('{"kind": "done"'), 1)
-        self.assertEqual(run["pytest_root"], str(self.t / "moved" / "pi-run-pytest" / "lim"))
+        self.assertEqual(run["pytest_root"], str(first))
+        self.assertEqual((self.t / "pytest-env").read_text().splitlines()[0], str(first))
         self.assertFalse(first.exists())
+        self.assertFalse((self.t / "moved").exists())
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
