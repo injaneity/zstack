@@ -1,10 +1,14 @@
 import importlib.machinery
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import unittest
 from pathlib import Path
+
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
 
 PKG = Path(__file__).resolve().parent.parent
 _l = importlib.machinery.SourceFileLoader("policy_under_test", str(PKG / "bin" / "policy"))
@@ -12,8 +16,7 @@ policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name
 _l.exec_module(policy)
 POLICY, RULES, STATE = policy.load(), policy.rules(), policy.state()
 
-VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/",
-            "skills/cua/")
+VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/")
 
 
 def tracked(*globs):
@@ -26,10 +29,18 @@ def prose():
             if not f.startswith(VERBATIM)]
 
 
-def restated(text, pol):
+def code():
+    return [f for f in tracked("bin/*", "services/*", "dispatch/*", "extensions/**/*.ts", "hooks/*")
+            if not f.endswith(".md") and f != "bin/policy"]
+
+
+def restated(text, pol, repo=False):
     hits = []
-    words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]],
-             "merge.gate_check": [pol["merge"]["gate_check"]], "patent.private_repo": [pol["patent"]["private_repo"]]}
+    words = {"patent.held_words": pol["patent"]["held_words"], "people.me": [pol["people"]["me"]], "people.owner": [pol["people"]["owner"]],
+             "merge.gate_check": [pol["merge"]["gate_check"]],
+             "patent.private_repo": [pol["patent"]["private_repo"]]}
+    if repo:
+        words["merge.repo"] = [pol["merge"]["repo"]]
     for v in pol["models"].values():
         for s in v if isinstance(v, list) else [v]:
             words.setdefault("models", []).append(s["model"])
@@ -37,19 +48,9 @@ def restated(text, pol):
         for v in vals:
             for m in re.finditer(rf"(?<![\w/.-]){re.escape(v)}(?![\w/-])", text, re.I):
                 hits.append((key, m.group(0)))
-    h, s, p = pol["hourly"], pol["slots"], pol["pickup"]
     numbers = {
-        "hourly.floor_gb": rf"\b{h['floor_gb']} ?G(B|iB)?\b",
         "run.idle_min": rf"\b({pol['run']['idle_min']} ?min(ute)?s?|{pol['run']['idle_min'] / 60:g} ?h(ours?)?)\b",
-        "hourly.merge_stale_min": rf"\b{h['merge_stale_min']} ?min(ute)?s?\b",
-        "hourly.batch_hour": rf"\b0?{h['batch_hour']}:00 SGT\b",
-        "hourly.file_cap": rf"\bat most {h['file_cap']}\b",
-        "hourly.lume_prune_age_h": rf"\b{h['lume_prune_age_h']} ?h(ours?)?\b",
-        "slots.auto": rf"\b{s['auto']} (auto )?slots?\b",
-        "slots.hand": rf"\b{s['hand']} hand\b",
         "ci.fix_attempts": rf"\b{pol['ci']['fix_attempts']} (fix )?attempts\b",
-        "pickup.interval_s": rf"\b({p['interval_s']} ?s|{p['interval_s'] // 60} ?min(ute)?s?)\b",
-        "pickup.deadline_s": rf"\b({p['deadline_s']} ?s|{p['deadline_s'] // 60} ?min(ute)?s?)\b",
     }
     for key, rx in numbers.items():
         hits += [(key, m.group(0)) for m in re.finditer(rx, text)]
@@ -57,7 +58,7 @@ def restated(text, pol):
 
 
 class Rules(unittest.TestCase):
-    def test_the_rules_have_one_home_and_bin_pi_run_appends_their_rendering(self):
+    def test_the_rules_have_one_home_and_render_under_one_heading(self):
         self.assertFalse((PKG / "skills" / "onigiri-mode" / "hard-rules.md").exists())
         md = policy.render(RULES)
         self.assertTrue(md.startswith("## Hard rules\n\n"))
@@ -78,34 +79,61 @@ class Rules(unittest.TestCase):
             for rid in re.findall(r"^\{\{rule ([a-z-]+)\}\}$", (PKG / f).read_text(), re.M):
                 self.assertIn(rid, ids, f)
 
-    def test_the_12_nov_retro_lines_are_rules_word_for_word(self):
-        md = policy.render(RULES)
-        for line in ("When Zane names a priority, a hand-pool brief serving it takes the next free slot in either pool.",
-                     "Delete stopped `cua-e2e-*` lume VMs older than 24h whose run is collected; never a running VM or a seed."):
-            self.assertIn(line[:-1], md)
+    def test_a_coding_session_gets_every_rule_but_the_orchestrators_and_no_one_reads_who_said_it(self):
+        full, thread = policy.render(RULES), policy.render(RULES, thread=True)
+        marked = [r for s in RULES["section"] for r in s["rule"] if r.get("for")]
+        self.assertTrue(marked)
+        for r in marked:
+            self.assertIn(r["text"], full)
+            self.assertNotIn(r["text"], thread)
+        self.assertEqual(len(full.splitlines()) - len(thread.splitlines()), len(marked))
+        for r in (r for s in RULES["section"] for r in s["rule"] if r.get("source")):
+            self.assertNotIn(r["source"], full)
+        self.assertIsNone(re.search(r"\(Robin, \d", full))
+        bad = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": "t", "for": "everyone"}]}]}
+        with self.assertRaisesRegex(policy.PolicyError, "for is"):
+            policy.validate_rules(bad, POLICY)
 
     def test_render_of_named_rules_is_one_bullet_each_in_order(self):
         self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",
-                          "- The patent hold decides only which repo a change is pushed to. Work on pairing, Teleport and Keyvault normally."])
+                          "- The patent hold decides only which repo a change is pushed to. Work on skyhook, vaultkey and sealing normally."])
         with self.assertRaisesRegex(policy.PolicyError, "no rule nope"):
             policy.render(RULES, ["nope"])
 
-    def test_a_patent_or_risk_rule_that_drifts_from_policy_is_refused(self):
-        def bad(rid, old, new):
-            data = json.loads(json.dumps(RULES))
-            r = next(r for s in data["section"] for r in s["rule"] if r["id"] == rid)
-            self.assertIn(old, r["text"])
-            r["text"] = r["text"].replace(old, new)
-            return data
-        for rid, old, new, why in (("issue-close", "`trycua/cua`", "`trycua/other`", "`trycua/cua`"),
-                                   ("salvage-fixes", "`Fixes #<issue>`", "`Closes #<issue>`", "`Fixes #<issue>`"),
-                                   ("patent-repo", "`trycua/cua-staging`", "`trycua/other`", "trycua/cua-staging"),
-                                   ("patent-scope", "Keyvault", "Vault", "keyvault"),
-                                   ("merge-risk", "light|standard|deep|human", "light|deep|human", "light|standard|deep|human"),
-                                   ("lume-prune", "older than 24h", "older than 48h", "older than 24h")):
-            with self.subTest(rid=rid), self.assertRaisesRegex(policy.PolicyError, re.escape(why)):
-                policy.validate_rules(bad(rid, old, new), POLICY)
+    def test_a_rule_names_config_keys_and_the_reader_fills_them_in(self):
+        raw = (PKG / "config" / "rules.toml").read_text()
+        body = "\n".join(x for x in raw.splitlines() if not x.startswith("#"))
+        self.assertEqual([f"{t!r} restates {k}" for k, t in restated(body, POLICY, repo=True)], [])
+        for value in (POLICY["host"]["clone"], POLICY["host"]["holds"]):
+            self.assertNotIn(value, body)
+            self.assertIn(value, policy.render(RULES))
+        full = policy.render(RULES)
+        self.assertNotIn("{", full)
+        for want in ("labelled `needs-review`, waits for Robin", "an issue labelled preapproved, a task", "`Salvaged from #<pr>`", "`Fixes #<issue>`",
+                     "touches skyhook, vaultkey or sealing is", "(only real failures go to Robin)"):
+            self.assertIn(want, full)
+        pol = json.loads(json.dumps(POLICY))
+        pol["merge"].update(review_label="stop", preapproved_labels=["go", "ship"])
+        pol["people"]["owner"], pol["patent"]["held_words"] = "Sam", ["vault"]
+        got = policy.render(policy.validate_rules(policy.read(policy.RULES), pol))
+        for want in ("labelled `stop`", "labelled go or ship,", "without Sam's explicit ok", "Work on vault normally."):
+            self.assertIn(want, got)
+
+    def test_a_brace_that_names_no_key_is_refused(self):
+        for text, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.preapproved_labels}", "needs a joiner"),
+                          ("see {merge.repo:or}", "not one value"), ("see {merge}", "names no config"),
+                          ("a } b", "names no config")):
+            data = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": text}]}]}
+            with self.subTest(text=text), self.assertRaisesRegex(policy.PolicyError, why):
+                policy.validate_rules(data, POLICY)
+
+    def test_merging_is_one_rule_per_job(self):
+        ids = [r["id"] for s in RULES["section"] if s["title"] == "Merging" for r in s["rule"]]
+        self.assertEqual(ids[:5], ["merge-tick", "merge-reruns", "merge-fork-runs", "merge-reverts", "merge-closes"])
+        self.assertEqual(policy.render(RULES, ["merge-closes"]), "- Close only one of our own PRs that main or another PR has replaced.\n")
+
+    def test_a_duplicate_id_is_refused(self):
         dup = json.loads(json.dumps(RULES))
         dup["section"][0]["rule"].append(dict(dup["section"][0]["rule"][0]))
         with self.assertRaisesRegex(policy.PolicyError, "two rules have the id work-path"):
@@ -115,32 +143,86 @@ class Rules(unittest.TestCase):
 class NoRestatedValues(unittest.TestCase):
     def test_skills_name_config_keys_instead_of_values(self):
         found = [f"{f}: {t!r} restates {k}" for f in prose() for k, t in restated((PKG / f).read_text(), POLICY)]
-        self.assertEqual(found, [], "name the config/policy.toml key instead of its value")
+        self.assertEqual(found, [], "name the the config key instead of its value")
+
+    def test_code_reads_config_keys_instead_of_values(self):
+        found = [f"{f}: {t!r} restates {k}" for f in code() for k, t in restated((PKG / f).read_text(), POLICY, repo=True)]
+        self.assertEqual(found, [], "read the value from the config (bin/policy) instead of writing it again")
+
+    def test_the_code_check_catches_what_the_code_said_before(self):
+        old = {'"Your PR acme/app#{pr} is red at {head}"': "merge.repo", 'notes.append("ci-gate SUCCESS")': "merge.gate_check",
+               "the diff touches sealing, Skyhook or Vaultkey": "patent.held_words"}
+        for line, key in old.items():
+            with self.subTest(line=line):
+                self.assertIn(key, [k for k, _ in restated(line, POLICY, repo=True)])
 
     def test_the_check_catches_what_the_playbook_said_before(self):
-        old = {"it has at least 20G free": "hourly.floor_gb", "no progress for 2.5h": "run.idle_min",
-               "(none in the last 55 minutes": "hourly.merge_stale_min", "The first pass after 08:00 SGT": "hourly.batch_hour",
-               "at most 10 a pass": "hourly.file_cap", "lume VMs older than 24h": "hourly.lume_prune_age_h",
-               "we should have 3 slots for autopickup and up to 5 hand started work": "slots.auto",
-               "issues assigned to injaneity": "people.me", "green ci-gate at a stable head": "merge.gate_check",
-               "Work on pairing, Teleport and Keyvault normally": "patent.held_words"}
+        old = {"no progress for 2.5h": "run.idle_min",
+               "issues assigned to octo": "people.me", "green ci-gate at a stable head": "merge.gate_check",
+               "only real failures go to Robin": "people.owner",
+               "Work on sealing, Skyhook and Vaultkey normally": "patent.held_words"}
         for line, key in old.items():
             with self.subTest(line=line):
                 self.assertIn(key, [k for k, _ in restated(line, POLICY)])
 
     def test_dates_times_and_step_numbers_are_not_values(self):
-        for line in ("Zane, 12 Nov 12:47 SGT", "steps 0 to 5", "8. **Merge", "the 11 Nov retro", "`cua-<n>-review-<head7>`",
-                     "(Zane, 10 Nov 19:13)", "repairing"):
+        for line in ("12 Nov 12:47 SGT", "steps 0 to 5", "8. **Merge", "the 11 Nov retro", "`app-<n>-review-<head7>`", "resealing"):
             self.assertEqual(restated(line, POLICY), [], line)
+
+
+class Harness(unittest.TestCase):
+    PI = re.compile(r"@earendil-works/|pi-coding-agent")
+    CLAUDE = re.compile(r"CLAUDE_PLUGIN_ROOT|tool_name|tool_input")
+    PI_ADAPTERS = ("extensions/rule-guard/index.ts", "extensions/tool-guard/index.ts", "extensions/subagent/")
+    CLAUDE_ADAPTERS = ("hooks/", ".claude-plugin/")
+
+    def test_only_an_adapter_names_its_harness(self):
+        wrong = []
+        for f in tracked("bin/*", "services/*", "dispatch/*", "extensions/**/*.ts", "hooks/*", "config/*", ".claude-plugin/*"):
+            text = (PKG / f).read_text()
+            if self.PI.search(text) and not f.startswith(self.PI_ADAPTERS):
+                wrong.append(f"{f} imports pi, and is not a pi adapter")
+            if self.CLAUDE.search(text) and not f.startswith(self.CLAUDE_ADAPTERS):
+                wrong.append(f"{f} names Claude Code's hook input, and is not a Claude Code adapter")
+        self.assertEqual(wrong, [])
+
+    def test_each_adapter_calls_the_one_guard(self):
+        for f in ("extensions/rule-guard/index.ts", "hooks/guard.ts"):
+            text = (PKG / f).read_text()
+            self.assertIn("rule-guard/host.ts", text.replace('"./host.ts"', '"rule-guard/host.ts"'), f)
+            self.assertNotIn("checkBash", text, f)
+
+
+class Parts(unittest.TestCase):
+    STACK = ("extensions/", "hooks/", ".claude-plugin/", "bin/policy", "package.json")
+    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b)[a-z][\w-]*|services/|dispatch/|patent_push|wake\.py")
+
+    def test_the_stack_names_no_orchestrator_or_service_file(self):
+        wrong = [f"{f}: {m.group(0)}" for f in tracked("extensions/**/*.ts", "hooks/*", ".claude-plugin/*", "bin/policy", "package.json")
+                 for m in self.OTHERS.finditer((PKG / f).read_text())]
+        self.assertEqual(wrong, [], "a coding thread's code reaches the rest only through bin/policy")
+
+    def test_both_manifests_load_only_the_stack(self):
+        pi = json.loads((PKG / "package.json").read_text())["pi"]
+        paths = [x for v in pi.values() for x in v]
+        self.assertTrue(all(x.startswith(("./extensions/", "./skills", "./prompts")) for x in paths), paths)
+        plugin = json.loads((PKG / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual(set(plugin), {"name", "version", "description"})
+        hooks = (PKG / "hooks" / "hooks.json").read_text()
+        self.assertEqual(sorted(set(re.findall(r"CLAUDE_PLUGIN_ROOT\}/([\w./-]+)", hooks))), ["bin/policy", "hooks/guard.ts"])
+
+    def test_the_check_catches_a_stack_file_that_names_the_launcher(self):
+        self.assertTrue(self.OTHERS.search('path.join(PKG, "bin/launch")'))
+        self.assertTrue(self.OTHERS.search("services/wake.py"))
+        self.assertFalse(self.OTHERS.search("python3 bin/policy rules; bin/hold-row add"))
 
 
 class StateFiles(unittest.TestCase):
     JOIN = re.compile(r"os\.path\.join\((?!PKG\b)[^()]*?(?:\([^()]*\))?[^()]*?"
                       r"\"([\w.-]+\.(?:json|log|txt|md|lock)|[A-Z]+|pushed|last-run|auto-pause)\"\)")
     FSTR = re.compile(r"f\"\{(?:ROOT|DIR|root|d)\}/([\w.-]+)\"")
-    DIRS = {"tick", "review", "pickup", "sync"}
-    CODE = ("bin/pi-run", "bin/hourly", "bin/pickup", "bin/hold-row", "bin/check-host", "hosts/vm/merge_job.py",
-            "hosts/vm/patent_push.py", "hosts/mini/sync-from-vm.sh", "hosts/vm/cron-wrap.sh")
+    DIRS = {"tick"}
+    CODE = ("bin/hold-row", "bin/queue", "services/holds.py", "services/patent_push.py")
 
     def test_every_state_file_the_code_opens_is_declared(self):
         declared = {Path(f["path"]).name for f in STATE["file"].values()}
@@ -158,7 +240,7 @@ class StateFiles(unittest.TestCase):
             name = Path(f["path"]).name
             for who in [f["writer"], *f["readers"]]:
                 p = PKG / who.split()[0]
-                if who.split()[0].startswith(("bin/", "hosts/", "extensions/")):
+                if who.split()[0].startswith(("bin/", "services/", "dispatch/", "extensions/")):
                     if not p.is_file():
                         wrong.append(f"{key}: {who} does not exist")
                     elif name not in p.read_text():
@@ -178,10 +260,10 @@ class NoVerifiedComment(unittest.TestCase):
         rx = re.compile(r"verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
         rendered = policy.render(RULES)
         hits = [f"config/rules.toml: {m.group(0)}" for m in rx.finditer(rendered)]
-        for f in [*prose(), "bin/new-brief", "bin/pi-run", "bin/pickup", "bin/hourly", "README.md", "docs/SUBAGENT.md"]:
+        for f in [*prose(), "README.md", "docs/SUBAGENT.md"]:
             hits += [f"{f}: {m.group(0)}" for m in rx.finditer((PKG / f).read_text())]
         self.assertEqual(hits, [])
-        self.assertIn("run report", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
+        self.assertIn("bin/queue ready", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
 
 
 if __name__ == "__main__":

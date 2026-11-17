@@ -4,7 +4,6 @@ import importlib.util
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from datetime import datetime
@@ -15,7 +14,7 @@ USAGE = (
     "  hold-row replace '<row as it stands in the file>' '<new row>'"
 )
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-_spec = importlib.util.spec_from_file_location("merge_job", os.path.join(PKG, "hosts", "vm", "merge_job.py"))
+_spec = importlib.util.spec_from_file_location("holds", os.path.join(PKG, "services", "holds.py"))
 mj = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mj)
 
@@ -35,7 +34,7 @@ def check_row(row):
     if len(f) < 3 or not all(f[:2]) or row.lstrip().startswith("#"):
         return "a row is `kind | target | rules | ... | source`"
     if not source_ok(f[-1]):
-        return f"the last column must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {f[-1]!r}"
+        return f"the last column must name {mj.PERSON}'s call and its time (e.g. `{mj.PERSON} 11 Nov 14:56 SGT`), not {f[-1]!r}"
     return None
 
 
@@ -50,7 +49,7 @@ def replace(holds, text):
 
 
 def source_ok(src):
-    return bool(re.search(r"\bZane\b", src)) and bool(WHEN.search(src))
+    return bool(re.search(rf"\b{re.escape(mj.PERSON)}\b", src)) and bool(WHEN.search(src))
 
 
 def edit(holds, change):
@@ -70,7 +69,7 @@ def edit(holds, change):
         try:
             mj.parse_holds(new)
         except ValueError as e:
-            refuse(f"the merge job's parser rejects the result ({e}); nothing written")
+            refuse(f"the holds parser rejects the result ({e}); nothing written")
         backup = f"{holds}.bak-{datetime.now(mj.SGT).strftime('%Y%m%d-%H%M%S-%f')}"
         shutil.copy2(holds, backup)
         replace(holds, new)
@@ -78,7 +77,7 @@ def edit(holds, change):
             mj.parse_holds(mj.read(holds))
         except ValueError as e:
             replace(holds, mj.read(backup))
-            refuse(f"the merge job's parser rejects the result ({e}); restored {backup}")
+            refuse(f"the holds parser rejects the result ({e}); restored {backup}")
         print(f"{msg}\nbackup: {backup}")
 
 
@@ -100,7 +99,7 @@ def retire(old_row, source, holds, new_row=None):
         refuse("name the row to retire exactly as it stands in the file, one line")
     old_row = old_row.strip()
     if source.splitlines() != [source] or not source_ok(source):
-        refuse(f"the source must name Zane's call and its time (e.g. `Zane 11 Nov 14:56 SGT`), not {source!r}")
+        refuse(f"the source must name {mj.PERSON}'s call and its time (e.g. `{mj.PERSON} 11 Nov 14:56 SGT`), not {source!r}")
     if new_row is not None:
         why = check_row(new_row)
         if why:
@@ -142,6 +141,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sha = subprocess.run(["git", "-C", PKG, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    print(f"zstack {sha or 'unknown'}", file=sys.stderr)
+    print(f"zstack {mj.sha()}", file=sys.stderr)
     main(sys.argv[1:])

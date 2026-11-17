@@ -1,7 +1,9 @@
-# zane's coding setup
+# zstack
 
-zstack is pstack trimmed for pi. For any non-trivial coding task, read the **onigiri-mode** skill first and follow its routing table.
+For any non-trivial coding task, read the **onigiri-mode** skill first.
 
-Do the work in the main session, in verifiable units. Use subagents only at the steps onigiri-mode's Subagents section names.
+Do the work in the main thread, in verifiable units. Use delegates only at the steps onigiri-mode's Subagents section names.
 
-A change to `bin/hourly`'s pass or the hourly playbook's steps 0 to 5 changes `model/Hourly.tla` to match in the same PR, with a mutant in `model/hourly_mutants.py` for the bug it fixes, so the fix is model-checked (`tests/hourly-model.sh`). The same goes for `bin/PiRun.tla` and `model/Zstack.tla` and the code they model.
+A change to `bin/queue`'s steps or the dispatcher's pass changes `model/Queue.tla` to match in the same change, with a mutant in `model/queue_mutants.py` for the bug it fixes, so the fix is model-checked (`tests/queue-model.sh`).
+
+The stack (`skills/`, `agents/`, `extensions/`, `hooks/`, `bin/policy`) names no repo, person or machine. Such a value is a key in the config, and prose names the key.

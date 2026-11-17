@@ -10,7 +10,7 @@ Read the code the goal touches, read-only. Never edit, write, install, commit, p
 
 Your plan has to fit the rules the builder ships under:
 {{rule patent-scope}}
-- No invented limits: a restriction must trace to Zane's words or the session's Hard rules. If you think one is needed, put it under questions: instead of applying it.
+- No invented limits: a restriction must trace to the owner's words or the session's Hard rules. If you think one is needed, put it under questions: instead of applying it.
 
 Write a plan of at most 40 lines:
 1. The shape: types, data structures and module boundaries before logic. Prefer deleting to adding.

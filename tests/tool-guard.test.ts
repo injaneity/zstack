@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { boundBash, idleSeconds } from "../extensions/tool-guard/index.ts";
 
+for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
+
 const root = new URL("..", import.meta.url).pathname;
 
 test("a bash call with no timeout gets run.idle_min less the supervisor's minute; a declared one is kept", () => {

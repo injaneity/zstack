@@ -11,7 +11,10 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-VM = Path(__file__).resolve().parent.parent / "hosts" / "vm"
+for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
+    os.environ.pop(_k, None)
+
+VM = Path(__file__).resolve().parent.parent / "services"
 spec = importlib.util.spec_from_file_location("wake_under_test", VM / "wake.py")
 wake = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wake)
@@ -62,15 +65,15 @@ class Wake(unittest.TestCase):
     def test_blocked_and_failed_post_the_message_pr_and_session(self):
         self.key.write_text("sekrit\n")
         with self.urlopen(None, None):
-            code, out, err = run("blocked", "need a key on the mini", "pr=31", env={"PI_SESSION_ID": "cua-1"})
-            run("failed", "cua-2 exited rc=3", env={"PI_SESSION_ID": "cua-2"})
+            code, out, err = run("blocked", "need a key on this machine", "pr=31", env={"PI_SESSION_ID": "app-1"})
+            run("failed", "app-2 exited rc=3", env={"PI_SESSION_ID": "app-2"})
         self.assertEqual(code, 0)
         auth, body, timeout = self.sent[0]
         self.assertEqual(auth, "Bearer sekrit")
         self.assertLessEqual(timeout, 10)
         self.assertEqual({k: body[k] for k in ("kind", "reason", "id", "pr", "source")},
-                         {"kind": "blocked", "reason": "need a key on the mini", "id": "cua-1", "pr": 31, "source": "pi"})
-        self.assertEqual((self.sent[1][1]["kind"], self.sent[1][1]["id"], self.sent[1][1]["pr"]), ("failed", "cua-2", None))
+                         {"kind": "blocked", "reason": "need a key on this machine", "id": "app-1", "pr": 31, "source": "pi"})
+        self.assertEqual((self.sent[1][1]["kind"], self.sent[1][1]["id"], self.sent[1][1]["pr"]), ("failed", "app-2", None))
         self.assertEqual(err.strip().splitlines()[-1], "wake: blocked webhook sent (200)")
         self.assertNotIn("sekrit", out + err)
 

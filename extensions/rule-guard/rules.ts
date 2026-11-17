@@ -6,17 +6,9 @@ export type Owned = ReadonlySet<string> | null;
 
 export function mergeOwned(dump: () => string): Owned {
 	try {
-		const repo = JSON.parse(dump())?.merge?.repo;
-		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
-	} catch {
-		return null;
-	}
-}
-
-export function issuesOwned(dump: () => string): Owned {
-	try {
-		const repo = JSON.parse(dump())?.issues?.repo;
-		return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo) ? new Set([repo.toLowerCase()]) : null;
+		const all = JSON.parse(dump())?.repos;
+		const ok = Array.isArray(all) && all.length > 0 && all.every((r) => typeof r === "string" && /^[^/\s]+\/[^/\s]+$/.test(r));
+		return ok ? new Set(all.map((r: string) => r.toLowerCase())) : null;
 	} catch {
 		return null;
 	}
@@ -32,6 +24,7 @@ export interface Host {
 	ghRepo?: string;
 	authorOf?(repo: string, n: number): string | undefined;
 	reviewOnly?(): ReadonlySet<string> | null;
+	readText?(file: string, dir: string | undefined): string | undefined;
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
@@ -48,7 +41,7 @@ export function reviewOnlyLogins(texts: (string | undefined)[]): ReadonlySet<str
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
-const HOLDS_WAY = "Only Zane edits hold-prs.txt (Hard rules, Work). To relay his explicit call, use `bin/hold-row add '<row>; Zane <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
+const HOLDS_WAY = "Only the owner edits hold-prs.txt (Hard rules, Work). To relay the owner's explicit call, use `bin/hold-row add '<row>; <owner> <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
 
 function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
 	const named = fold(base(w)) === HOLDS;
@@ -189,7 +182,7 @@ function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string 
 function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
 	const w = c.words;
 	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
-	const who = owned ? `${[...owned].join(", ")} is merged only by its merge job` : "the repo the merge job owns is unknown (bin/policy dump failed)";
+	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (bin/policy dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
@@ -204,11 +197,27 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${who}`;
 	const hit = repos.find((r) => owned.has(r as string));
-	return hit ? `${act} in ${hit}: the merge job is its only merger (Hard rules, Merging)` : undefined;
+	return hit ? `${act} in ${hit}: a PR there merges itself once it is verified, or the owner merges it (Hard rules, Merging)` : undefined;
+}
+
+const QUEUE_OPEN = new Set(["ready", "raise", "list", "next"]);
+
+function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
+	const at = cwd === undefined ? undefined : host.repoAt(cwd);
+	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
+	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
+	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && !QUEUE_OPEN.has(w[i + 1]))
+		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue ready <id> <pr>\` or \`queue raise <id>\``;
+	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
+		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
+	return undefined;
 }
 
 const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const CLOSE_WAY = "Close a trycua/cua issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: `gh issue close <n> -R trycua/cua --comment \"Fixed by #<pr>.\"` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.";
+const closeWay = (issues: Owned) => {
+	const repo = issues ? [...issues][0] : undefined;
+	return `Close ${repo ? `a ${repo}` : "an"} issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: \`gh issue close <n>${repo ? ` -R ${repo}` : ""} --comment "Fixed by #<pr>."\` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.`;
+};
 
 function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	const w = c.words;
@@ -247,6 +256,39 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown)`;
 	const hit = repos.find((r) => issues.has(r as string));
 	return hit ? `${act} in ${hit}` : undefined;
+}
+
+const TITLE = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()\s][^()]*\))?!?: \S/;
+const LOCAL_PATH = /(^|[\s`'"(=])(\/home\/|\/Users\/)[\w.-]+\//;
+const TEXT_WAY = "Fix the title or body and run it again (Hard rules, Commits and PR text; Merging: merge-no-verify-lines).";
+
+export function prTextProblems(title: string | undefined, body: string | undefined): string[] {
+	const out: string[] = [];
+	if (title !== undefined && !title.startsWith("$") && !TITLE.test(title)) out.push("a PR title that is not Conventional Commit syntax (`fix(scope): …`)");
+	if (body === undefined) return out;
+	if (/^verify(-ran)?:/m.test(body)) out.push("a PR body with a `verify:` or `verify-ran:` line");
+	if (/^co-authored-by:/im.test(body)) out.push("a PR body with a `Co-authored-by` trailer");
+	if (LOCAL_PATH.test(body)) out.push("a PR body with a local machine path");
+	return out;
+}
+
+function ghPrText(c: Cmd, owned: Owned, host: Host): string | undefined {
+	const w = c.words;
+	if (!owned?.size || w[0] !== "gh" || w[1] !== "pr" || (w[2] !== "create" && w[2] !== "edit")) return undefined;
+	const opt = (names: string[]) => {
+		for (let i = 3; i < w.length; i++) {
+			const m = w[i].match(/^(--[\w-]+)=(.*)$/s);
+			if (m && names.includes(m[1])) return m[2];
+			if (names.includes(w[i])) return w[i + 1] ?? "";
+		}
+		return undefined;
+	};
+	const file = opt(["-F", "--body-file"]);
+	const body = opt(["-b", "--body"]) ?? (file && file !== "-" ? c.at.map((d) => host.readText?.(file, d)).find((t) => t !== undefined) : undefined);
+	const problems = prTextProblems(opt(["-t", "--title"]), body);
+	if (!problems.length) return undefined;
+	const repos = targetRepos(c, host);
+	return repos.some((r) => r !== undefined && r !== null && owned.has(r)) ? problems.join(", and ") : undefined;
 }
 
 const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
@@ -346,10 +388,12 @@ export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, c
 	for (const c of simpleCommands(command, [cwd])) {
 		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready) ?? dispatcherOnly(c, owned, host, cwd);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
+		const words = ghPrText(c, owned, host);
+		if (words) return `blocked: ${words}. ${TEXT_WAY}`;
 		const close = ghIssueClose(c, issues, host);
-		if (close) return `blocked: ${close}. ${CLOSE_WAY}`;
+		if (close) return `blocked: ${close}. ${closeWay(issues)}`;
 		const mate = ghTeammateClose(c, issues, host);
 		if (mate) return `blocked: ${mate}. ${TEAMMATE_WAY}`;
 	}

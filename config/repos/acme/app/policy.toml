@@ -1,0 +1,48 @@
+# One repo: how this project wants to be worked on. The folder names it (repos/<owner>/<name>/), so no key repeats it.
+# An optional rules.toml beside this file adds sections to the stack's Hard rules. This one is an example.
+schema = 1
+
+# How many red heads of one PR the orchestrator sends back to the thread that pushed them. Past that the PR is the owner's.
+[ci]
+fix_attempts = 3
+
+# Who "we" are. `me` is the login the pickup works for: its assigned issues and its requested reviews. `owner` is the
+# person the rules and the services' messages name: the one whose calls the holds file relays.
+[people]
+me = "octo"
+owner = "Robin"
+
+# The patent hold at publish time (services/patent_push.py, the clone's pre-push hook; Hard rules, Patent hold). A change
+# whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
+# no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines.
+[patent]
+held_words = ["skyhook", "vaultkey", "sealing"]
+skip_lockfiles = [
+  "Cargo.lock", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock",
+  "pdm.lock", "Pipfile.lock", "bun.lock", "bun.lockb", "composer.lock", "Gemfile.lock", "go.sum", "flake.lock",
+  "Package.resolved", "packages.lock.json", "gradle.lockfile", "pubspec.lock", "mix.lock",
+]
+private_repo = "acme/app-private"
+
+# How a PR merges (bin/queue; Hard rules, Merging). `gate_check` is the CI check that must be green on a head
+# before bin/queue merges it.
+# The verifier passes a PR as `auto` or `review`. bin/queue merges an `auto` PR once `gate_check` is green on the verified head; a `review` PR
+# waits for the owner. `review_label` on a PR forces `review`. A preapproved item merges itself whatever the verifier or
+# its thread says: an issue carrying one of `preapproved_labels`, a task added with `--preapproved`, or a `preapprove`
+# row for the PR's head in the holds file. A hold row stops any of them.
+[merge]
+gate_check = "ci-gate"
+review_label = "needs-review"
+preapproved_labels = ["preapproved"]
+
+# The lines that link a salvage PR to what it replaces (Hard rules `salvage-fixes`): `salvaged_from` names the source
+# PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.
+[issues]
+fixes = "Fixes #{issue}"
+refs = "Refs #{issue}"
+salvaged_from = "Salvaged from #{pr}"
+
+# What a review of an outside contributor's PR does with a fixable one: `salvage` it as a new PR of ours that credits
+# them, or `request-changes` on theirs.
+[review]
+outside = "salvage"

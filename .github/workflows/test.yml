@@ -20,29 +20,15 @@ jobs:
         run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
       - name: scripts parse under 3.9
         run: |
-          for f in bin/* hosts/*/*; do
+          for f in bin/* services/*; do
             case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
           done
-      - name: bin/policy reads config/policy.toml under 3.9 (vendor/tomli)
-        run: bin/policy check && bin/policy get slots.hand && bin/policy dump > /dev/null && bin/policy rules > /dev/null
-      - name: bin/hourly starts under 3.9 (the queue pass dry, and the facts a peer is asked for)
-        env:
-          ZSTACK_ENSURED: "1"
-          ONIGIRI_HOST: ""
-          ONIGIRI_ROOT: ${{ runner.temp }}/root
-        run: PI_RUN_DRY=1 bin/hourly queue && bin/hourly facts
-      - name: bin/pickup starts under 3.9 (a dry pass)
-        env:
-          ZSTACK_ENSURED: "1"
-          ONIGIRI_HOST: ""
-          ONIGIRI_ROOT: ${{ runner.temp }}/root
-        run: bin/pickup --dry
+      - name: bin/policy reads the config under 3.9 (vendor/tomli)
+        run: bin/policy check && bin/policy get ci.fix_attempts && bin/policy dump > /dev/null && bin/policy rules > /dev/null
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
         run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
-      - name: model config resolves under 3.9
-        run: tests/models.sh
 
   test:
     runs-on: ubuntu-latest
@@ -50,24 +36,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: scripts parse
         run: |
-          for f in bin/* hosts/*/*; do
+          for f in bin/* services/*; do
             case "$(head -1 "$f")" in
               *python3*) python3 -m py_compile "$f";;
               '#!/bin/bash'*) bash -n "$f";;
             esac
           done
-      - name: config/policy.toml, rules.toml and state.toml are valid (bin/policy check, the one parser)
+      - name: the config, rules.toml and state.toml are valid (bin/policy check, the one parser)
         run: bin/policy check && bin/policy rules > /dev/null
-      - name: merge job, patent hook, wake, pi-run lifecycle, hourly and pickup passes, hold-row, check-host, policy, config-reference and declarative-config tests
+      - name: queue, holds, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass (no VM starts)
         run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
       - name: zstack code carries no comments
         run: python3 tests/comments.py check
-      - name: lint the VM host scripts
+      - name: lint the services and tests
         run: |
-          pipx run ruff==0.17.3 check hosts/vm tests bin/pi-run bin/hourly bin/pickup bin/check-host bin/hold-row bin/policy bin/PiRun.mutants.py hosts/mini/vm model
-          shellcheck hosts/vm/cron-wrap.sh hosts/vm/pre-push hosts/*/host.sh hosts/mini/sync-from-vm.sh tests/sync-from-vm.sh tests/vm-launchd.sh hosts/check-parity tests/check-parity.sh bin/ensure-package-main bin/new-brief tests/ensure-package-main.sh tests/pirun-model.sh tests/zstack-model.sh tests/models.sh hosts/mini/install-pickup.sh tests/pickup-model.sh tests/hourly-model.sh
+          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy bin/queue model
+          shellcheck services/pre-push services/ensure-main tests/ensure-main.sh tests/queue-model.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -77,39 +63,23 @@ jobs:
         run: node --test tests/subagent-prompt.test.ts
       - name: a bash call with no timeout is bounded by run.idle_min
         run: node --test tests/tool-guard.test.ts
-      - name: model config resolves
-        run: tests/models.sh
-      - name: pi-run fast-forwards the package to origin/main or refuses to start
-        run: tests/ensure-package-main.sh
-      - name: check-parity fails a host whose package, hook or agents differ from main
-        run: tests/check-parity.sh
-      - name: concurrent mini launches sync the holds copy without racing
-        run: tests/sync-from-vm.sh
+      - name: the Claude Code hook
+        run: node --test tests/claude-hook.test.ts
+      - name: ensure-main fast-forwards the package to origin/main or refuses
+        run: tests/ensure-main.sh
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
-      - name: TLC passes bin/PiRun.tla, bin/PiRun.mmd is its chart and every mutant fails (bin/pi-run is held to the chart by test_pi_run.py)
+      - name: TLC passes model/Queue.tla (the queue, the verifier's gate and the merge) and every mutant fails on its rule
         run: |
           curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
-          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pirun-model.sh
-      - name: TLC passes model/Zstack.tla, every mutant fails on its rule, and the Race.cfg probe still breaks
-        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/zstack-model.sh
-      - name: TLC passes model/Hourly.tla (the hourly pickup), model/Hourly.mmd is its chart, and every mutant fails on its rule
-        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/hourly-model.sh
-      - name: TLC passes model/Pickup.tla (the scheduled pickup pass), model/Pickup.mmd is its chart, and every mutant fails on its rule
-        run: TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/pickup-model.sh
-      - name: the merge gate is three checks, and verification is not one of them
-        run: |
-          if bin/policy rules | cat - skills/onigiri-mode/playbooks/pull-requests.md skills/onigiri-mode/SKILL.md |
-              grep -niE 'merg[a-z]* needs `?(pass|verif)|verif[a-z]* .*must be recorded|needs .*verified|verdict covers|verified.*(before|to) merg|merge.*(requires|needs).*verif'; then
-            echo "a line above makes verification a merge condition"; exit 1
-          fi
+          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/queue-model.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0
-          for f in skills/*/SKILL.md skills/cua/*/SKILL.md agents/*.md; do
+          for f in skills/*/SKILL.md agents/*.md; do
             head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; fail=1; }
           done
           exit $fail
@@ -126,7 +96,7 @@ jobs:
           exit $fail
       - name: every skill and playbook the docs name exists
         run: |
-          verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/|cua/)'
+          verbatim='^skills/(statechart/|create-formal-verification-skill/|maintain-formal-verification-skill/)'
           agents=$(sed -n 's/^name: *//p' agents/*.md)
           fail=0
           while IFS=: read -r file ref; do
@@ -134,8 +104,7 @@ jobs:
             [[ $ref == .cursor/* || $ref == .pi/* ]] && continue
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
-            [ "$name" = cua ] && [ -d skills/cua ] && continue
-            [ -f "skills/$name/SKILL.md" ] || [ -f "skills/cua/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
+            [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
           done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')

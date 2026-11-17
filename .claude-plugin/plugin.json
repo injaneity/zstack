@@ -1,0 +1,5 @@
+{
+  "name": "zstack",
+  "version": "0.3.0",
+  "description": "Rigorous agent workflows: the zstack skills, with the Hard rules loaded and their guard on every Bash and write call."
+}

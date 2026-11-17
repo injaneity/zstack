@@ -25,7 +25,7 @@ Only edit the verification skill's own directory: its SKILL.md, `features/`, and
 
 1. **Index hygiene.** Read the feature map README and glob its sibling files. Fix missing, extra, duplicate, or dead entries. Keep it light, with no generated inventory.
 
-2. **Source pass.** Read every feature file's source yourself, one feature at a time, and write a note per feature in the same shape: feature summary, source entry points, likely drift or none, one recipe. Read only, and edit nothing yet. When a feature's source is too large to hold, read its entry points and the one path the recipe will exercise, not the whole tree. **how** fits this step.
+2. **Source pass.** Read every feature file's source yourself, one feature at a time, and write a note per feature in the same shape: feature summary, source entry points, likely drift or none, one recipe. Read only, and edit nothing yet. When a feature's source is too large to hold, read its entry points and the one path the recipe will exercise, not the whole tree.
 
 3. **Reconcile.** Every feature file has a note from step 2. Merge overlapping recipes into as few app states as practical. Spot-check cited drift, and don't re-prove clean claims. Sweep recent churn for user-facing surfaces missing from the map. Require a concrete source path before calling one missing.
 

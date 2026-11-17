@@ -5,20 +5,22 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, issuesOwned, mergeOwned, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, prTextProblems, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+
+for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
 const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
-const ISSUES = issuesOwned(DUMP);
-const repoAt = (dir: string) => (dir.startsWith("/cua") ? "trycua/cua" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
+const ISSUES = OWNED;
+const repoAt = (dir: string) => (dir.startsWith("/app") ? "acme/app" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
 const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-const TEAM = reviewOnlyLogins(["review-only    | f-trycua      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
-const AUTHORS: Record<number, string> = { 7030: "f-trycua", 4468: "DDupont808", 3138: "injaneity", 6853: "someone" };
+const TEAM = reviewOnlyLogins(["review-only    | f-teammate      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
+const AUTHORS: Record<number, string> = { 7030: "f-teammate", 4468: "DDupont808", 3138: "octo", 6853: "someone" };
 const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)), reviewOnly: () => TEAM,
 	authorOf: (_repo: string, n: number) => AUTHORS[n] };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
-const inCua = "/cua/wt";
+const inApp = "/app/wt";
 
 test("force-pushes and hook skips are blocked however they are written", () => {
 	for (const c of [
@@ -64,7 +66,7 @@ test("ordinary pushes and git commands run", () => {
 		"git push",
 		"git push -u origin fix/x",
 		"git push origin HEAD:refs/heads/x",
-		"git -C wt push cua-staging fix/x",
+		"git -C wt push app-private fix/x",
 		"git log --format=%H -1",
 		"git fetch --force origin",
 		'git commit -m "never git push -f"',
@@ -75,123 +77,123 @@ test("ordinary pushes and git commands run", () => {
 });
 
 test("merging in a merge-job repo is blocked", () => {
-	blocked("gh pr merge 7031 -R trycua/cua --squash");
-	blocked("gh pr merge 7031 --repo=trycua/cua --auto");
-	blocked("gh pr merge https://github.com/trycua/cua/pull/7031");
-	blocked("gh pr merge 7031 --squash", inCua);
-	blocked("gh api -X PUT repos/trycua/cua/pulls/7031/merge");
-	blocked("GH_CONFIG_DIR=x gh pr merge 1 -R TryCua/Cua");
+	blocked("gh pr merge 7031 -R acme/app --squash");
+	blocked("gh pr merge 7031 --repo=acme/app --auto");
+	blocked("gh pr merge https://github.com/acme/app/pull/7031");
+	blocked("gh pr merge 7031 --squash", inApp);
+	blocked("gh api -X PUT repos/acme/app/pulls/7031/merge");
+	blocked("GH_CONFIG_DIR=x gh pr merge 1 -R Acme/App");
 	blocked("gh pr merge 1", "/tmp/x");
-	blocked("cd /cua/wt && gh pr merge 1 --squash");
-	blocked("cd ~/onigiri/cua && gh pr merge 1");
-	blocked("gh api -X PUT repos/{owner}/{repo}/pulls/1/merge", inCua);
-	blocked("gh api repos/trycua/cua/pulls/1/merge -f merge_method=squash");
+	blocked("cd /app/wt && gh pr merge 1 --squash");
+	blocked("cd ~/work/app && gh pr merge 1");
+	blocked("gh api -X PUT repos/{owner}/{repo}/pulls/1/merge", inApp);
+	blocked("gh api repos/acme/app/pulls/1/merge -f merge_method=squash");
 });
 
 test("approving a fork's workflow runs in a merge-job repo runs; a merge beside it stays blocked", () => {
-	for (const c of ["gh api -X POST repos/trycua/cua/actions/runs/9/approve", "gh api --method POST repos/trycua/cua/actions/runs/$RUN/approve",
-		"gh api -X POST repos/{owner}/{repo}/actions/runs/9/approve", "gh api -X POST /repos/trycua/cua/actions/runs/9/approve"]) {
+	for (const c of ["gh api -X POST repos/acme/app/actions/runs/9/approve", "gh api --method POST repos/acme/app/actions/runs/$RUN/approve",
+		"gh api -X POST repos/{owner}/{repo}/actions/runs/9/approve", "gh api -X POST /repos/acme/app/actions/runs/9/approve"]) {
 		allowed(c);
-		allowed(c, inCua);
+		allowed(c, inApp);
 		allowed(c, "/tmp/x");
 	}
-	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/approve && gh pr merge 1 -R trycua/cua");
-	blocked("gh api -X POST repos/trycua/cua/actions/runs/9/approve; gh api -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
+	blocked("gh api -X POST repos/acme/app/actions/runs/9/approve && gh pr merge 1 -R acme/app");
+	blocked("gh api -X POST repos/acme/app/actions/runs/9/approve; gh api -X PUT repos/acme/app/pulls/1/merge", "/scratch");
 });
 
 test("CI reruns in a merge-job repo run, whatever the run's conclusion: the session decides them", () => {
-	for (const c of ["gh run rerun 9 -R trycua/cua --failed", "gh run rerun 9 -R trycua/cua", "gh run rerun --job 90 -R trycua/cua",
-		"gh run rerun 9 --job=90 -R trycua/cua", "gh run rerun $RUN -R trycua/cua", "gh run rerun 9 --failed",
-		"gh api -X POST repos/trycua/cua/actions/runs/9/rerun-failed-jobs", "gh api -X POST repos/trycua/cua/actions/jobs/90/rerun",
+	for (const c of ["gh run rerun 9 -R acme/app --failed", "gh run rerun 9 -R acme/app", "gh run rerun --job 90 -R acme/app",
+		"gh run rerun 9 --job=90 -R acme/app", "gh run rerun $RUN -R acme/app", "gh run rerun 9 --failed",
+		"gh api -X POST repos/acme/app/actions/runs/9/rerun-failed-jobs", "gh api -X POST repos/acme/app/actions/jobs/90/rerun",
 		"gh api -X POST repos/{owner}/{repo}/actions/runs/9/rerun"]) {
 		allowed(c);
-		allowed(c, inCua);
+		allowed(c, inApp);
 		allowed(c, "/tmp/x");
 	}
-	assert.equal(checkBash("gh run rerun 9 --failed", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch"), undefined);
-	blocked("gh run rerun 9 -R trycua/cua && gh pr merge 1 -R trycua/cua");
-	blocked("gh api -X PUT -f x=repos/trycua/cua/actions/runs/9/rerun repos/trycua/cua/pulls/1/merge", "/scratch");
-	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/trycua/cua/pulls/1/merge", "/scratch");
-	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inCua);
-	const otherEnv = { ...host, ghRepo: "trycua/other" };
-	for (const c of ["gh api -X PUT repos/{owner}/cua/pulls/1/merge", "gh api -X PUT repos/trycua/{repo}/pulls/1/merge"])
-		assert.match(checkBash(c, OWNED, c.includes("{repo}") ? { ...host, ghRepo: "other/cua" } : otherEnv, "/scratch") ?? "", /^blocked: /, c);
+	assert.equal(checkBash("gh run rerun 9 --failed", OWNED, { ...host, ghRepo: "acme/app" }, "/scratch"), undefined);
+	blocked("gh run rerun 9 -R acme/app && gh pr merge 1 -R acme/app");
+	blocked("gh api -X PUT -f x=repos/acme/app/actions/runs/9/rerun repos/acme/app/pulls/1/merge", "/scratch");
+	blocked("gh api -H x/repos/other/repo/pulls/1/merge -X PUT repos/acme/app/pulls/1/merge", "/scratch");
+	blocked("gh pr merge 1 --squash -b https://github.com/other/repo/pull/1", inApp);
+	const otherEnv = { ...host, ghRepo: "acme/other" };
+	for (const c of ["gh api -X PUT repos/{owner}/app/pulls/1/merge", "gh api -X PUT repos/acme/{repo}/pulls/1/merge"])
+		assert.match(checkBash(c, OWNED, c.includes("{repo}") ? { ...host, ghRepo: "other/app" } : otherEnv, "/scratch") ?? "", /^blocked: /, c);
 	assert.equal(checkBash("gh api -X PUT repos/{owner}/zstack/pulls/1/merge", OWNED, otherEnv, "/scratch"), undefined);
-	blocked("gh api -X PUT repos/{owner}/{bogus}/pulls/1/merge", inCua);
+	blocked("gh api -X PUT repos/{owner}/{bogus}/pulls/1/merge", inApp);
 });
 
 test("merges elsewhere run, and nothing is owned unless configured", () => {
 	allowed("gh pr merge 33 -R injaneity/zstack --squash");
 	allowed("gh pr merge 33 --squash");
-	allowed("gh pr view 7031 -R trycua/cua --json state", inCua);
-	allowed("gh pr checks 7031 -R trycua/cua", inCua);
-	allowed("gh api repos/trycua/cua/pulls/123/merge");
-	blocked("cd /zs/wt || gh pr merge 1", inCua);
-	blocked("cd /zs/wt && gh pr merge 33", inCua);
-	blocked("GH_REPO=trycua/cua gh pr merge 1");
-	blocked("{ gh pr merge 1 -R trycua/cua; }");
-	blocked("{ cd /cua; gh pr merge 1; }");
-	blocked("if cd /cua; then gh pr merge 1; fi");
+	allowed("gh pr view 7031 -R acme/app --json state", inApp);
+	allowed("gh pr checks 7031 -R acme/app", inApp);
+	allowed("gh api repos/acme/app/pulls/123/merge");
+	blocked("cd /zs/wt || gh pr merge 1", inApp);
+	blocked("cd /zs/wt && gh pr merge 33", inApp);
+	blocked("GH_REPO=acme/app gh pr merge 1");
+	blocked("{ gh pr merge 1 -R acme/app; }");
+	blocked("{ cd /app; gh pr merge 1; }");
+	blocked("if cd /app; then gh pr merge 1; fi");
 	blocked("if true; then echo x >> hold-prs.txt; fi", "/srv/onigiri");
-	blocked("gh pr merge 1 -R github.com/trycua/cua");
-	blocked("gh pr merge 1 --repo=https://github.com/trycua/cua.git");
-	blocked("gh api repos/trycua/cua/pulls/1/merge -f x=y -X PUT");
-	allowed("cd /zs/wt && gh pr merge 33 -R injaneity/zstack", inCua);
-	allowed("gh api repos/trycua/cua/pulls/1/merge -f x=y -X GET");
-	allowed("gh pr merge 33 -R injaneity/zstack", inCua);
+	blocked("gh pr merge 1 -R github.com/acme/app");
+	blocked("gh pr merge 1 --repo=https://github.com/acme/app.git");
+	blocked("gh api repos/acme/app/pulls/1/merge -f x=y -X PUT");
+	allowed("cd /zs/wt && gh pr merge 33 -R injaneity/zstack", inApp);
+	allowed("gh api repos/acme/app/pulls/1/merge -f x=y -X GET");
+	allowed("gh pr merge 33 -R injaneity/zstack", inApp);
 	allowed("gh pr merge 1", "/scratch");
-	assert.match(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "trycua/cua" }, "/scratch") ?? "", /^blocked: /);
+	assert.match(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "acme/app" }, "/scratch") ?? "", /^blocked: /);
 	assert.equal(checkBash("gh pr merge 1", OWNED, { ...host, ghRepo: "injaneity/zstack" }, "/scratch"), undefined);
 	const zsEnv = { ...host, ghRepo: "injaneity/zstack" };
-	assert.equal(checkBash("gh pr merge 1", OWNED, zsEnv, inCua), undefined);
+	assert.equal(checkBash("gh pr merge 1", OWNED, zsEnv, inApp), undefined);
 	for (const c of ["GH_REPO= gh pr merge 1", "env -u GH_REPO gh pr merge 1", "env --unset=GH_REPO gh pr merge 1", "env -i gh pr merge 1"])
-		assert.match(checkBash(c, OWNED, zsEnv, inCua) ?? "", /^blocked: /, c);
-	assert.match(checkBash("GH_REPO=trycua/cua bash -c 'gh pr merge 1'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
-	assert.match(checkBash("env -u GH_REPO sh -c 'gh pr ready 1'", OWNED, zsEnv, inCua) ?? "", /^blocked: /);
-	blocked("gh pr merge 1 -R trycua/cua --subject --help");
-	blocked("gh pr merge 1 -R trycua/cua --body --disable-auto");
+		assert.match(checkBash(c, OWNED, zsEnv, inApp) ?? "", /^blocked: /, c);
+	assert.match(checkBash("GH_REPO=acme/app bash -c 'gh pr merge 1'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
+	assert.match(checkBash("env -u GH_REPO sh -c 'gh pr ready 1'", OWNED, zsEnv, inApp) ?? "", /^blocked: /);
+	blocked("gh pr merge 1 -R acme/app --subject --help");
+	blocked("gh pr merge 1 -R acme/app --body --disable-auto");
 	assert.match(checkBash("ssh server 'gh pr merge 123'", OWNED, zsEnv, "/scratch") ?? "", /^blocked: /);
-	allowed("gh pr merge 1 -R trycua/cua --squash --help");
-	allowed("gh pr merge 1 -R trycua/cua --squash --disable-auto");
-	allowed("gh pr merge --help", inCua);
-	allowed("gh pr merge 6474 -R trycua/cua --disable-auto");
-	assert.equal(checkBash("gh pr merge 7031 -R trycua/cua", new Set(), host, inCua), undefined);
+	allowed("gh pr merge 1 -R acme/app --squash --help");
+	allowed("gh pr merge 1 -R acme/app --squash --disable-auto");
+	allowed("gh pr merge --help", inApp);
+	allowed("gh pr merge 6474 -R acme/app --disable-auto");
+	assert.equal(checkBash("gh pr merge 7031 -R acme/app", new Set(), host, inApp), undefined);
 });
 
 test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", () => {
-	blocked("gh pr ready 7040 -R trycua/cua");
-	blocked("gh pr ready 7040", inCua);
-	blocked("gh pr ready https://github.com/trycua/cua/pull/7040");
+	blocked("gh pr ready 7040 -R acme/app");
+	blocked("gh pr ready 7040", inApp);
+	blocked("gh pr ready https://github.com/acme/app/pull/7040");
 	blocked(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	blocked(`gh api graphql -F query=@m.graphql -f q='enablePullRequestAutoMerge'`);
 	blocked(`gh api -X POST graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	allowed("gh pr ready 7040 -R trycua/cua --undo");
-	allowed("gh pr ready 33 -R injaneity/zstack", inCua);
-	allowed(`gh api graphql -f query='{ repository(owner:"trycua",name:"cua"){ pullRequest(number:1){ isDraft } } }'`);
-	allowed("gh pr create --draft --title x --body y", inCua);
-	allowed("gh pr view 7040 --json isDraft", inCua);
+	allowed("gh pr ready 7040 -R acme/app --undo");
+	allowed("gh pr ready 33 -R injaneity/zstack", inApp);
+	allowed(`gh api graphql -f query='{ repository(owner:"acme",name:"app"){ pullRequest(number:1){ isDraft } } }'`);
+	allowed("gh pr create --draft --title 'fix: x' --body y", inApp);
+	allowed("gh pr view 7040 --json isDraft", inApp);
 });
 
 test("a brief that allows merging lets the session ready its draft, and nothing else", () => {
 	const ok = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd, true), undefined, c);
 	const no = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd, true) ?? "", /^blocked: /, c);
-	ok("gh pr ready 7040 -R trycua/cua");
-	ok("gh pr ready 7040", inCua);
+	ok("gh pr ready 7040 -R acme/app");
+	ok("gh pr ready 7040", inApp);
 	ok(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no("gh pr merge 7040 -R trycua/cua --squash");
-	no("gh pr merge 7040 --auto", inCua);
-	ok("gh run rerun 9 -R trycua/cua");
-	no("gh api -X PUT repos/trycua/cua/pulls/7040/merge");
+	no("gh pr merge 7040 -R acme/app --squash");
+	no("gh pr merge 7040 --auto", inApp);
+	ok("gh run rerun 9 -R acme/app");
+	no("gh api -X PUT repos/acme/app/pulls/7040/merge");
 	no(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	no(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	no(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "X"}) { clientMutationId } }'`);
 	no("git push -f origin HEAD:main");
 	assert.equal(readyAllowed("1"), true);
 	for (const v of ["", "0", "true", "yes", " 1"]) assert.equal(readyAllowed(v), false, v);
-	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R trycua/cua");
-	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inCua);
-	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R trycua/cua'");
+	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R acme/app");
+	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inApp);
+	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R acme/app'");
 	blocked("export ONIGIRI_READY_ALLOWED=1; pi -p go");
 	blocked("ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED");
 	blocked("bash -c 'env ONIGIRI_READY_ALLOWED=1 pi -p go'");
@@ -214,7 +216,7 @@ test("a brief that allows merging lets the session ready its draft, and nothing 
 
 test("here-document bodies are data unless a shell reads them", () => {
 	allowed("cd /zs && python3 - <<'EOF'\nsub('docs', 'never gh pr merge 1 or git push -f')\nEOF");
-	allowed("cat > /tmp/body.md <<EOF\nwe never run gh pr merge here\nEOF\ngh pr create --body-file /tmp/body.md", inCua);
+	allowed("cat > /tmp/body.md <<EOF\nwe never run gh pr merge here\nEOF\ngh pr create --body-file /tmp/body.md", inApp);
 	blocked("python3 - <<'EOF'\nx\nEOF\ngit push -f");
 	blocked("bash <<'EOF'\ngit push --force\nEOF");
 	blocked("~/onigiri-vm/vm <<'EOF'\necho x >> /srv/onigiri/hold-prs.txt\nEOF");
@@ -226,7 +228,7 @@ test("here-document bodies are data unless a shell reads them", () => {
 	blocked("cat <<EOF.txt\ndata\nEOF.txt\ngit push -f\nEOF");
 	blocked("cat <<EOF \\\n | bash\ngit push -f\nEOF");
 	blocked("echo \\<<EOF\ngit push -f\nEOF");
-	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R trycua/cua\nEOF");
+	blocked("cat <<'EOF' | sh -s\ngh pr merge 1 -R acme/app\nEOF");
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF");
 });
 
@@ -316,7 +318,7 @@ test("writes to the real holds file are blocked; reads run", () => {
 	assert.match(checkBash("cd /srv/onigiri && bash -c 'echo x > hold-prs.txt'", OWNED, host, "/tmp") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp || true; cp /tmp/hold-prs.txt .", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
 	assert.match(checkBash("cd /tmp/x extra || cd sync; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
-	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/cua") ?? "", /^blocked: /);
+	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/app") ?? "", /^blocked: /);
 	for (const c of [
 		"cd /tmp/$TARGET && rm hold-prs.txt",
 		"cd /srv/onig?ri && rm hold-prs.txt",
@@ -353,15 +355,15 @@ test("writes to the real holds file are blocked; reads run", () => {
 	assert.equal(write("hold-prs.txt", "/tmp/t"), "");
 });
 
-test("bin/hold-row is the sanctioned way to append a row relaying Zane's call; direct writes still name it", () => {
-	const row = "preapprove | #7338 | no | " + "a".repeat(40) + " | deep; Zane 11 Nov 14:56 SGT (green at pin)";
+test("bin/hold-row is the sanctioned way to append a row relaying Robin's call; direct writes still name it", () => {
+	const row = "preapprove | #7338 | no | " + "a".repeat(40) + " | deep; Robin 11 Nov 14:56 SGT (green at pin)";
 	for (const c of [
 		`bin/hold-row add '${row}'`,
 		`~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add "${row}"`,
 		`ONIGIRI_ROOT=/srv/onigiri bin/hold-row add '${row}'`,
 		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add '${row}'"`,
-		`ssh vm 'bin/hold-row add "hold | 7400 | no | Zane 11 Nov 17:00 SGT: wait for bench"'`,
-		`bin/hold-row retire '${row}' 'Zane 11 Nov 18:00 SGT: stale pin'`,
+		`ssh vm 'bin/hold-row add "hold | 7400 | no | Robin 11 Nov 17:00 SGT: wait for bench"'`,
+		`bin/hold-row retire '${row}' 'Robin 11 Nov 18:00 SGT: stale pin'`,
 		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row replace '${row}' '${row.replace("a".repeat(40), "b".repeat(40))}'"`,
 	])
 		allowed(c, "/srv/onigiri");
@@ -372,8 +374,9 @@ test("bin/hold-row is the sanctioned way to append a row relaying Zane's call; d
 });
 
 test("the real holds paths are this host's config, matched on the filesystem with symlinks followed", () => {
-	assert.deepEqual(holdsPaths({ ONIGIRI_ROOT: "/srv/onigiri" }), ["/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-	assert.deepEqual(holdsPaths({}), ["~/onigiri/hold-prs.txt", "/srv/onigiri/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
+	assert.deepEqual(holdsPaths({ ONIGIRI_ROOT: "/srv/onigiri" }, "~/copy/hold-prs.txt"), ["/srv/onigiri/hold-prs.txt", "~/copy/hold-prs.txt"]);
+	assert.deepEqual(holdsPaths({}), ["~/zstack/hold-prs.txt"]);
+	assert.deepEqual(holdsPaths({}, "~/zstack/hold-prs.txt"), ["~/zstack/hold-prs.txt"]);
 	const t = fs.mkdtempSync(path.join(os.tmpdir(), "rule-guard-"));
 	try {
 		const root = path.join(t, "root"), other = path.join(t, "test-home", "onigiri");
@@ -430,10 +433,10 @@ test("the real holds paths are this host's config, matched on the filesystem wit
 	}
 });
 
-test("the owned repo is config/policy.toml's merge.repo, and an unreadable policy refuses every merge and ready", () => {
-	assert.deepEqual(OWNED, new Set(["trycua/cua"]));
-	assert.deepEqual(mergeOwned(() => '{"merge": {"repo": "TryCua/Cua"}}'), new Set(["trycua/cua"]));
-	for (const dump of [() => { throw new Error("policy: missing merge.repo"); }, () => "not json", () => "{}", () => '{"merge": {"repo": "cua"}}'])
+test("the owned repos are every repo the config has, and an unreadable config refuses every merge and ready", () => {
+	assert.deepEqual(OWNED, new Set(["acme/app"]));
+	assert.deepEqual(mergeOwned(() => '{"repos": ["Acme/App", "acme/tool"]}'), new Set(["acme/app", "acme/tool"]));
+	for (const dump of [() => { throw new Error("policy: missing merge.repo"); }, () => "not json", () => "{}", () => '{"repos": ["app"]}', () => '{"repos": []}', () => '{"merge": {"repo": "acme/app"}}'])
 		assert.equal(mergeOwned(dump), null);
 	for (const c of ["gh pr merge 33 -R injaneity/zstack --squash", "gh pr ready 1", "gh api -X PUT repos/x/y/pulls/1/merge",
 		"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"])
@@ -442,91 +445,125 @@ test("the owned repo is config/policy.toml's merge.repo, and an unreadable polic
 		assert.equal(checkBash(c, null, host, "/zs"), undefined, c);
 });
 
-test("closing a trycua/cua issue by hand needs a comment naming the PR that fixed it", () => {
+test("closing a acme/app issue by hand needs a comment naming the PR that fixed it", () => {
 	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, false, ISSUES) ?? "", /^blocked: .*issue-close/, c);
 	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, false, ISSUES), undefined, c);
-	assert.deepEqual(ISSUES, new Set(["trycua/cua"]));
+	assert.deepEqual(ISSUES, new Set(["acme/app"]));
 	for (const c of [
-		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928."',
-		"gh issue close 6853 -R trycua/cua -c 'Fixed by #6928'",
-		'gh issue close 6853 -R trycua/cua --comment="Fixed by https://github.com/trycua/cua/pull/6928"',
-		'gh issue close https://github.com/trycua/cua/issues/6853 -c "Fixed by #6928" --reason completed',
-		'gh pr close 3138 -R trycua/cua --comment "Replaced by #7587, which merged."',
+		'gh issue close 6853 -R acme/app --comment "Fixed by #6928."',
+		"gh issue close 6853 -R acme/app -c 'Fixed by #6928'",
+		'gh issue close 6853 -R acme/app --comment="Fixed by https://github.com/acme/app/pull/6928"',
+		'gh issue close https://github.com/acme/app/issues/6853 -c "Fixed by #6928" --reason completed',
+		'gh pr close 3138 -R acme/app --comment "Replaced by #7587, which merged."',
 		"gh issue close --help",
-		"gh issue view 6853 -R trycua/cua",
-		"gh issue comment 6853 -R trycua/cua --body 'x'",
+		"gh issue view 6853 -R acme/app",
+		"gh issue comment 6853 -R acme/app --body 'x'",
 		"gh pr close 1 -R injaneity/zstack",
 	]) ok(c);
-	ok('gh issue close 6853 --comment "Fixed by #6928"', inCua);
+	ok('gh issue close 6853 --comment "Fixed by #6928"', inApp);
 	for (const c of [
-		"gh issue close 6853 -R trycua/cua",
-		'gh issue close 6853 -R trycua/cua --comment "fixed on main"',
-		'gh issue close 6853 -R trycua/cua --comment "see issue&#35;1"',
-		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928" --reason "not planned"',
-		'gh issue close 6853 -R trycua/cua --comment "Fixed by #6928" -r duplicate',
-		'gh issue close 6853 -R trycua/cua --duplicate-of 6000 --comment "dup of #6000"',
-		"gh issue close https://github.com/trycua/cua/issues/6853",
-		'gh issue close 6853 -R trycua/cua --comment "$MSG"',
-		"gh api -X PATCH repos/trycua/cua/issues/6853 -f state=closed",
-		`gh api repos/trycua/cua/issues/6853 --input - <<< '{"state": "closed"}' -X PATCH`,
+		"gh issue close 6853 -R acme/app",
+		'gh issue close 6853 -R acme/app --comment "fixed on main"',
+		'gh issue close 6853 -R acme/app --comment "see issue&#35;1"',
+		'gh issue close 6853 -R acme/app --comment "Fixed by #6928" --reason "not planned"',
+		'gh issue close 6853 -R acme/app --comment "Fixed by #6928" -r duplicate',
+		'gh issue close 6853 -R acme/app --duplicate-of 6000 --comment "dup of #6000"',
+		"gh issue close https://github.com/acme/app/issues/6853",
+		'gh issue close 6853 -R acme/app --comment "$MSG"',
+		"gh api -X PATCH repos/acme/app/issues/6853 -f state=closed",
+		`gh api repos/acme/app/issues/6853 --input - <<< '{"state": "closed"}' -X PATCH`,
 		`gh api graphql -f query='mutation { closeIssue(input: {issueId: "X"}) { clientMutationId } }'`,
-		"gh api -X PATCH repos/trycua/cua/issues/5 --input payload.json",
-		"gh api repos/trycua/cua/issues/5 --input=- -X PATCH",
-		"gh api -X PATCH 'repos/trycua/cua/issues/5?x=/a' --input payload.json",
-		"gh api -X PATCH 'repos/trycua/cua/issues/5#/a' -f state=closed",
-		"gh api -X PATCH '/repos/trycua/cua/issues/5/?a=b' -f state=closed",
-		'ssh vm "gh issue close 6853 -R trycua/cua"',
-		"GH_REPO=trycua/cua gh issue close 6853",
+		"gh api -X PATCH repos/acme/app/issues/5 --input payload.json",
+		"gh api repos/acme/app/issues/5 --input=- -X PATCH",
+		"gh api -X PATCH 'repos/acme/app/issues/5?x=/a' --input payload.json",
+		"gh api -X PATCH 'repos/acme/app/issues/5#/a' -f state=closed",
+		"gh api -X PATCH '/repos/acme/app/issues/5/?a=b' -f state=closed",
+		'ssh vm "gh issue close 6853 -R acme/app"',
+		"GH_REPO=acme/app gh issue close 6853",
 	]) no(c);
-	no("gh issue close 6853", inCua);
-	no("cd /cua/wt && gh issue close 6853");
-	no("gh issue close 6853", "/zs", { ...host, ghRepo: "trycua/cua" });
+	no("gh issue close 6853", inApp);
+	no("cd /app/wt && gh issue close 6853");
+	no("gh issue close 6853", "/zs", { ...host, ghRepo: "acme/app" });
 	ok("gh issue close 12 -R injaneity/zstack");
 	ok("gh issue close 12", "/scratch");
 	ok("gh api -X PATCH repos/injaneity/zstack/issues/12 -f state=closed");
-	ok("gh api -X PATCH repos/trycua/cua/issues/6853 -f title=x");
-	ok("gh api -X POST repos/trycua/cua/issues/6853/comments --input body.json");
+	ok("gh api -X PATCH repos/acme/app/issues/6853 -f title=x");
+	ok("gh api -X POST repos/acme/app/issues/6853/comments --input body.json");
 	no("gh issue close 12", "/tmp/x");
 	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
-	assert.equal(checkBash("gh issue close 6853 -R trycua/cua", OWNED, host, "/zs", false, new Set()), undefined);
-	assert.equal(issuesOwned(() => "{}"), null);
-	assert.equal(issuesOwned(() => { throw new Error("x"); }), null);
+	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", false, new Set()), undefined);
 });
 
 test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {
 	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
 	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", false, ISSUES), undefined, c);
-	assert.deepEqual(TEAM, new Set(["f-trycua", "ddupont808"]));
+	assert.deepEqual(TEAM, new Set(["f-teammate", "ddupont808"]));
 	for (const c of [
-		'gh issue close 7030 -R trycua/cua --comment "Fixed by #7147."',
-		'gh pr close 7030 -R trycua/cua --comment "Replaced by #7147, which merged."',
-		'gh pr close https://github.com/trycua/cua/pull/4468 -c "Replaced by #4560"',
-		'gh issue close https://github.com/trycua/cua/issues/4468 --comment "Fixed by #4560"',
-		"gh api -X PATCH repos/trycua/cua/pulls/7030 -f state=closed",
-		'ssh vm "gh pr close 7030 -R trycua/cua"',
+		'gh issue close 7030 -R acme/app --comment "Fixed by #7147."',
+		'gh pr close 7030 -R acme/app --comment "Replaced by #7147, which merged."',
+		'gh pr close https://github.com/acme/app/pull/4468 -c "Replaced by #4560"',
+		'gh issue close https://github.com/acme/app/issues/4468 --comment "Fixed by #4560"',
+		"gh api -X PATCH repos/acme/app/pulls/7030 -f state=closed",
+		'ssh vm "gh pr close 7030 -R acme/app"',
 	]) no(c);
 	for (const c of ["gh api -X PATCH repos/{owner}/{repo}/pulls/7030 -f state=closed", "gh pr close 7030 -c 'Replaced by #7147'"])
-		assert.match(checkBash(c, OWNED, host, inCua, false, ISSUES) ?? "", /, a review-only teammate\. /, c);
-	ok('gh pr close 3138 -R trycua/cua --comment "Replaced by #7587, which merged."');
-	ok('gh issue close 6853 -R trycua/cua --comment "Fixed by #6928."');
+		assert.match(checkBash(c, OWNED, host, inApp, false, ISSUES) ?? "", /, a review-only teammate\. /, c);
+	ok('gh pr close 3138 -R acme/app --comment "Replaced by #7587, which merged."');
+	ok('gh issue close 6853 -R acme/app --comment "Fixed by #6928."');
 	ok("gh pr close 7030 -R injaneity/zstack");
-	ok("gh pr view 7030 -R trycua/cua");
+	ok("gh pr view 7030 -R acme/app");
 	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", why, c);
-	refuse('gh pr close 3138 -R trycua/cua -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /no hold-prs.txt could be read/);
-	refuse('gh pr close 9999 -R trycua/cua -c "Replaced by #7587"', host, /could not tell/);
-	refuse('gh pr close -R trycua/cua -c "Replaced by #7587"', host, /without a number/);
+	refuse('gh pr close 3138 -R acme/app -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /no hold-prs.txt could be read/);
+	refuse('gh pr close 9999 -R acme/app -c "Replaced by #7587"', host, /could not tell/);
+	refuse('gh pr close -R acme/app -c "Replaced by #7587"', host, /without a number/);
 	refuse(`gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`, host, /GraphQL close/);
 	for (const c of ["gh api graphql -F query=@close.graphql", "gh api graphql --field=query=@q.graphql -F id=X"]) refuse(c, host, /GraphQL query read from a file/);
 	for (const c of ["gh api graphql --input mutation.json", "gh api graphql --input=- < m.json", "gh api graphql -Fquery=@q"])
 		refuse(c, host, /GraphQL query read from a file or stdin/);
-	for (const c of ["gh api -X PATCH repos/trycua/cua/pulls/7030 -F state=@state.txt", "gh api -X PATCH repos/trycua/cua/pulls/7030 --field=state=@s",
-		"gh api -X PATCH repos/trycua/cua/pulls/7030 -fstate=closed", "gh api -X PATCH repos/trycua/cua/pulls/7030 --raw-field=state=closed",
-		"gh api -X PATCH repos/trycua/cua/pulls/7030 -F state=CLOSED", "gh api -X PATCH repos/trycua/cua/pulls/7030 --raw-field state=closed",
-		"gh api -X PATCH repos/trycua/cua/pulls/7030 -Fstate=@-"])
+	for (const c of ["gh api -X PATCH repos/acme/app/pulls/7030 -F state=@state.txt", "gh api -X PATCH repos/acme/app/pulls/7030 --field=state=@s",
+		"gh api -X PATCH repos/acme/app/pulls/7030 -fstate=closed", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field=state=closed",
+		"gh api -X PATCH repos/acme/app/pulls/7030 -F state=CLOSED", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field state=closed",
+		"gh api -X PATCH repos/acme/app/pulls/7030 -Fstate=@-"])
 		refuse(c, host, /, a review-only teammate\. /);
 	ok("gh api graphql -f query='query { viewer { login } }'");
-	ok("gh api -X PATCH repos/trycua/cua/pulls/7030 -F title=@t.txt");
-	ok("gh api -X PATCH repos/trycua/cua/pulls/7030 -f state=open");
+	ok("gh api -X PATCH repos/acme/app/pulls/7030 -F title=@t.txt");
+	ok("gh api -X PATCH repos/acme/app/pulls/7030 -f state=open");
 	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
 	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
+});
+
+test("a PR title or body that breaks Commits and PR text is refused in the merge job's repo, and nowhere else", () => {
+	const files: Record<string, string> = { "/app/wt/body.md": "## Summary\nx\n\nverify: ran\n", "/app/wt/ok.md": "## Summary\nthe scoped repository checks passed\nrisk: light\n" };
+	const h = { ...host, readText: (f: string, d: string | undefined) => files[path.posix.resolve(d ?? "/", f)] };
+	const no = (c: string, why: RegExp, cwd = inApp) => assert.match(checkBash(c, OWNED, h, cwd) ?? "", why, c);
+	const ok = (c: string, cwd = inApp) => assert.equal(checkBash(c, OWNED, h, cwd), undefined, c);
+	no('gh pr create --title "Fix the driver" --body "x"', /^blocked: a PR title that is not Conventional Commit/);
+	no('gh pr create -R acme/app -t "fix: x" -b "built in /home/box/work/app"', /local machine path/, "/zs");
+	no('gh pr edit 12 --body "x\nverify-ran: clippy"', /`verify:` or `verify-ran:` line/);
+	no('gh pr create --title "fix(driver): x" --body "x\n\nCo-authored-by: A <a@b.c>"', /Co-authored-by/);
+	no("gh pr create --title 'fix(driver): x' --body-file body.md", /`verify:`/);
+	no('gh pr create --title="refactor x" -F ok.md', /Conventional Commit/);
+	ok('gh pr create --title "fix(driver): keep the window focused" --body-file ok.md');
+	ok('gh pr create --title "feat!: drop the old flag" --body "risk: light"');
+	ok('gh pr create --title "$TITLE" --body-file missing.md');
+	ok("gh pr create --fill");
+	ok("gh pr edit 12 --add-label bug");
+	ok('gh pr create --title "Fix the driver" --body "/Users/me/x"', "/zs");
+	ok('gh pr view 12 --json title');
+	assert.deepEqual(prTextProblems("docs(readme): say where ~/Library/x and /usr/bin live", "see https://example.com/home/page and /usr/local/bin/x"), []);
+});
+
+test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
+	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", "python3 /pkg/zstack/bin/queue verified app-1 pass auto",
+		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
+		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
+		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
+		blocked(c, inApp);
+	for (const c of ["/pkg/zstack/bin/queue ready app-1 40", "bin/queue raise app-1", "bin/queue list", "gh api repos/acme/app/statuses/abc",
+		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
+		allowed(c, inApp);
+	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 pass auto",
+		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
+		allowed(c, "/zs");
+	assert.match(checkBash("bin/queue start app-1", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
 });

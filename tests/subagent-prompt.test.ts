@@ -4,6 +4,8 @@ import * as fs from "node:fs";
 import { test } from "node:test";
 import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../extensions/subagent/prompt.ts";
 
+for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
+
 const root = new URL("..", import.meta.url).pathname;
 const body = (name: string) => fs.readFileSync(`${root}agents/${name}.md`, "utf-8").split(/^---$/m).slice(2).join("---");
 
@@ -45,5 +47,5 @@ test("an agent's {{rule <id>}} lines become bin/policy's rendering of those rule
 	}
 	assert.equal(expandRules("a\n{{rule x-y}}\nb {{rule z}}\n", () => "- X\n"), "a\n- X\nb {{rule z}}\n");
 	assert.deepEqual(ruleIds("{{rule a-b}}\n {{rule c}}\n{{rule d}}"), ["a-b", "d"]);
-	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on pairing, Teleport and Keyvault normally\.$/m);
+	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on skyhook, vaultkey and sealing normally\.$/m);
 });
