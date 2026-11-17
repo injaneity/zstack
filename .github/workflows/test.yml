@@ -27,6 +27,8 @@ jobs:
         run: bin/policy check && bin/policy get ci.fix_attempts && bin/policy dump > /dev/null && bin/policy rules > /dev/null
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
+        run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
 
   test:
     runs-on: ubuntu-latest
@@ -44,6 +46,8 @@ jobs:
         run: bin/policy check && bin/policy rules > /dev/null
       - name: queue, holds, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: the mini's lume-e2e wrapper tests pass (no VM starts)
+        run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
       - name: zstack code carries no comments
         run: python3 tests/comments.py check
       - name: lint the services and tests
