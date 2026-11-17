@@ -51,6 +51,12 @@ M = [
         "AutoMergeIsVerifiedAndAllowed",
     ),
     (
+        "fail-keeps-the-pass",
+        "a passed head the verifier then fails stays set to merge itself",
+        [("armed' = armed \\ {i} /\\ status' = [status EXCEPT ![i] = \"none\"]", "armed' = armed /\\ status' = status")],
+        "AutoMergeIsVerifiedAndAllowed",
+    ),
+    (
         "arm-a-review-item",
         "auto-merge is armed for an item the verifier passed as needing review",
         [("IF NeedsReview(i) THEN armed \\ {i} ELSE armed \\cup {i}", "armed \\cup {i}")],

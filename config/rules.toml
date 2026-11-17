@@ -80,7 +80,7 @@ text = '''You write the code and a short test plan. Verification is the `verifie
 
 [[section.rule]]
 id = "checks-verifier"
-text = '''When your PR is open and you believe it is done, run `bin/queue ready <id> <pr>` and wait. The dispatcher has the verifier check that head. Fix what it finds, push, and run `ready` again. A push after a pass sends the PR back for another check. Only a read-only answer with no diff skips this, and says so.'''
+text = '''When your PR is open and you believe it is done, have the verifier check its head, with the queue id, the PR number and the head in its brief. The verifier records its verdict itself with `bin/queue verified`; you never run that command. Fix what it finds, push, and have it check the new head. A push after a pass needs another check. Only a read-only answer with no diff skips this, and says so.'''
 
 [[section.rule]]
 id = "checks-platforms"

@@ -257,13 +257,13 @@ class StateFiles(unittest.TestCase):
 
 class NoVerifiedComment(unittest.TestCase):
     def test_nothing_asks_for_the_verified_pr_comment(self):
-        rx = re.compile(r"verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
+        rx = re.compile(r"(?<!queue )verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
         rendered = policy.render(RULES)
         hits = [f"config/rules.toml: {m.group(0)}" for m in rx.finditer(rendered)]
         for f in [*prose(), "README.md", "docs/SUBAGENT.md"]:
             hits += [f"{f}: {m.group(0)}" for m in rx.finditer((PKG / f).read_text())]
         self.assertEqual(hits, [])
-        self.assertIn("bin/queue ready", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
+        self.assertIn("bin/queue verified", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
 
 
 if __name__ == "__main__":

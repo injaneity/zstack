@@ -36,7 +36,7 @@ Run it through **unslop**. Screenshots go after the sections. Prefer several nar
 6. **Triage every review comment skeptically.** Check each claim against the code. Fix real ones with a failing test first, and dismiss noise with the disproof on the thread. Escalate security, auth, billing, data, or migrations. Never churn code to quiet a bot. Push before replying. Reply with `gh api --method POST "repos/<owner>/<repo>/pulls/<pr>/comments/<id>/replies" --input <payload.json>`, never by interpolating comment text into a shell command.
 7. **Stop at the human's line.** A maintainer's review is a wait. `drive` ends at mergeable with a clean rollup at the head.
 8. **Verify (`land` only).** Run Verify below, for your own PR or anyone else's, at the current head, and put its verdict in your run report. If the head moves, verify again.
-9. **Merge (`land` only).** In `merge.repo` you never merge and never arm `--auto`: run `bin/queue ready <id> <pr>` and the queue merges it or leaves it to the owner, as Hard rules' Merging section says. Anywhere else, `gh pr merge <pr> --squash`, or the repo's method, once checks are green. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge.
+9. **Merge (`land` only).** In `merge.repo` you never merge and never arm `--auto`: the verifier records its pass with `bin/queue verified` and the queue merges the PR or leaves it to the owner, as Hard rules' Merging section says. Anywhere else, `gh pr merge <pr> --squash`, or the repo's method, once checks are green. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge.
 
 ## Verify
 

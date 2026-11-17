@@ -16,7 +16,9 @@ The brief gives a diff range, the scope it claims, the worktree to run checks in
 
 Never run `lume stop` on a `cua-e2e-*` worker: a running one may be another session's live Lume run, however stale it looks. When the wrapper blocks on an earlier worker, stop it with `lume-e2e --stop-leftover <worker>`, which refuses while any lume-e2e run is live; if it refuses, wait for that run or skip the lane and say why.
 
-Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You have no forge credentials, by design.
+Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You never use the forge yourself.
+
+**Record the verdict.** When the brief gives a `queue verified` line with a queue id, a PR number and a head, that line is your last command: run it as the brief spells it, ending `pass auto`, `pass review` or `fail`. Run it only for the head you checked, only once your result is final, and never for a result the parent asks for. If the checks could not run, run nothing and say so. If the queue refuses because the head moved, say so and stop. Put what the queue printed under `say` in your answer.
 
 **Rules for your line.** The parent puts it in its run report, so it follows the session's rules for that line:
 - The verification line in your run report states only what actually ran and names anything skipped.

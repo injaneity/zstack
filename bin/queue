@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -14,14 +15,14 @@ USAGE = (
     "  queue pickup [--dry]             read the repo and queue what this machine takes\n"
     "  queue add <id> [--priority N] [--preapproved]\n"
     "                                   queue a task from the orchestrator; its text on stdin\n"
-    "  queue next                       what to launch now, what to verify and what to recover, as JSON\n"
+    "  queue next                       what to launch now and what to recover, as JSON\n"
     "  queue start <id>                 reserve the next item before launching its thread\n"
     "  queue claim <id> <thread>        the thread now working a started item\n"
     "  queue requeue <id>               a started item whose thread did not start\n"
-    "  queue ready <id> <pr>            a working item's PR is open and waits for the verifier\n"
-    "  queue verified <id> pass auto    the verifier passed that head and it may merge itself\n"
-    "  queue verified <id> pass review  the verifier passed that head and a person must review it\n"
-    "  queue verified <id> fail         the verifier found something: back to its thread\n"
+    "  queue verified <id> <pr> <head> pass auto|review\n"
+    "                                   the verifier passed that head: it may merge itself, or a person must review it\n"
+    "  queue verified <id> <pr> <head> fail\n"
+    "                                   the verifier found something in that head: its thread fixes it\n"
     "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
     "  queue sweep                      merge what may merge, close merged items, send a new head back to work\n"
     "  queue list                       the queue as it stands"
@@ -30,10 +31,9 @@ _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "po
 policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(policy)
 Refused = policy.PolicyError
-STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "requeue": ("starting", "queued"),
-         "ready": ("working", "verifying")}
-ACTIVE = ("starting", "working", "verifying", "passed")
-OPEN = ("working", "verifying", "passed", "owner")
+STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "requeue": ("starting", "queued")}
+ACTIVE = ("starting", "working", "passed")
+OPEN = ("working", "passed", "owner")
 STALE_S = 15 * 60
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
@@ -236,8 +236,10 @@ def first(items, h, cap):
 
 
 def brief(pol, ident, it):
+    env = {"ZSTACK_CONFIG": policy.CONFIG, "ZSTACK_MACHINE": os.environ.get("ZSTACK_MACHINE"), "ZSTACK_REPO": pol["merge"]["repo"]}
     return read_text(os.path.join(PKG, "dispatch", "brief.md")).format(
-        id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "bin", "queue"))
+        id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "bin", "queue"),
+        env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
 def next_up(pol):
@@ -246,13 +248,11 @@ def next_up(pol):
     def go(items):
         pick, waiting = first(items, h, pol["run"]["threads"])
         return {"launch": {"id": pick, "clone": pol["host"]["clone"], "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
-                "verify": [{"id": k, "pr": v["pr"], "head": v["head"], "thread": v["thread"]} for k, v in sorted(items.items())
-                           if v["state"] == "verifying"],
                 "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S)}, False
     return locked(pol, go)
 
 
-def step(pol, name, ident, thread=None, pr=None):
+def step(pol, name, ident, thread=None):
     was, to = STEPS[name]
     h = holds(read_text(pol["host"]["holds"]))
 
@@ -266,9 +266,6 @@ def step(pol, name, ident, thread=None, pr=None):
             pick, waiting = first(items, h, pol["run"]["threads"])
             if pick != ident:
                 raise Refused(f"{ident} is not next: {waiting or pick + ' is'}")
-        if name == "ready":
-            head = pr_view(pol, pr)["headRefOid"]
-            it.update(pr=pr, head=head)
         it.update(state=to, thread=thread or it["thread"], at=now())
         return it, True
     return locked(pol, go)
@@ -300,21 +297,22 @@ def merge(pol, it, live, h):
     return f"the merge was refused: {err}" if rc else "merged, or in the merge queue"
 
 
-def verified(pol, ident, result, said="review"):
+def verified(pol, ident, pr, head, result, said="review"):
     h = holds(read_text(pol["host"]["holds"]))
 
     def go(items):
         it = items.get(ident)
-        if not it or it["state"] != "verifying":
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not verifying")
+        if not it or it["state"] not in ("working", "passed"):
+            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working or passed")
+        live = pr_view(pol, pr)
+        if live["headRefOid"] != head:
+            raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
+        it.update(pr=pr, head=head)
         if result == "fail":
             it["fixes"] += 1
-            it.update(state="working" if it["fixes"] < pol["ci"]["fix_attempts"] else "owner", at=now())
-            return {**it, "say": "send the findings to its thread" if it["state"] == "working" else "its attempts are spent: the owner's"}, True
-        live = pr_view(pol, it["pr"])
-        if live["headRefOid"] != it["head"]:
-            it.update(state="working", at=now())
-            return {**it, "say": "the head moved while it was verified: it needs `queue ready` again"}, True
+            it.update(state="working" if it["fixes"] < pol["ci"]["fix_attempts"] else "owner", auto=False, at=now())
+            return {**it, "say": "its thread fixes the findings and has the new head checked" if it["state"] == "working" else
+                    "its attempts are spent: the owner's"}, True
         pre = it["preapproved"] or h["preapproved"].get(it["pr"]) == it["head"]
         review = it["review"] or said != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]
         it.update(state="passed", auto=pre or not review, why=None if pre or not review else "it needs a person's review", at=now())
@@ -325,7 +323,7 @@ def verified(pol, ident, result, said="review"):
 def raise_review(pol, ident):
     def go(items):
         it = items.get(ident)
-        if not it or it["state"] not in ("working", "verifying", "passed"):
+        if not it or it["state"] not in ("working", "passed"):
             raise Refused(f"{ident} is {it['state'] if it else 'not queued'}: nothing to raise")
         it["review"] = True
         if not it["preapproved"]:
@@ -373,10 +371,9 @@ def main(argv, stdin=sys.stdin):
             return say(step(pol, argv[0], argv[1]))
         if len(argv) == 3 and argv[0] == "claim":
             return say(step(pol, "claim", argv[1], thread=argv[2]))
-        if len(argv) == 3 and argv[0] == "ready" and argv[2].isdigit():
-            return say(step(pol, "ready", argv[1], pr=int(argv[2])))
-        if argv[:1] == ["verified"] and (argv[2:] == ["fail"] or (len(argv) == 4 and argv[2] == "pass" and argv[3] in ("auto", "review"))):
-            return say(verified(pol, argv[1], argv[2], argv[3] if argv[2] == "pass" else "review"))
+        if argv[:1] == ["verified"] and len(argv) >= 5 and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[3]) and (
+                argv[4:] == ["fail"] or (len(argv) == 6 and argv[4] == "pass" and argv[5] in ("auto", "review"))):
+            return say(verified(pol, argv[1], int(argv[2]), argv[3], argv[4], argv[5] if argv[4] == "pass" else "review"))
         if len(argv) == 2 and argv[0] == "raise":
             return say(raise_review(pol, argv[1]))
         if argv == ["sweep"]:
