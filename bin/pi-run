@@ -607,7 +607,8 @@ def launch(sid, role, brief, extra):
                 os._exit(1)
         new = step(r.run, "start", alive(r.run), pid=pid, start=starttime(pid), wake_finish="wake: finish" in text.splitlines(),
                    pool=pool, **f)
-        r.write(new if cont else {**new, "role": role, "extra": extra, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]})
+        new = {**new, "pytest_root": env["PYTEST_DEBUG_TEMPROOT"]}
+        r.write(new if cont else {**new, "role": role, "extra": extra})
     gate is None or os.close(gate)
     print(f"pi-run: {'resumed' if cont else 'started'} {sid} attempt {r.run['attempt']} pid {pid} in {d} as role {role}: {provider} {model}")
     return 0

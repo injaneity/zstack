@@ -777,6 +777,15 @@ class Launcher(unittest.TestCase):
         self.assertEqual((self.t / "pytest-env").read_text().splitlines()[0], str(first))
         self.assertFalse(first.exists())
         self.assertFalse((self.t / "moved").exists())
+        legacy = self.t / "root/review/lim/run.json"
+        legacy.write_text(json.dumps({**{k: v for k, v in self.run_json("lim").items() if k != "pytest_root"},
+                                      "state": "queued", "resume_at": "2026-01-01T00:00:00Z"}))
+        (self.t / "hang").touch()
+        r = self.pi_run("lim", "coding", str(self.t / "brief.md"), PI_RUN_DRAIN="1", TMPDIR=str(self.t / "moved"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.run_json("lim")["pytest_root"], str(self.t / "moved" / "pi-run-pytest" / "lim"))
+        (self.t / "hang").unlink()
+        self.finished("lim")
 
     def test_an_incomplete_upstream_response_requeues_like_a_429_with_no_wake(self):
         for sid, say in (("i1", "Incomplete Claude Code upstream response (status 200, capture incomplete, native retries denied 1)"),
