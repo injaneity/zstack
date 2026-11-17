@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -287,6 +288,23 @@ class Merge(Case):
         self.assertEqual(moved, {"a": ("done", "merged"), "b": ("working", "a new head after it passed"),
                                  "c": ("passed", "it waits: it has a hold row")})
         self.assertEqual(self.forge.merges, [])
+
+    def test_sweep_frees_the_slot_of_an_ended_thread_with_no_pr_and_leaves_one_with_a_pr(self):
+        status = {"t-a": "completed", "t-b": "interrupted", "t-c": "running", "t-d": "completed"}
+        self.pol["run"]["threads"] = 4
+        for ident in status:
+            self.add(ident[2:])
+            self.to_working(ident[2:], thread=ident)
+        self.pr_open("d", 43)
+        queue.verified(self.pol, "d", 43, H1, "fail")
+
+        def t3(argv, **_):
+            self.assertEqual(argv[:5], ["t3", "thread", "show", "--json", "--messages"])
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"thread": {"status": status[argv[-1]]}}), "")
+        with patch.object(queue.subprocess, "run", t3):
+            moved = {x["id"]: x["why"] for x in queue.sweep(self.pol)}
+        self.assertEqual(moved, {"a": "its thread ended with no PR", "b": "its thread ended with no PR"})
+        self.assertEqual({k: v["state"] for k, v in self.items().items()}, {"a": "done", "b": "done", "c": "working", "d": "working"})
 
     def test_the_steps_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
