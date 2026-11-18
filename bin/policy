@@ -65,7 +65,6 @@ MACHINE = {
 PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
          "unlabelled": (lambda v: type(v) is bool, "true or false")}
 REPO = {
-    "ci": {"fix_attempts": (pos_int, "a positive integer")},
     "people": {"me": (lambda v: text(v), "a login"), "owner": (lambda v: text(v), "a name")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),

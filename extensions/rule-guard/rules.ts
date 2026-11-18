@@ -26,6 +26,7 @@ export interface Host {
 	reviewOnly?(): ReadonlySet<string> | null;
 	readText?(file: string, dir: string | undefined): string | undefined;
 	thread?: string;
+	gate?(repo: string, pr: number, head: string): string | undefined;
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
@@ -128,13 +129,14 @@ function gitPush(w: string[], raw: string[]): string | undefined {
 function ghNamedRepo(w: string[]): string | undefined {
 	const named = (m: RegExpMatchArray | null | undefined) => (m ? repoName(m[1]) : undefined);
 	if (w[1] === "api") return named(operands(w.slice(2), GH_API_VALUE_OPTS)[0]?.match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/([^/]+\/[^/]+)\//));
+	let last: string | undefined, given = false;
 	for (let i = 0; i < w.length; i++) {
 		const a = w[i];
-		if (a === "-R" || a === "--repo") return repoName(w[i + 1]);
-		const m = a.match(/^(?:-R|--repo=)(.+)$/);
-		if (m) return repoName(m[1]);
-		if (GH_VALUE_OPTS.has(a)) i++;
+		const m = a === "-R" || a === "--repo" ? [a, w[++i] ?? ""] : a.match(/^(?:-R|--repo=)(.+)$/);
+		if (m) [last, given] = [repoName(m[1]), true];
+		else if (GH_VALUE_OPTS.has(a)) i++;
 	}
+	if (given) return last;
 	for (const a of operands(w.slice(1), GH_VALUE_OPTS)) {
 		const r = named(a.match(/github\.com\/([^/\s]+\/[^/\s#?]+)\/(?:pull|actions|issues)\//));
 		if (r) return r;
@@ -158,6 +160,8 @@ function ghApiWrites(w: string[]): boolean {
 	return method ? method !== "GET" : fields;
 }
 
+const GH_CORE = new Set(["alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "extension", "gist", "gpg-key",
+	"help", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"]);
 const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
@@ -187,21 +191,43 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => /^--input(=|$)/.test(a) || /^[\w-]+=@/.test(a)))
+		return `a GraphQL query read from a file or stdin, which the guard cannot read, while ${who}`;
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
+	const [g1, g2] = operands(w.slice(1), GH_VALUE_OPTS);
+	if (!help && g1 !== undefined && (!GH_CORE.has(g1) || (g1 === "alias" && (g2 === "set" || g2 === "import"))))
+		return `\`gh ${g1}${g1 === "alias" ? ` ${g2}` : ""}\`: the guard cannot read what an alias or extension runs, and ${who}`;
 	const act = help ? undefined :
-		w[1] === "pr" && w[2] === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
-		w[1] === "pr" && w[2] === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
+		g1 === "pr" && g2 === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
+		g1 === "pr" && g2 === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
 	if (!act) return undefined;
 	if (!owned) return `${act} while ${who}`;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown); ${who}`;
 	const hit = repos.find((r) => owned.has(r as string));
-	return hit ? `${act} in ${hit}: a PR there merges itself once it is verified, or the owner merges it (Hard rules, Merging)` : undefined;
+	if (!hit) return undefined;
+	const how = "`gh pr merge <pr> --squash --match-head-commit <the head the verifier passed>`";
+	if (act !== "`gh pr merge`" || !host.gate || repos.length !== 1) return `${act} in ${hit}: a PR there merges only with ${how} (Hard rules, Merging)`;
+	const rest = w.slice(3), seen: Record<string, string[]> = { pr: [], head: [], repo: [], squash: [] };
+	let odd = w[1] !== "pr" || w[2] !== "merge" || c.raw.length !== w.length;
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "--squash" || a === "-s") seen.squash.push(a);
+		else if (a === "--delete-branch" || a === "-d") continue;
+		else if (a === "--match-head-commit") seen.head.push(rest[++i] ?? "");
+		else if (a === "-R" || a === "--repo") seen.repo.push(rest[++i] ?? "");
+		else if (/^\d+$/.test(a)) seen.pr.push(a);
+		else odd = true;
+	}
+	const [pr, head] = [seen.pr[0], seen.head[0]];
+	if (odd || seen.pr.length !== 1 || seen.head.length !== 1 || seen.squash.length !== 1 || seen.repo.length > 1 || !/^[0-9a-f]{40}$/.test(head))
+		return `${act} in ${hit} merges only as ${how}, as a plain command with the PR's number, each option once and no other option`;
+	return host.gate(hit, Number(pr), head);
 }
 
-const QUEUE_OPEN = new Set(["raise", "finished", "list", "next"]);
+const QUEUE_OPEN = new Set(["release", "gate", "list", "next"]);
 export const THREAD_VAR = "T3CODE_THREAD_ID";
 
 function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
@@ -212,8 +238,10 @@ function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefine
 	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
 	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
 		return `\`queue verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
+	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined)
+		return "`queue release <id>` from a coding thread: a thread releases only its own item, with `queue release`";
 	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && w[i + 1] !== "verified" && !QUEUE_OPEN.has(w[i + 1]))
-		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue raise <id>\` or \`queue finished <id>\``;
+		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue list\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
 		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
 	return undefined;

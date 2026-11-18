@@ -1,39 +1,30 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, None, Cap, MaxFix, Accepts, Review, Pre, Prio
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio
 
-VARIABLES q, threads, live, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge,
-          startedHeld, jumped, crowded, pr
+VARIABLES q, held, status, merged, by, okAtMerge, startedHeld, jumped, crowded, stale
 
-vars == <<q, threads, live, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-States == {"none", "queued", "starting", "working", "passed", "owner", "done"}
+vars == <<q, held, status, merged, by, okAtMerge, startedHeld, jumped, crowded, stale>>
+States == {"none", "queued", "running", "review", "done"}
 
 TypeOK ==
   /\ q \in [Machines -> [Items -> States]]
-  /\ threads \in [Items -> 0..3]
-  /\ live \in [Machines -> SUBSET Items]
   /\ held \subseteq Items
-  /\ launching \in [Machines -> Items \cup {None}] /\ fired \in [Machines -> BOOLEAN]
-  /\ raised \subseteq Items
-  /\ status \in [Items -> {"none", "pass"}]
-  /\ fixes \in [Items -> 0..(MaxFix + 1)]
+  /\ status \in [Items -> {"none", "auto", "review"}]
   /\ merged \subseteq Items
-  /\ by \in [Items -> {"none", "auto", "human"}]
-  /\ verifiedAtMerge \in [Items -> BOOLEAN] /\ reviewAtMerge \in [Items -> BOOLEAN] /\ armed \subseteq Items /\ fresh \in [Items -> BOOLEAN]
-  /\ startedHeld \in BOOLEAN /\ jumped \in BOOLEAN /\ crowded \in BOOLEAN /\ pr \subseteq Items
+  /\ by \in [Items -> {"none", "thread", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
+  /\ startedHeld \in BOOLEAN /\ jumped \in BOOLEAN /\ crowded \in BOOLEAN /\ stale \subseteq Items
 
 Init ==
   /\ q = [m \in Machines |-> [i \in Items |-> "none"]]
-  /\ threads = [i \in Items |-> 0] /\ live = [m \in Machines |-> {}] /\ held = {}
-  /\ launching = [m \in Machines |-> None] /\ fired = [m \in Machines |-> FALSE] /\ raised = {} /\ status = [i \in Items |-> "none"]
-  /\ fixes = [i \in Items |-> 0] /\ merged = {} /\ by = [i \in Items |-> "none"]
-  /\ verifiedAtMerge = [i \in Items |-> FALSE] /\ reviewAtMerge = [i \in Items |-> FALSE] /\ armed = {} /\ fresh = [i \in Items |-> FALSE]
-  /\ startedHeld = FALSE /\ jumped = FALSE /\ crowded = FALSE /\ pr = {}
+  /\ held = {} /\ status = [i \in Items |-> "none"]
+  /\ merged = {} /\ by = [i \in Items |-> "none"] /\ okAtMerge = [i \in Items |-> FALSE]
+  /\ startedHeld = FALSE /\ jumped = FALSE /\ crowded = FALSE /\ stale = {}
 
 Set(m, i, s) == q' = [q EXCEPT ![m][i] = s]
-NeedsReview(i) == (i \in Review \/ i \in raised) /\ i \notin Pre
-rest == <<threads, live, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+Busy(m) == Cardinality({j \in Items : q[m][j] = "running"})
+rest == <<held, status, merged, by, okAtMerge, startedHeld, jumped, crowded, stale>>
 
 Enter(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held
   /\ Set(m, i, "queued") /\ UNCHANGED rest
@@ -41,100 +32,56 @@ Pickup(m, i) == Enter(m, i)
 Add(m, i) == Enter(m, i)
 
 First(m, i) == \A j \in Items : q[m][j] = "queued" /\ j \notin held => Prio[j] <= Prio[i]
-Start(m, i) == q[m][i] = "queued" /\ launching[m] = None /\ i \notin held /\ First(m, i)
-  /\ Cardinality(live[m]) < Cap
-  /\ Set(m, i, "starting") /\ launching' = [launching EXCEPT ![m] = i]
-  /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held) /\ crowded' = (crowded \/ Cardinality(live[m]) >= Cap)
-  /\ UNCHANGED <<threads, live, held, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, fired, pr>>
+Claim(m, i) == q[m][i] = "queued" /\ i \notin held /\ First(m, i)
+  /\ Busy(m) < Cap
+  /\ Set(m, i, "running")
+  /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held) /\ crowded' = (crowded \/ Busy(m) >= Cap)
+  /\ UNCHANGED <<held, status, merged, by, okAtMerge, stale>>
 
-Launch(m) == launching[m] # None /\ ~fired[m]
-  /\ threads' = [threads EXCEPT ![launching[m]] = @ + 1] /\ live' = [live EXCEPT ![m] = @ \cup {launching[m]}]
-  /\ fired' = [fired EXCEPT ![m] = TRUE]
-  /\ UNCHANGED <<q, held, launching, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+Takes(m, i) == q[m][i] \in {"running", "review"}
+Verdict(m, i, v) == Takes(m, i) /\ i \notin merged /\ status' = [status EXCEPT ![i] = v] /\ stale' = stale \ {i}
+  /\ UNCHANGED <<q, held, merged, by, okAtMerge, startedHeld, jumped, crowded>>
+Push(m, i) == Takes(m, i) /\ i \notin merged /\ status[i] # "none" /\ status' = [status EXCEPT ![i] = "none"] /\ stale' = stale \cup {i}
+  /\ UNCHANGED <<q, held, merged, by, okAtMerge, startedHeld, jumped, crowded>>
 
-Claim(m) == launching[m] # None /\ fired[m]
-  /\ Set(m, launching[m], "working") /\ launching' = [launching EXCEPT ![m] = None] /\ fired' = [fired EXCEPT ![m] = FALSE]
-  /\ UNCHANGED <<threads, live, held, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
-Requeue(m) == launching[m] # None /\ ~fired[m]
-  /\ Set(m, launching[m], "queued") /\ launching' = [launching EXCEPT ![m] = None]
-  /\ UNCHANGED <<threads, live, held, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, fired, startedHeld, jumped, crowded, pr>>
-
-Crash(m) == launching[m] # None /\ launching' = [launching EXCEPT ![m] = None] /\ fired' = [fired EXCEPT ![m] = FALSE]
-  /\ UNCHANGED <<q, threads, live, held, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
-Recover(m, i) == q[m][i] = "starting" /\ launching[m] # i
-  /\ Set(m, i, IF threads[i] > 0 THEN "working" ELSE "queued")
-  /\ UNCHANGED rest
-
-Raise(m, i) == q[m][i] \in {"working", "passed"} /\ i \notin merged
-  /\ raised' = raised \cup {i} /\ armed' = (IF i \in Pre THEN armed ELSE armed \ {i})
-  /\ UNCHANGED <<q, threads, live, held, launching, fired, status, fixes, merged, by, verifiedAtMerge, fresh, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
-Takes(m, i) == q[m][i] \in {"working", "passed"} \/ (q[m][i] = "owner" /\ fixes[i] < MaxFix)
-Pass(m, i) == Takes(m, i) /\ Set(m, i, "passed") /\ status' = [status EXCEPT ![i] = "pass"]
-  /\ armed' = (IF NeedsReview(i) THEN armed \ {i} ELSE armed \cup {i})
-  /\ fresh' = [fresh EXCEPT ![i] = TRUE] /\ pr' = pr \cup {i} /\ live' = [live EXCEPT ![m] = @ \ {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, fixes, merged, by, verifiedAtMerge, reviewAtMerge, startedHeld, jumped, crowded>>
-
-Fail(m, i) == Takes(m, i) /\ fixes' = [fixes EXCEPT ![i] = @ + 1]
-  /\ Set(m, i, IF fixes[i] + 1 < MaxFix THEN "working" ELSE "owner")
-  /\ fresh' = [fresh EXCEPT ![i] = FALSE] /\ armed' = armed \ {i} /\ status' = [status EXCEPT ![i] = "none"] /\ pr' = pr \cup {i}
-  /\ live' = [live EXCEPT ![m] = IF fixes[i] + 1 < MaxFix THEN @ \cup {i} ELSE @ \ {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, merged, by, verifiedAtMerge, reviewAtMerge, startedHeld, jumped, crowded>>
-
-Push(m, i) == q[m][i] = "passed" /\ i \notin merged
-  /\ status' = [status EXCEPT ![i] = "none"] /\ Set(m, i, "working") /\ fresh' = [fresh EXCEPT ![i] = FALSE]
-  /\ live' = [live EXCEPT ![m] = @ \cup {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, fixes, merged, by, verifiedAtMerge, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
+NeedsPerson(i) == (status[i] = "review" \/ i \in Review) /\ i \notin Pre
+Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held
 Merge(i, who) == i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = who]
-  /\ verifiedAtMerge' = [verifiedAtMerge EXCEPT ![i] = fresh[i]]
-  /\ reviewAtMerge' = [reviewAtMerge EXCEPT ![i] = NeedsReview(i) \/ (who = "auto" /\ i \in held)]
-  /\ UNCHANGED <<q, threads, live, held, launching, fired, raised, status, fixes, armed, fresh, startedHeld, jumped, crowded, pr>>
-AutoMerge(i) == i \in armed /\ status[i] = "pass" /\ i \notin held /\ Merge(i, "auto")
-HumanMerge(i) == (\E m \in Machines : q[m][i] \in {"working", "passed", "owner"}) /\ Merge(i, "human")
+  /\ okAtMerge' = [okAtMerge EXCEPT ![i] = status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held]
+  /\ UNCHANGED <<q, held, status, startedHeld, jumped, crowded, stale>>
+ThreadMerge(m, i) == Takes(m, i) /\ Open(i) /\ Merge(i, "thread")
+HumanMerge(i) == (\E m \in Machines : Takes(m, i)) /\ Merge(i, "human")
 
-Done(m, i) == q[m][i] \in {"working", "passed", "owner"} /\ i \in merged
-  /\ Set(m, i, "done") /\ live' = [live EXCEPT ![m] = @ \ {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
-Quiet(m, i) == q[m][i] = "working" /\ Set(m, i, "owner") /\ live' = [live EXCEPT ![m] = @ \ {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
-
-Finish(m, i) == q[m][i] = "working" /\ i \notin pr /\ Set(m, i, "done") /\ live' = [live EXCEPT ![m] = @ \ {i}]
-  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+Finished(i) == i \in merged \/ status[i] = "none"
+Release(m, i) == q[m][i] = "running" /\ UNCHANGED rest
+  /\ \/ Finished(i) /\ Set(m, i, "done")
+     \/ i \notin merged /\ Set(m, i, "review")
+Settle(m, i) == q[m][i] = "review" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED rest
 
 Hold(i) == i \notin held /\ held' = held \cup {i}
-  /\ UNCHANGED <<q, threads, live, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+  /\ UNCHANGED <<q, status, merged, by, okAtMerge, startedHeld, jumped, crowded, stale>>
 Unhold(i) == i \in held /\ held' = held \ {i}
-  /\ UNCHANGED <<q, threads, live, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+  /\ UNCHANGED <<q, status, merged, by, okAtMerge, startedHeld, jumped, crowded, stale>>
 
 Next ==
-  \/ \E m \in Machines : Launch(m) \/ Claim(m) \/ Requeue(m) \/ Crash(m)
   \/ \E m \in Machines, i \in Items :
-       Pickup(m, i) \/ Add(m, i) \/ Start(m, i) \/ Recover(m, i) \/ Raise(m, i)
-       \/ Pass(m, i) \/ Fail(m, i) \/ Push(m, i) \/ Done(m, i) \/ Quiet(m, i) \/ Finish(m, i)
-  \/ \E i \in Items : AutoMerge(i) \/ HumanMerge(i) \/ Hold(i) \/ Unhold(i)
+       Pickup(m, i) \/ Add(m, i) \/ Claim(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ Release(m, i) \/ Settle(m, i)
+       \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
+  \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i)
 
-Fair == WF_vars(Quiet("mac", "i1")) /\ \A m \in Machines : WF_vars(Claim(m)) /\ WF_vars(Requeue(m)) /\ \A i \in Items : WF_vars(Recover(m, i))
+Fair == \A m \in Machines, i \in Items : WF_vars(Release(m, i)) /\ WF_vars(Settle(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
 OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "none"}) <= 1
-OneThreadPerItem == \A i \in Items : threads[i] <= 1
 CapHolds == ~crowded
-SlotOnlyWhileWorking == \A m \in Machines, i \in Items : i \in live[m] => q[m][i] \in {"starting", "working"}
 HeldNeverStarted == ~startedHeld
 PriorityOrder == ~jumped
-FixCap == \A i \in Items : fixes[i] <= MaxFix
-AutoMergeIsVerifiedAndAllowed == \A i \in Items : by[i] = "auto" => verifiedAtMerge[i] /\ ~reviewAtMerge[i]
-WorkingHasThread == \A m \in Machines, i \in Items : q[m][i] \in {"working", "passed"} => threads[i] = 1
-QuietTakesAVerdict == \A m \in Machines, i \in Items : q[m][i] = "owner" /\ fixes[i] < MaxFix => Takes(m, i)
-PrDoneOnlyWhenMerged == \A m \in Machines, i \in Items : q[m][i] = "done" /\ i \in pr => i \in merged
-NoPrFreesItsSlot == (q["mac"]["i1"] = "working" /\ "i1" \notin pr) ~> (q["mac"]["i1"] # "working" \/ "i1" \in pr)
-StartingResolves == \A m \in Machines, i \in Items : (q[m][i] = "starting") ~> (q[m][i] # "starting")
+ThreadMergesOnlyAVerifiedAllowedHead == \A i \in Items : by[i] = "thread" => okAtMerge[i]
+AVerdictAlwaysLands == \A m \in Machines, i \in Items : q[m][i] = "review" => Takes(m, i)
+NothingUnfinishedIsCleared == \A m \in Machines, i \in Items : q[m][i] = "done" => Finished(i)
+RunningIsReleased == \A m \in Machines, i \in Items : (q[m][i] = "running") ~> (q[m][i] # "running")
+AMergedReviewIsCleared == \A m \in Machines, i \in Items : (q[m][i] = "review" /\ i \in merged) ~> (q[m][i] = "done")
 
 MCAccepts == ("mac" :> {"i1", "i3"} @@ "linux" :> {"i2"})
-LiveAccepts == ("mac" :> {"i1", "i2"})
 MCPrio == ("i1" :> 1 @@ "i2" :> 2 @@ "i3" :> 2)
 ====

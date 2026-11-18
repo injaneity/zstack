@@ -11,7 +11,7 @@ license: MIT
 ## Who is reading
 
 - **A coding thread** does the work. Every section below applies. Its model is `models.coding` in the config.
-- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `bin/queue` queues, has the queue merge what the verifier passed, and relays what comes back. Its instructions are `dispatch/playbook.md` in the package, not this skill.
+- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `bin/queue` queues, frees the slot of a thread that died, and relays what comes back. Its instructions are `dispatch/playbook.md` in the package, not this skill.
 
 ## Hard rules
 
@@ -40,7 +40,7 @@ The three delegates are the role files in the package's `agents/`. Each runs on 
 | Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Every diff and every done claim that rests on one, and a review of someone else's PR, as Hard rules' Checks says. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one delegate call per angle. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
-- **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. For a queue item, the brief also carries the `queue verified` line your own brief gives you, with the PR number and the head filled in, and the verifier runs it. A fix round's brief carries only its findings and the new range, never your logs or reasoning.
+- **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. For a queue item, the brief also carries the `queue verified` line your own brief gives you, with the PR number and the head filled in, and the verifier runs it. Wait for the verifier inside your turn: when your turn ends, the queue frees your slot and reports what happened, so a turn that ends while the verifier still runs is reported as unfinished. A fix round's brief carries only its findings and the new range, never your logs or reasoning.
 - **Nowhere else.** Do everything else yourself.
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.

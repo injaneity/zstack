@@ -15,108 +15,64 @@ M = [
     ),
     (
         "merge-a-held-item",
-        "a hold row added after an item passed does not stop its merge",
-        [('status[i] = "pass" /\\ i \\notin held /\\ Merge(i, "auto")', 'status[i] = "pass" /\\ Merge(i, "auto")')],
-        "AutoMergeIsVerifiedAndAllowed",
+        "a hold row added after a head passed does not close the gate",
+        [(' /\\ ~NeedsPerson(i) /\\ i \\notin held\nMerge', ' /\\ ~NeedsPerson(i)\nMerge')],
+        "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
     (
-        "recover-forgets-the-thread",
-        "a started item whose thread did start goes back in the queue",
-        [('IF threads[i] > 0 THEN "working" ELSE "queued"', '"queued"')],
-        "SlotOnlyWhileWorking",
-        ("Cap = 1", "Cap = 2"),
+        "merge-an-unverified-head",
+        "the gate opens for a head the verifier never passed",
+        [('Open(i) == status[i] # "none" /\\ ~NeedsPerson(i)', "Open(i) == ~NeedsPerson(i)")],
+        "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
     (
-        "launch-twice",
-        "the dispatcher launches again for an item it already launched",
-        [("Launch(m) == launching[m] # None /\\ ~fired[m]", "Launch(m) == launching[m] # None")],
-        "OneThreadPerItem",
+        "merge-a-review-pass",
+        "the gate opens for a head the verifier passed as needing a person",
+        [('Open(i) == status[i] # "none" /\\ ~NeedsPerson(i) /\\ i', 'Open(i) == status[i] # "none" /\\ i')],
+        "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
-    ("launch-past-the-cap", "a thread starts with the machine at its cap", [("  /\\ Cardinality(live[m]) < Cap\n", "")], "CapHolds"),
+    (
+        "pass-survives-a-push",
+        "a pass stays on the PR after a new push",
+        [('status[i] # "none" /\\ status\' = [status EXCEPT ![i] = "none"]', 'status[i] # "none" /\\ status\' = status')],
+        "ThreadMergesOnlyAVerifiedAllowedHead",
+    ),
+    ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (
         "start-a-held-item",
-        "an item with a hold row added after it was queued is started",
-        [("/\\ launching[m] = None /\\ i \\notin held /\\ First(m, i)", "/\\ launching[m] = None /\\ First(m, i)")],
+        "an item with a hold row added after it was queued is claimed",
+        [('Claim(m, i) == q[m][i] = "queued" /\\ i \\notin held /\\ First(m, i)', 'Claim(m, i) == q[m][i] = "queued" /\\ First(m, i)')],
         "HeldNeverStarted",
     ),
     ("oldest-first", "the queue ignores priority", [("/\\ i \\notin held /\\ First(m, i)\n", "/\\ i \\notin held\n")], "PriorityOrder"),
     (
-        "fix-cap-off-by-one",
-        "a failed verification goes back to its thread once more than ci.fix_attempts",
-        [('IF fixes[i] + 1 < MaxFix THEN "working" ELSE "owner"', 'IF fixes[i] < MaxFix + 1 THEN "working" ELSE "owner"')],
-        "FixCap",
-    ),
-    (
-        "status-survives-a-push",
-        "the verified status stays green after a new push",
-        [('  /\\ status\' = [status EXCEPT ![i] = "none"] /\\ Set(m, i, "working")', '  /\\ status\' = status /\\ Set(m, i, "working")')],
-        "AutoMergeIsVerifiedAndAllowed",
-    ),
-    (
-        "fail-keeps-the-pass",
-        "a passed head the verifier then fails stays set to merge itself",
-        [("armed' = armed \\ {i} /\\ status' = [status EXCEPT ![i] = \"none\"]", "armed' = armed /\\ status' = status")],
-        "AutoMergeIsVerifiedAndAllowed",
-    ),
-    (
-        "arm-a-review-item",
-        "auto-merge is armed for an item the verifier passed as needing review",
-        [("IF NeedsReview(i) THEN armed \\ {i} ELSE armed \\cup {i}", "armed \\cup {i}")],
-        "AutoMergeIsVerifiedAndAllowed",
-    ),
-    (
-        "raise-does-not-disarm",
-        "a thread asks for review after auto-merge was armed, and it merges anyway",
-        [("armed' = (IF i \\in Pre THEN armed ELSE armed \\ {i})", "armed' = armed")],
-        "AutoMergeIsVerifiedAndAllowed",
-    ),
-    (
-        "preapproved-merges-unverified",
-        "a preapproved item merges itself on a head the verifier never passed",
-        [('i \\in armed /\\ status[i] = "pass" /\\ i', 'i \\in armed /\\ (i \\in Pre \\/ status[i] = "pass") /\\ i')],
-        "AutoMergeIsVerifiedAndAllowed",
-        ("  Pre = {}", '  Pre = {"i2"}'),
-    ),
-    (
-        "claim-before-launch",
-        "an item is marked working for a thread that never started",
-        [("Claim(m) == launching[m] # None /\\ fired[m]", "Claim(m) == launching[m] # None")],
-        "WorkingHasThread",
-    ),
-    (
-        "no-recovery",
-        "an item whose launch died after it was started stays starting for good",
-        [('Recover(m, i) == q[m][i] = "starting" /\\ launching[m] # i\n', 'Recover(m, i) == q[m][i] = "starting" /\\ launching[m] # i /\\ FALSE\n')],
-        "a temporal property",
-    ),
-    (
-        "a-pass-keeps-its-slot",
-        "a passed item waiting for its merge or its owner still counts toward the thread cap",
-        [(" /\\ pr' = pr \\cup {i} /\\ live' = [live EXCEPT ![m] = @ \\ {i}]\n", " /\\ pr' = pr \\cup {i} /\\ live' = live\n")],
-        "SlotOnlyWhileWorking",
-    ),
-    (
-        "finish-an-item-with-a-pr",
-        "a thread closes its item as finished though the verifier already checked its PR",
-        [('Finish(m, i) == q[m][i] = "working" /\\ i \\notin pr /\\ Set', 'Finish(m, i) == q[m][i] = "working" /\\ Set')],
-        "PrDoneOnlyWhenMerged",
-    ),
-    (
-        "no-quiet",
-        "an item whose thread went quiet holds its slot for good",
-        [('Quiet(m, i) == q[m][i] = "working" /\\ Set', 'Quiet(m, i) == q[m][i] = "working" /\\ FALSE /\\ Set')],
-        "a temporal property",
+        "no-release",
+        "an item whose thread's turn ended holds its slot for good",
+        [('Release(m, i) == q[m][i] = "running" /\\ UNCHANGED rest', 'Release(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED rest')],
+        LIVE,
     ),
     (
         "a-late-verdict-is-refused",
-        "the verdict of a verifier still running when its item went to the owner as quiet is thrown away",
-        [(' \\/ (q[m][i] = "owner" /\\ fixes[i] < MaxFix)\n', "\n")],
-        "QuietTakesAVerdict",
+        "the verdict of a verifier still running when its thread's turn ended is thrown away",
+        [('Takes(m, i) == q[m][i] \\in {"running", "review"}', 'Takes(m, i) == q[m][i] = "running"')],
+        "AVerdictAlwaysLands",
+    ),
+    (
+        "clear-an-open-pr",
+        "an item leaves the queue at its turn end though its passed PR is still open",
+        [('  /\\ \\/ Finished(i) /\\ Set(m, i, "done")', '  /\\ \\/ Set(m, i, "done")')],
+        "NothingUnfinishedIsCleared",
+    ),
+    (
+        "keep-a-merged-item",
+        "an item whose PR the owner merged stays in the queue for good",
+        [('Settle(m, i) == q[m][i] = "review" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "review" /\\ FALSE /\\ i \\in merged')],
+        LIVE,
     ),
 ]
 
 
-def run(jar, java, scratch, src, cfgs, name, why, edits, rule, *conf):
+def run(jar, java, scratch, src, cfg, name, why, edits, rule, *conf):
     s = src
     for old, new in edits:
         if s.count(old) != 1:
@@ -124,7 +80,6 @@ def run(jar, java, scratch, src, cfgs, name, why, edits, rule, *conf):
         s = s.replace(old, new)
     d = os.path.join(scratch, name)
     os.makedirs(d, exist_ok=True)
-    cfg = cfgs[rule == LIVE]
     open(os.path.join(d, "Queue.tla"), "w").write(s)
     open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
     cmd = [java, "-XX:+UseParallelGC", "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, "meta")]
@@ -138,9 +93,9 @@ def run(jar, java, scratch, src, cfgs, name, why, edits, rule, *conf):
 
 def main(jar, java, scratch):
     src = open(os.path.join(HERE, "Queue.tla")).read()
-    cfgs = [open(os.path.join(HERE, f)).read() for f in ("Queue.cfg", "Queue.live.cfg")]
+    cfg = open(os.path.join(HERE, "Queue.cfg")).read()
     with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
-        said = list(pool.map(lambda m: run(jar, java, scratch, src, cfgs, *m), M))
+        said = list(pool.map(lambda m: run(jar, java, scratch, src, cfg, *m), M))
     print("\n".join(said))
     return int(any(not x.startswith("killed") for x in said))
 

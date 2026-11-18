@@ -37,7 +37,7 @@ host = "each"
 format = "json"
 writer = "bin/queue"
 readers = ["bin/queue"]
-schema = "{items: {<id>: {state, kind, n, source, priority, preapproved, review, task, title, thread, pr, head, fixes, auto, why, at}}}; state is queued, starting, working, passed, owner or done (model/Queue.tla)"
+schema = "{items: {<id>: {state, kind, n, source, priority, preapproved, task, title, thread, worktree, pr, head, passed, why, at}}, done: [<id>]}; state is queued, running or review (model/Queue.tla); done holds the ids of finished items the repo still lists"
 
 [file.queue-lock]
 path = "queue.lock"

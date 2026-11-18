@@ -553,15 +553,45 @@ test("a PR title or body that breaks Commits and PR text is refused in the merge
 	assert.deepEqual(prTextProblems("docs(readme): say where ~/Library/x and /usr/bin live", "see https://example.com/home/page and /usr/local/bin/x"), []);
 });
 
+test("a merge in an owned repo runs only as the gated command, and only when the queue's gate opens", () => {
+	const H = "a".repeat(40), asked: [string, number, string][] = [];
+	const gated = { ...host, gate: (repo: string, pr: number, head: string) => { asked.push([repo, pr, head]); return pr === 40 ? undefined : `queue: PR ${pr} does not merge: it has a hold row`; } };
+	const run = (c: string) => checkBash(c, OWNED, gated, "/app");
+	assert.equal(run(`gh pr merge 40 --squash --match-head-commit ${H}`), undefined);
+	assert.equal(run(`gh pr merge 40 -R acme/app --match-head-commit ${H} --squash`), undefined);
+	assert.match(run(`gh pr merge 41 --squash --match-head-commit ${H}`) ?? "", /^blocked: queue: PR 41 does not merge: it has a hold row/);
+	assert.deepEqual(asked, [["acme/app", 40, H], ["acme/app", 40, H], ["acme/app", 41, H]]);
+	for (const c of [`gh pr merge 40 --squash`, `gh pr merge --squash --match-head-commit ${H}`, `gh pr merge 40 --match-head-commit ${H}`,
+		`gh pr merge 40 --squash --auto --match-head-commit ${H}`, `gh pr merge 40 --squash --admin --match-head-commit ${H}`,
+		`gh pr merge 40 --squash --match-head-commit abc123`, `gh pr merge https://github.com/acme/app/pull/40 --squash --match-head-commit ${H}`,
+		`gh api -X PUT repos/acme/app/pulls/40/merge`, `gh pr merge 40 --squash --match-head-commit ${H} --match-head-commit ${"b".repeat(40)}`,
+		`gh pr merge 40 --squash --auto=true --match-head-commit ${H}`, `gh pr merge 40 --squash --admin=true --match-head-commit ${H}`,
+		`gh pr merge 40 41 --squash --match-head-commit ${H}`, `gh pr merge 40 -R other/repo -R acme/app --squash --match-head-commit ${H}`,
+		`gh pr merge 40 --squash --match-head-commit=${H}`, `gh pr merge 40 --squash --rebase --match-head-commit ${H}`,
+		`gh pr merge 40 --squash --match-head-commit ${H} --body x`])
+		assert.match(run(c) ?? "", /^blocked: /, c);
+	for (const c of [`printf '%s %s' --match-head-commit ${"b".repeat(40)} | xargs gh pr merge 40 --squash --match-head-commit ${H}`,
+		`env GH_DEBUG=1 gh pr merge 40 --squash --match-head-commit ${H}`, `gh pr -R acme/app merge 40 --auto`, `gh pr -R acme/app merge 40 --squash --match-head-commit ${H}`,
+		`gh alias set m 'pr merge'`, `gh m 40 --auto -R acme/app`, `gh alias import aliases.yml`, "gh co 40",
+		"gh api graphql --input mutation.json", "gh api graphql -F query=@mutation.graphql", "cat m.json | gh api graphql --input -"])
+		assert.match(run(c) ?? "", /^blocked: /, c);
+	for (const c of ["gh alias list", "gh pr view 40", "gh pr -R acme/app view 40", "gh run rerun 9 --failed", "gh m --help", "gh api graphql -f query='query { viewer { login } }'"])
+		assert.equal(run(c), undefined, c);
+	assert.equal(run(`gh pr merge 40 -s -d --match-head-commit ${H}`), undefined);
+	asked.pop();
+	assert.equal(asked.length, 3);
+	assert.match(checkBash(`gh pr merge 40 --squash --match-head-commit ${H}`, OWNED, host, "/app") ?? "", /^blocked: /);
+});
+
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
 	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto";
 	const inThread = { ...host, thread: "t-9" };
-	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue nudge app-1",
+	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue requeue app-1", "bin/queue release app-2",
 		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
 		blocked(c, inApp);
-	for (const c of ["/pkg/zstack/bin/queue raise app-1", "bin/queue raise app-1", "bin/queue finished app-1", "bin/queue list", "gh api repos/acme/app/statuses/abc",
+	for (const c of ["/pkg/zstack/bin/queue release", "bin/queue gate 40 abc", "bin/queue list", "gh api repos/acme/app/statuses/abc",
 		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
 		allowed(c, inApp);
 	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 40 abc pass auto",
