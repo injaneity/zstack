@@ -2,7 +2,9 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
+LIVE = "a temporal property"
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -21,7 +23,7 @@ M = [
         "recover-forgets-the-thread",
         "a started item whose thread did start goes back in the queue",
         [('IF threads[i] > 0 THEN "working" ELSE "queued"', '"queued"')],
-        "OneThreadPerItem",
+        "SlotOnlyWhileWorking",
         ("Cap = 1", "Cap = 2"),
     ),
     (
@@ -88,6 +90,12 @@ M = [
         "a temporal property",
     ),
     (
+        "a-pass-keeps-its-slot",
+        "a passed item waiting for its merge or its owner still counts toward the thread cap",
+        [(" /\\ pr' = pr \\cup {i} /\\ live' = [live EXCEPT ![m] = @ \\ {i}]\n", " /\\ pr' = pr \\cup {i} /\\ live' = live\n")],
+        "SlotOnlyWhileWorking",
+    ),
+    (
         "end-an-item-with-a-pr",
         "an item whose thread ended is closed though its PR is still open",
         [('  /\\ \\/ i \\notin pr /\\ Set(m, i, "done") /\\ pr\' = pr\n', '  /\\ \\/ Set(m, i, "done") /\\ pr\' = pr\n')],
@@ -102,50 +110,33 @@ M = [
 ]
 
 
+def run(jar, java, scratch, src, cfgs, name, why, edits, rule, *conf):
+    s = src
+    for old, new in edits:
+        if s.count(old) != 1:
+            return f"BROKEN   {name}: edit not found once: {old[:60]!r}"
+        s = s.replace(old, new)
+    d = os.path.join(scratch, name)
+    os.makedirs(d, exist_ok=True)
+    cfg = cfgs[rule == LIVE]
+    open(os.path.join(d, "Queue.tla"), "w").write(s)
+    open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
+    cmd = [java, "-XX:+UseParallelGC", "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, "meta")]
+    out = subprocess.run([*cmd, "-config", "Queue.cfg", "Queue.tla"], cwd=d, capture_output=True, text=True, timeout=900).stdout
+    m = re.search(r"Invariant (\w+) is violated|(Temporal properties were violated)|(not completely specified|Deadlock)", out)
+    got = m and (m.group(1) or (m.group(2) and LIVE))
+    if got == rule:
+        return f"killed   {name}: {why} -> {got} breaks"
+    return f"SURVIVED {name}: {why} -> {got or (m and 'model error: ' + m.group(3)) or 'no error'} (expected {rule})"
+
+
 def main(jar, java, scratch):
-    src, cfg = open(os.path.join(HERE, "Queue.tla")).read(), open(os.path.join(HERE, "Queue.cfg")).read()
-    bad = 0
-    for name, why, edits, rule, *conf in M:
-        s = src
-        for old, new in edits:
-            if s.count(old) != 1:
-                print(f"BROKEN   {name}: edit not found once: {old[:60]!r}")
-                bad = 1
-                break
-            s = s.replace(old, new)
-        else:
-            d = os.path.join(scratch, name)
-            os.makedirs(d, exist_ok=True)
-            open(os.path.join(d, "Queue.tla"), "w").write(s)
-            open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
-            out = subprocess.run(
-                [
-                    java,
-                    "-XX:+UseParallelGC",
-                    "-cp",
-                    jar,
-                    "tlc2.TLC",
-                    "-workers",
-                    "2",
-                    "-metadir",
-                    os.path.join(d, "meta"),
-                    "-config",
-                    "Queue.cfg",
-                    "Queue.tla",
-                ],
-                cwd=d,
-                capture_output=True,
-                text=True,
-                timeout=900,
-            ).stdout
-            m = re.search(r"Invariant (\w+) is violated|(Temporal properties were violated)|(not completely specified|Deadlock)", out)
-            got = m and (m.group(1) or (m.group(2) and "a temporal property"))
-            if got == rule:
-                print(f"killed   {name}: {why} -> {got} breaks")
-            else:
-                print(f"SURVIVED {name}: {why} -> {got or (m and 'model error: ' + m.group(3)) or 'no error'} (expected {rule})")
-                bad = 1
-    return bad
+    src = open(os.path.join(HERE, "Queue.tla")).read()
+    cfgs = [open(os.path.join(HERE, f)).read() for f in ("Queue.cfg", "Queue.live.cfg")]
+    with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
+        said = list(pool.map(lambda m: run(jar, java, scratch, src, cfgs, *m), M))
+    print("\n".join(said))
+    return int(any(not x.startswith("killed") for x in said))
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name
 _l.exec_module(policy)
 Refused = policy.PolicyError
 STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "requeue": ("starting", "queued")}
-ACTIVE = ("starting", "working", "passed")
+ACTIVE = ("starting", "working")
 OPEN = ("working", "passed", "owner")
 STALE_S = 15 * 60
 THREAD_VAR = "T3CODE_THREAD_ID"

@@ -288,6 +288,15 @@ class Merge(Case):
                                  "c": ("passed", "it waits: it has a hold row")})
         self.assertEqual(self.forge.merges, [])
 
+    def test_a_passed_item_frees_its_slot_and_a_new_head_takes_it_back(self):
+        self.pol["run"]["threads"] = 1
+        self.passed("review")
+        self.add("b")
+        self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "b")
+        self.forge.prs[40]["head"] = H2
+        self.assertEqual(queue.sweep(self.pol)[0]["now"], "working")
+        self.assertEqual(queue.next_up(self.pol)["waiting"], "the machine is at its thread cap")
+
     def test_an_ended_thread_frees_its_slot_and_its_open_pr_goes_to_the_owner(self):
         self.pol["run"]["threads"] = 3
         for x in ("a", "b", "c"):
@@ -334,7 +343,7 @@ class Merge(Case):
                          ("End(m, i)", "done"), ("End(m, i)", "owner")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
-        self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "owner", "done"})
+        self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "passed", "owner", "done"})
 
 
 class Cli(Case):
