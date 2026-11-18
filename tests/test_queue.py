@@ -39,7 +39,9 @@ class Forge:
                                   "statusCheckRollup": [{"name": BASE["merge"]["gate_check"], "conclusion": p.get("ci", "SUCCESS")},
                                                         *p.get("more", [])]}), ""
         if a[:2] == ("pr", "list"):
-            return 0, json.dumps([{"number": n} for n, p in self.prs.items() if p.get("branch") == a[a.index("--head") + 1]][:1]), ""
+            want = a[a.index("--state") + 1]
+            return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items(), reverse=True) if p.get("branch") == a[a.index("--head") + 1]
+                                  and (want == "all" or p.get("state", "OPEN") == "OPEN")][:1]), ""
         raise AssertionError(a)
 
 
@@ -381,6 +383,14 @@ class Release(Case):
         (self.root / "wt-dirty" / "new.txt").write_text("x")
         git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.root / "wt-ahead")
         self.forge.prs[50] = {"head": H1, "branch": "open"}
+        self.forge.prs[51] = {"head": H2, "branch": "open", "state": "CLOSED"}
+        git("worktree", "add", "-q", "--detach", str(self.root / "wt-loose"), cwd=clone)
+        self.add("loose")
+        self.to_working("loose", thread="t-loose", worktree=str(self.root / "wt-loose"))
+        loose = queue.release(self.pol, "loose")
+        self.assertEqual((loose["state"], "is on no branch" in loose["why"], (self.root / "wt-loose").exists()), ("review", True, True))
+        with patch.object(queue, "git", lambda *a: (1, "")):
+            self.assertEqual(queue.release(self.pol, "loose")["why"], f"cannot list the worktrees of {os.path.realpath(clone)}")
         got = {x: queue.release(self.pol, x) for x in ("clean", "dirty", "ahead", "gone", "open")}
         self.assertEqual({x: v["state"] for x, v in got.items()},
                          {"clean": "done", "dirty": "review", "ahead": "review", "gone": "done", "open": "review"})
@@ -390,7 +400,7 @@ class Release(Case):
         self.forge.prs[50]["state"] = "MERGED"
         (self.root / "wt-dirty" / "new.txt").unlink()
         self.assertEqual(self.pick([])["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 50 merged"}])
-        self.assertEqual((sorted(self.items()), (self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()), (["ahead"], False, False))
+        self.assertEqual((sorted(self.items()), (self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()), (["ahead", "loose"], False, False))
 
     def test_a_queue_file_from_an_older_zstack_is_refused_by_name(self):
         for old in ({"items": {}}, {"items": {"a": {"state": "passed"}}, "done": []}):

@@ -344,12 +344,19 @@ def git(*args):
 def listed(pol, path):
     clone = os.path.realpath(os.path.expanduser(pol["host"]["clone"]))
     path = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isdir(path):
+        return clone, None
     rc, out = git("-C", clone, "worktree", "list", "--porcelain")
-    return (clone, path) if not rc and path != clone and f"worktree {path}" in out.splitlines() else (clone, None)
+    if rc:
+        raise Refused(f"cannot list the worktrees of {clone}")
+    return (clone, path) if path != clone and f"worktree {path}" in out.splitlines() else (clone, None)
 
 
 def tidy(pol, it, whole):
-    clone, path = listed(pol, it["worktree"]) if it["worktree"] else (None, None)
+    try:
+        clone, path = listed(pol, it["worktree"]) if it["worktree"] else (None, None)
+    except Refused:
+        return not whole
     if not path:
         return True
     if not whole:
@@ -361,14 +368,19 @@ def tidy(pol, it, whole):
 
 def branch_pr(pol, it):
     path = listed(pol, it["worktree"])[1] if it["worktree"] else None
-    rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD") if path else (1, "")
-    if rc or not name:
+    if not path:
         return None
-    rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", "all", "--limit", "1", "--json", "number")
-    if rc:
-        raise Refused(f"cannot look up the PR of branch {name}: {err}")
-    found = json.loads(out) if out.strip() else []
-    return found[0]["number"] if found else None
+    rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")
+    if rc or not name:
+        raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
+    for state in ("open", "all"):
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", state, "--limit", "1", "--json", "number")
+        if rc:
+            raise Refused(f"cannot look up the PR of branch {name}: {err}")
+        found = json.loads(out) if out.strip() else []
+        if found:
+            return found[0]["number"]
+    return None
 
 
 def outcome(pol, items, done, key, h):
