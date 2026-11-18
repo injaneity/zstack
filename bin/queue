@@ -12,35 +12,32 @@ from datetime import datetime, timezone
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
-    "  queue pickup [--dry]             read the repo and queue what this machine takes\n"
+    "  queue pickup [--dry]             read the repo, queue what this machine takes, and tidy up after closed PRs\n"
     "  queue add <id> [--priority N] [--preapproved]\n"
     "                                   queue a task from the orchestrator; its text on stdin\n"
-    "  queue next                       what to launch now and what to recover, as JSON\n"
+    "  queue next                       what to launch now, what to recover, and the running threads, as JSON\n"
     "  queue start <id>                 reserve the next item before launching its thread\n"
     "  queue claim <id> <thread> [<worktree>]\n"
-    "                                   the thread now working a started item, and the worktree it works in\n"
+    "                                   the thread now running a started item, and the worktree it works in\n"
     "  queue requeue <id>               a started item whose thread did not start\n"
     "  queue verified <id> <pr> <head> pass auto|review\n"
-    "                                   the verifier passed that head: it may merge itself, or a person must review it\n"
+    "                                   the verifier passed that head: its thread may merge it, or a person must review it\n"
     "  queue verified <id> <pr> <head> fail\n"
     "                                   the verifier found something in that head: its thread fixes it\n"
-    "  queue nudge <id>                 a working item's thread is idle: what to send it, or the owner's after the last nudge\n"
-    "  queue finished <id>              the thread says it is done with nothing to merge\n"
-    "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
-    "  queue sweep                      merge what may merge, close merged items, send a new head back to work,\n"
-    "                                   and remove a done item's worktree when nothing in it is unpushed\n"
+    "  queue gate <pr> <head>           may that head of that PR merge now; exits 1 with the reason when it may not\n"
+    "  queue release [<id>]             the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
+    "                                   With no id, the item of the thread that runs it\n"
     "  queue list                       the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
 policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(policy)
 Refused = policy.PolicyError
-STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "requeue": ("starting", "queued")}
-ACTIVE = ("starting", "working")
-OPEN = ("working", "passed", "owner")
+STEPS = {"start": ("queued", "starting"), "claim": ("starting", "running"), "requeue": ("starting", "queued")}
+ACTIVE = ("starting", "running")
+OLD = {"working": "running", "passed": "released", "owner": "released", "done": "released", "verifying": "released"}
 STALE_S = 15 * 60
-NUDGES = 3
-QUIET = "its thread went quiet with no verdict"
+IDLE_S = 60 * 60
 THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
@@ -138,7 +135,7 @@ def skip(c, h, prs, items, host):
         return "held"
     if c["kind"] == "issue" and any(n in prs for n in c["linked"]):
         return "pr"
-    busy = {n for i in items.values() if i["state"] != "done" for n in (i["n"], i["pr"]) if n}
+    busy = {n for i in items.values() if i["state"] != "released" or i["open"] for n in (i["n"], i["pr"]) if n}
     if c["n"] in busy or any(n in busy for n in c["linked"]):
         return "overlap"
     return None
@@ -170,9 +167,9 @@ def task(c, h, pol):
 
 
 def item(kind, n, source, priority, text, title, preapproved=False):
-    return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved, "review": False,
-            "task": text, "title": title, "thread": None, "worktree": None, "nudges": 0, "pr": None, "head": None, "fixes": 0,
-            "auto": False, "why": None, "at": now()}
+    return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved,
+            "task": text, "title": title, "thread": None, "worktree": None, "pr": None, "head": None, "passed": None, "open": False,
+            "why": None, "at": now()}
 
 
 def root(pol):
@@ -188,10 +185,12 @@ def locked(pol, fn):
         text = read_text(path)
         state = json.loads(text) if text else {"items": {}}
         for it in state["items"].values():
-            if it["state"] == "verifying" or it.get("why") == "its thread ended before the verifier passed its PR":
-                it.update(state="owner", why=QUIET)
-            it.setdefault("worktree", None)
-            it.setdefault("nudges", 0)
+            if it["state"] in OLD:
+                it.update(passed=("auto" if it.get("auto") else "review") if it["state"] == "passed" else None,
+                          open=it["state"] != "done" and bool(it.get("pr")), state=OLD[it["state"]])
+            for k, v in item(0, 0, 0, 0, 0, 0).items():
+                if k not in ("state", "at"):
+                    it.setdefault(k, v)
         out, changed = fn(state["items"])
         if changed:
             with open(path + ".tmp", "w") as f:
@@ -205,6 +204,7 @@ def pickup(pol, dry):
     errors = []
     h = holds(read_text(pol["host"]["holds"]))
     cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
+    tidied = [] if dry or errors else settle(pol)
 
     def go(items):
         queued, skipped = [], []
@@ -217,7 +217,7 @@ def pickup(pol, dry):
             pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
             items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"], pre)
             queued.append({"id": c["id"], "priority": priority})
-        return {"queued": queued, "skipped": skipped, "errors": errors}, bool(queued) and not dry
+        return {"queued": queued, "skipped": skipped, "tidied": tidied, "errors": errors}, bool(queued) and not dry
     return locked(pol, go)
 
 
@@ -251,7 +251,7 @@ def first(items, h, cap):
 def brief(pol, ident, it):
     env = {"ZSTACK_CONFIG": policy.CONFIG, "ZSTACK_MACHINE": os.environ.get("ZSTACK_MACHINE"), "ZSTACK_REPO": pol["merge"]["repo"]}
     return read_text(os.path.join(PKG, "dispatch", "brief.md")).format(
-        id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "bin", "queue"),
+        id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "bin", "queue"), repo=pol["merge"]["repo"],
         env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
@@ -262,7 +262,7 @@ def next_up(pol):
         pick, waiting = first(items, h, pol["run"]["threads"])
         return {"launch": {"id": pick, "clone": pol["host"]["clone"], "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
                 "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S),
-                "working": {k: v["thread"] for k, v in sorted(items.items()) if v["state"] == "working"}}, False
+                "running": {k: v["thread"] for k, v in sorted(items.items()) if v["state"] == "running"}}, False
     return locked(pol, go)
 
 
@@ -280,7 +280,7 @@ def step(pol, name, ident, thread=None, worktree=None):
             pick, waiting = first(items, h, pol["run"]["threads"])
             if pick != ident:
                 raise Refused(f"{ident} is not next: {waiting or pick + ' is'}")
-        it.update(state=to, thread=thread or it["thread"], worktree=worktree or it["worktree"], nudges=0, at=now())
+        it.update(state=to, thread=thread or it["thread"], worktree=worktree or it["worktree"], at=now())
         return it, True
     return locked(pol, go)
 
@@ -292,28 +292,27 @@ def pr_view(pol, pr):
     return json.loads(out)
 
 
-def gate(pol, live):
+def gate_green(pol, live):
     name = pol["merge"]["gate_check"]
     return any((c.get("name") or c.get("context")) == name and (c.get("conclusion") or c.get("state")) == "SUCCESS"
                for c in live.get("statusCheckRollup") or [])
 
 
-def merge(pol, it, live, h):
-    if not it["auto"]:
-        return f"the owner merges it: {it['why']}"
+def blocked(pol, it, live, h):
+    if not it["passed"] or it["head"] != live["headRefOid"]:
+        return f"the verifier has not passed head {live['headRefOid']}"
+    pre = it["preapproved"] or h["preapproved"].get(it["pr"]) == it["head"]
+    if not pre and (it["passed"] != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]):
+        return "it needs a person's review"
     if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"]:
-        return "it waits: it has a hold row"
+        return "it has a hold row"
     if live.get("isDraft"):
-        return "it waits: the PR is a draft"
-    if not gate(pol, live):
-        return f"it waits for {pol['merge']['gate_check']} to pass"
-    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--squash", "--match-head-commit", it["head"])
-    return f"the merge was refused: {err}" if rc else "merged, or in the merge queue"
-
-
-def takes_verdict(pol, it):
-    quiet = it["state"] == "owner" and it["why"] == QUIET and it["fixes"] < pol["ci"]["fix_attempts"]
-    return it["state"] in ("working", "passed") or quiet
+        return "the PR is a draft"
+    if not gate_green(pol, live):
+        return f"{pol['merge']['gate_check']} has not passed on that head"
+    running = any(c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")
+                  for c in live.get("statusCheckRollup") or [])
+    return "a check is still running on that head, and a merge now would arm auto-merge" if running else None
 
 
 def verified(pol, ident, pr, head, result, said="review"):
@@ -321,109 +320,129 @@ def verified(pol, ident, pr, head, result, said="review"):
 
     def go(items):
         it = items.get(ident)
-        if not it or not takes_verdict(pol, it):
-            raise Refused(f"{ident} is {it['state'] + (': ' + it['why'] if it['why'] else '') if it else 'not queued'}, so it takes no verdict")
+        if not it or it["state"] not in ("running", "released"):
+            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, and no thread has run it")
         if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
             raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
-        it.update(pr=pr, head=head, nudges=0)
+        for other in items.values():
+            if other["pr"] == pr:
+                other["passed"] = None
+        it.update(pr=pr, head=head, passed=said if result == "pass" else None, open=True, at=now())
         if result == "fail":
-            it["fixes"] += 1
-            back = it["fixes"] < pol["ci"]["fix_attempts"]
-            it.update(state="working" if back else "owner", auto=False, why=None if back else "its fix attempts are spent", at=now())
-            return {**it, "say": "its thread fixes the findings and has the new head checked" if it["state"] == "working" else
-                    "its attempts are spent: the owner's"}, True
-        pre = it["preapproved"] or h["preapproved"].get(it["pr"]) == it["head"]
-        review = it["review"] or said != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]
-        it.update(state="passed", auto=pre or not review, why=None if pre or not review else "it needs a person's review", at=now())
-        return {**it, "say": merge(pol, it, live, h)}, True
+            return {**it, "say": "its thread fixes the findings and has the new head checked"}, True
+        why = blocked(pol, it, live, h)
+        cmd = f"gh pr merge {pr} -R {pol['merge']['repo']} --squash --match-head-commit {head}"
+        return {**it, "say": f"its thread does not merge it: {why}" if why else f"its thread merges it with `{cmd}`"}, True
     return locked(pol, go)
 
 
-def nudge(pol, ident):
+def gate(pol, pr, head):
+    h = holds(read_text(pol["host"]["holds"]))
+
     def go(items):
-        it = items.get(ident)
-        if not it or it["state"] != "working":
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working")
-        if it["nudges"] >= NUDGES:
-            it.update(state="owner", auto=False, why=QUIET, at=now())
-            return {**it, "say": f"{QUIET}: the owner's. A verdict its verifier records later still counts"}, True
-        it["nudges"] += 1
-        q = os.path.join(PKG, "bin", "queue")
-        return {**it, "send": f"{ident} has no verdict in the queue yet. If a verifier you started is still running, wait for it "
-                "and start no other. If your PR is open and no verifier is checking its head, have one check it and wait for its "
-                f"verdict. If you are done and there is nothing to merge, run `{q} finished {ident}`. If you are still working, "
-                "carry on."}, True
-    return locked(pol, go)
-
-
-def finished(pol, ident):
-    def go(items):
-        it = items.get(ident)
-        if not it or it["state"] != "working":
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working")
-        if it["pr"]:
-            raise Refused(f"{ident} has PR {it['pr']}: an item with a PR is done when the PR merges or closes")
-        it.update(state="done", why="its thread finished with nothing to merge", at=now())
-        return it, True
-    return locked(pol, go)
-
-
-def raise_review(pol, ident):
-    def go(items):
-        it = items.get(ident)
-        if not it or it["state"] not in ("working", "passed"):
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}: nothing to raise")
-        it["review"] = True
-        if not it["preapproved"]:
-            it.update(auto=False, why="it needs a person's review")
-        return it, True
+        it = next((v for v in items.values() if v["pr"] == pr and v["passed"]), None)
+        live = pr_view(pol, pr)
+        if live["headRefOid"] != head:
+            raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}")
+        why = blocked(pol, it, live, h) if it else f"the verifier has not passed head {head}"
+        if why:
+            raise Refused(f"PR {pr} does not merge: {why}")
+        return {"merge": pr, "head": head}, False
     return locked(pol, go)
 
 
 def git(*args):
     p = subprocess.run(["git", *args], capture_output=True, text=True, env=ENV)
-    return p.returncode, p.stdout
+    return p.returncode, p.stdout.strip()
 
 
-def tidy(pol, path):
+def listed(pol, path):
     clone = os.path.realpath(os.path.expanduser(pol["host"]["clone"]))
     path = os.path.realpath(os.path.expanduser(path))
     rc, out = git("-C", clone, "worktree", "list", "--porcelain")
-    if rc:
-        return None
-    if path == clone or f"worktree {path}" not in out.splitlines():
-        return "its worktree is already gone"
+    return (clone, path) if not rc and path != clone and f"worktree {path}" in out.splitlines() else (clone, None)
+
+
+def tidy(pol, it):
+    clone, path = listed(pol, it["worktree"]) if it["worktree"] else (None, None)
+    if not path:
+        it["worktree"] = None
+        return
+    if it["open"]:
+        git("-C", path, "clean", "-Xfdq")
+        return
     dirty, ahead = git("-C", path, "status", "--porcelain"), git("-C", path, "rev-list", "-1", "HEAD", "--not", "--remotes")
-    if dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip():
+    if not (dirty[0] or ahead[0] or dirty[1] or ahead[1]) and not git("-C", clone, "worktree", "remove", path)[0]:
+        it["worktree"] = None
+
+
+def branch_pr(pol, it):
+    path = listed(pol, it["worktree"])[1] if it["worktree"] else None
+    rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD") if path else (1, "")
+    if rc or not name:
         return None
-    return None if git("-C", clone, "worktree", "remove", path)[0] else "its worktree was removed"
+    rc, out, _ = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", "all", "--limit", "1", "--json", "number")
+    found = json.loads(out) if not rc and out.strip() else []
+    return found[0]["number"] if found else None
 
 
-def sweep(pol):
+def outcome(pol, it, h):
+    it["pr"] = it["pr"] or branch_pr(pol, it)
+    if not it["pr"]:
+        it.update(open=False, why="nothing to merge")
+        return "done"
+    live = pr_view(pol, it["pr"])
+    it["open"] = live["state"] == "OPEN"
+    it["why"] = f"PR {it['pr']} waits for the owner: {blocked(pol, it, live, h) or 'its thread did not merge it'}" if it["open"] else \
+        f"PR {it['pr']} {live['state'].lower()}"
+    return "blocked" if it["open"] else "done"
+
+
+def tell(kind, ident, it):
+    args = [sys.executable, os.path.join(PKG, "services", "wake.py"), kind, f"{ident}: {it['why']}"] + ([f"pr={it['pr']}"] if it["pr"] else [])
+    return subprocess.run(args, capture_output=True, text=True).stderr.strip().splitlines()[-1:]
+
+
+def release(pol, ident=None):
+    h = holds(read_text(pol["host"]["holds"]))
+    thread = os.environ.get(THREAD_VAR)
+
+    def go(items):
+        key = ident or next((k for k, v in items.items() if thread and v["thread"] == thread and v["state"] in ("running", "released")), None)
+        it = items.get(key)
+        if not it or it["state"] not in ("running", "released"):
+            if ident:
+                raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not running")
+            return {"released": None}, False
+        was = (it["state"], it["why"])
+        try:
+            kind = outcome(pol, it, h)
+        except Refused as e:
+            kind = "blocked"
+            it["why"] = str(e)
+        it.update(state="released", at=now())
+        return {"released": key, **it, "wake": tell(kind, key, it) if was != ("released", it["why"]) else []}, True
+    return locked(pol, go)
+
+
+def settle(pol):
     h = holds(read_text(pol["host"]["holds"]))
 
     def go(items):
         moved = []
         for ident, it in sorted(items.items()):
-            if it["state"] == "done" and it["worktree"]:
-                why = tidy(pol, it["worktree"])
-                if why:
-                    it["worktree"] = None
-                    moved.append({"id": ident, "now": "done", "why": why})
-            if it["state"] not in OPEN or not it["pr"]:
+            if it["state"] != "released" or not (it["open"] or it["worktree"]):
                 continue
-            live = pr_view(pol, it["pr"])
-            if live["state"] in ("MERGED", "CLOSED"):
-                it.update(state="done", at=now())
-                moved.append({"id": ident, "now": "done", "why": live["state"].lower()})
-            elif it["state"] == "passed" and live["headRefOid"] != it["head"]:
-                it.update(state="working", auto=False, nudges=0, at=now())
-                moved.append({"id": ident, "now": "working", "why": "a new head after it passed"})
-            elif it["state"] == "passed" and it["auto"]:
-                moved.append({"id": ident, "now": "passed", "why": merge(pol, it, live, h)})
+            was = (it["open"], it["worktree"])
+            if it["open"]:
+                outcome(pol, it, h)
+            if age(it["at"]) >= IDLE_S:
+                tidy(pol, it)
+            if was != (it["open"], it["worktree"]):
+                moved.append({"id": ident, "why": it["why"], "worktree": it["worktree"]})
         return moved, bool(moved)
     return locked(pol, go)
 
@@ -449,12 +468,10 @@ def main(argv, stdin=sys.stdin):
         if argv[:1] == ["verified"] and len(argv) >= 5 and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[3]) and (
                 argv[4:] == ["fail"] or (len(argv) == 6 and argv[4] == "pass" and argv[5] in ("auto", "review"))):
             return say(verified(pol, argv[1], int(argv[2]), argv[3], argv[4], argv[5] if argv[4] == "pass" else "review"))
-        if len(argv) == 2 and argv[0] in ("nudge", "finished"):
-            return say((nudge if argv[0] == "nudge" else finished)(pol, argv[1]))
-        if len(argv) == 2 and argv[0] == "raise":
-            return say(raise_review(pol, argv[1]))
-        if argv == ["sweep"]:
-            return say(sweep(pol))
+        if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[2]):
+            return say(gate(pol, int(argv[1]), argv[2]))
+        if argv[:1] == ["release"] and len(argv) <= 2:
+            return say(release(pol, argv[1] if len(argv) == 2 else None))
         if argv == ["list"]:
             return say(locked(pol, lambda items: (items, False)))
     except Refused as e:

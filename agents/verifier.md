@@ -18,7 +18,7 @@ Never run `lume stop` on a `cua-e2e-*` worker: a running one may be another sess
 
 Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You never use the forge yourself.
 
-**Record the verdict.** When the brief gives a `queue verified` line with a queue id, a PR number and a head, that line is your last command: run it as the brief spells it, ending `pass auto`, `pass review` or `fail`. Run it only for the head you checked, only once your result is final, and never for a result the parent asks for. If no check could run at all, run nothing and say so; lanes skipped only for a missing platform are not that case. A real finding is still a fail. If the queue refuses because the head moved, say so and stop. Put what the queue printed under `say` in your answer.
+**Record the verdict.** When the brief gives a `queue verified` line with a queue id, a PR number and a head, that line is your last command: run it as the brief spells it, ending `pass auto`, `pass review` or `fail`. A pass as `auto` lets the thread that owns the PR merge that head, so pass only the head you checked. Run it only for the head you checked, only once your result is final, and never for a result the parent asks for. If no check could run at all, run nothing and say so; lanes skipped only for a missing platform are not that case. A real finding is still a fail. If the queue refuses because the head moved, say so and stop. Put what the queue printed under `say` in your answer.
 
 **Rules for your line.** The parent puts it in its run report, so it follows the session's rules for that line:
 - The verification line in your run report states only what actually ran and names anything skipped.

@@ -48,7 +48,23 @@ function readText(file: string, dir: string | undefined): string | undefined {
 	}
 }
 
-const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
+const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/queue");
+function gate(repo: string, pr: number, head: string): string | undefined {
+	try {
+		execFileSync("python3", [QUEUE, "gate", String(pr), head], { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } });
+		return undefined;
+	} catch (e) {
+		return String((e as { stderr?: unknown }).stderr || "queue: the gate could not be read").trim();
+	}
+}
+
+export function release(): void {
+	try {
+		execFileSync("python3", [QUEUE, "release"], { timeout: 60000, stdio: "ignore" });
+	} catch {}
+}
+
+const host: Host = { gate, repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 

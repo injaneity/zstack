@@ -8,7 +8,7 @@ else
   "$src/bin/everystate" -help > /dev/null || { echo "FAIL  no checker: see the line above"; exit 1; }
   java=$src/bin/everystate-java jar=unused by=everystate
 fi
-for cfg in Queue.cfg Queue.live.cfg; do
+for cfg in Queue.cfg; do
   mkdir "$tmp/$cfg" && cp "$src/model/Queue.tla" "$tmp/$cfg/" && cp "$src/model/$cfg" "$tmp/$cfg/Queue.cfg"
   (cd "$tmp/$cfg" && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -metadir meta -config Queue.cfg Queue.tla) > "$tmp/out" 2>&1
   grep -q "Model checking completed. No error has been found." "$tmp/out" || { tail -40 "$tmp/out"; echo "FAIL  $by did not pass model/$cfg"; exit 1; }

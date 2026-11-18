@@ -20,6 +20,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release >/dev/null 2>&1 || true"
+          }
+        ]
+      }
     ]
   }
 }

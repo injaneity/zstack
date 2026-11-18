@@ -8,8 +8,9 @@ Derived from [pstack](https://github.com/cursor/plugins/tree/main/pstack) by Lau
 
 - **The stack** is what every coding thread loads: `skills/`, `agents/`, the Hard rules, and the guard that enforces them. It names no repo. It reaches the rest only through `bin/policy`.
 - **The queue** is one program per machine, `bin/queue`, with its steps model-checked in `model/Queue.tla`. Work enters two ways: the pickup reads the repo for issues assigned to us and reviews requested of us, and the orchestrator above the machines adds a task by hand. Each machine takes the labels its config names, and `bin/policy check` refuses two machines whose labels overlap. The highest priority goes first.
-- **The dispatcher** is one scheduled thread per machine (`dispatch/playbook.md`). It launches what the queue prints, runs the sweep that merges, nudges a working thread that has gone idle and hands its item to the owner when the nudges run out, and relays the results. It decides nothing. A coding thread has the verifier check its own PR, and the verifier records the verdict with `bin/queue verified`.
-- **Merging** is the queue's. The verifier passes a head as `auto` or `review`. Once `merge.gate_check` is green on that same head, the queue merges an `auto` PR, or a preapproved one, itself; a `review` PR waits for the owner. A new push sends the PR back to the verifier.
+- **The dispatcher** is one scheduled thread per machine (`dispatch/playbook.md`). It picks up new work, launches what the queue prints, and frees the slot of a thread that died. It decides nothing. A coding thread has the verifier check its own PR and waits for it inside its turn, and the verifier records the verdict with `bin/queue verified`.
+- **Merging** is the thread's, through a gate. The verifier passes a head as `auto` or `review`. The thread then runs `gh pr merge <pr> --squash --match-head-commit <head>`, and the guard asks `bin/queue gate` before it lets that run: the head must be the one the verifier passed as `auto` (or the item preapproved), `merge.gate_check` green on it, no hold row, and not a draft. A `review` PR waits for the owner, and a new push shuts the gate until the verifier passes the new head.
+- **A turn end** frees the thread's slot. A hook runs `bin/queue release` when a thread's turn ends (Claude Code's `Stop`, pi's `agent_end`), and the queue tells the orchestrator the outcome through the wake: merged, a PR that waits for the owner and why, or nothing to merge. The queue keeps three states for an item: queued, running, released.
 - **The services** are not threads: the patent pre-push hook (`services/pre-push`), the wake (`services/wake.py`), and `services/ensure-main`, which the dispatcher runs first in every pass to bring the machine's checkout to main.
 
 ## install
@@ -46,7 +47,7 @@ A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fill
 ## set up a machine
 
 1. Write your config (above) and set `ZSTACK_CONFIG` where every thread sees it: under `env` in `~/.claude/settings.json`, and in the shell profile. Run `bin/policy check`.
-2. Check that `merge.gate_check` names the CI check that must be green before a merge. The queue merges with the machine's own `gh` login, so that login needs push access.
+2. Check that `merge.gate_check` names the CI check that must be green before a merge. A thread merges with the machine's own `gh` login, so that login needs push access.
 3. Link the pre-push hook into the clone: `ln -s <zstack>/services/pre-push <clone>/.git/hooks/pre-push`.
 4. Create `<root>/hold-prs.txt` (it may hold only a comment). The queue starts nothing while it is unreadable.
 5. Schedule one thread in the zstack project, every few minutes, on the model `models.orchestrator` names, with a fresh session each run and this prompt: `You are this machine's zstack dispatcher. Read <zstack>/dispatch/playbook.md and do one pass exactly as it says.`

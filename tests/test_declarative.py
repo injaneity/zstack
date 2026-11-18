@@ -195,12 +195,12 @@ class Harness(unittest.TestCase):
 
 class Parts(unittest.TestCase):
     STACK = ("extensions/", "hooks/", ".claude-plugin/", "bin/policy", "package.json")
-    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b)[a-z][\w-]*|services/|dispatch/|patent_push|wake\.py")
+    OTHERS = re.compile(r"(?<!usr/)bin/(?!policy\b|hold-row\b|queue\b)[a-z][\w-]*|services/|dispatch/|patent_push|wake\.py")
 
     def test_the_stack_names_no_orchestrator_or_service_file(self):
         wrong = [f"{f}: {m.group(0)}" for f in tracked("extensions/**/*.ts", "hooks/*", ".claude-plugin/*", "bin/policy", "package.json")
                  for m in self.OTHERS.finditer((PKG / f).read_text())]
-        self.assertEqual(wrong, [], "a coding thread's code reaches the rest only through bin/policy")
+        self.assertEqual(wrong, [], "a coding thread's code reaches the rest only through bin/policy and bin/queue")
 
     def test_both_manifests_load_only_the_stack(self):
         pi = json.loads((PKG / "package.json").read_text())["pi"]
@@ -209,7 +209,7 @@ class Parts(unittest.TestCase):
         plugin = json.loads((PKG / ".claude-plugin" / "plugin.json").read_text())
         self.assertEqual(set(plugin), {"name", "version", "description"})
         hooks = (PKG / "hooks" / "hooks.json").read_text()
-        self.assertEqual(sorted(set(re.findall(r"CLAUDE_PLUGIN_ROOT\}/([\w./-]+)", hooks))), ["bin/policy", "hooks/guard.ts"])
+        self.assertEqual(sorted(set(re.findall(r"CLAUDE_PLUGIN_ROOT\}/([\w./-]+)", hooks))), ["bin/policy", "bin/queue", "hooks/guard.ts"])
 
     def test_the_check_catches_a_stack_file_that_names_the_launcher(self):
         self.assertTrue(self.OTHERS.search('path.join(PKG, "bin/launch")'))

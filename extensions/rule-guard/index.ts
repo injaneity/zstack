@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { check } from "./host.ts";
+import { check, release } from "./host.ts";
 import { readyAllowed } from "./rules.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -12,4 +12,5 @@ export default function (pi: ExtensionAPI) {
 			event.toolName === "write" || event.toolName === "edit" ? check("write", String(input.path ?? ""), ctx.cwd, ready) : undefined;
 		return reason ? { block: true, reason } : undefined;
 	});
+	pi.on("agent_end", () => release());
 }

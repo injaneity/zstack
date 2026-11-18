@@ -36,10 +36,10 @@ class Forge:
             p = self.prs[int(a[2])]
             return 0, json.dumps({"number": int(a[2]), "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isDraft": p.get("draft", False),
                                   "labels": [{"name": x} for x in p.get("labels", [])],
-                                  "statusCheckRollup": [{"name": BASE["merge"]["gate_check"], "conclusion": p.get("ci", "SUCCESS")}]}), ""
-        if a[:2] == ("pr", "merge"):
-            self.merges.append((int(a[2]), a[a.index("--match-head-commit") + 1]))
-            return 0, "", ""
+                                  "statusCheckRollup": [{"name": BASE["merge"]["gate_check"], "conclusion": p.get("ci", "SUCCESS")},
+                                                        *p.get("more", [])]}), ""
+        if a[:2] == ("pr", "list"):
+            return 0, json.dumps([{"number": n} for n, p in self.prs.items() if p.get("branch") == a[a.index("--head") + 1]][:1]), ""
         raise AssertionError(a)
 
 
@@ -175,199 +175,95 @@ class Launch(Case):
     def test_the_brief_tells_the_thread_how_to_report(self):
         self.add("a", "Fix the parser")
         text = queue.next_up(self.pol)["launch"]["brief"]
-        for want in ("# a", "Fix the parser", f"{PKG}/bin/queue verified a <pr number> <head sha> pass auto", f"{PKG}/bin/queue raise a",
-                     "Never merge", "ZSTACK_REPO=acme/app "):
+        for want in ("# a", "Fix the parser", f"{PKG}/bin/queue verified a <pr number> <head sha> pass auto",
+                     "gh pr merge <pr number> -R acme/app --squash --match-head-commit <head sha>", "ZSTACK_REPO=acme/app "):
             self.assertIn(want, text)
 
 
-class Merge(Case):
+class Gate(Case):
     def setUp(self):
         super().setUp()
         self.pol["run"]["threads"] = 9
 
     def passed(self, said="auto", labels=(), ident="a", pr=40, preapproved=False):
         self.add(ident, preapproved=preapproved)
-        self.to_working(ident)
+        self.to_working(ident, thread=f"t-{ident}")
         self.pr_open(ident, pr, labels=labels)
         return queue.verified(self.pol, ident, pr, H1, "pass", said)
 
-    def test_a_pass_as_auto_merges_that_head_once_the_gate_check_is_green(self):
+    def shut(self, pr=40, head=H1):
+        try:
+            queue.gate(self.pol, pr, head)
+        except queue.Refused as e:
+            return str(e)
+
+    def test_the_gate_opens_for_the_head_the_verifier_passed_as_auto_with_the_check_green(self):
         got = self.passed()
-        self.assertEqual((got["state"], got["auto"], got["say"]), ("passed", True, "merged, or in the merge queue"))
-        self.assertEqual(self.forge.merges, [(40, H1)])
+        self.assertEqual((got["state"], got["passed"]), ("running", "auto"))
+        self.assertIn(f"gh pr merge 40 -R {REPO} --squash --match-head-commit {H1}", got["say"])
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+        self.assertFalse((self.root / "queue.json").read_text().count("merge"))
 
-    def test_a_pass_with_ci_still_running_waits_and_the_sweep_merges_it_when_it_is_green(self):
+    def test_the_gate_stays_shut_without_a_pass_and_for_a_pr_the_queue_never_ran(self):
         self.add("a")
         self.to_working("a")
         self.pr_open("a", 40)
-        self.forge.prs[40]["ci"] = None
-        got = queue.verified(self.pol, "a", 40, H1, "pass", "auto")
-        self.assertEqual((got["say"], self.forge.merges), (f"it waits for {BASE['merge']['gate_check']} to pass", []))
-        self.assertEqual(queue.sweep(self.pol)[0]["why"], f"it waits for {BASE['merge']['gate_check']} to pass")
-        self.forge.prs[40]["ci"] = "FAILURE"
-        queue.sweep(self.pol)
-        self.assertEqual(self.forge.merges, [])
-        self.forge.prs[40]["ci"] = "SUCCESS"
-        self.assertEqual(queue.sweep(self.pol)[0]["why"], "merged, or in the merge queue")
-        self.assertEqual(self.forge.merges, [(40, H1)])
+        self.pr_open("x", 41)
+        self.assertEqual(self.shut(), f"PR 40 does not merge: the verifier has not passed head {H1}")
+        self.assertEqual(self.shut(41), f"PR 41 does not merge: the verifier has not passed head {H1}")
+        queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        self.assertIsNone(self.shut())
+        self.assertIn("its thread fixes the findings", queue.verified(self.pol, "a", 40, H1, "fail")["say"])
+        self.assertEqual(self.shut(), f"PR 40 does not merge: the verifier has not passed head {H1}")
 
-    def test_a_pass_as_review_the_review_label_a_hold_or_a_draft_is_not_merged(self):
-        self.assertEqual(self.passed(said="review")["say"], "the owner merges it: it needs a person's review")
-        label = [BASE["merge"]["review_label"]]
-        self.assertEqual(self.passed(labels=label, ident="b", pr=41)["say"], "the owner merges it: it needs a person's review")
-        self.holds.write_text("hold | #42 | all | x\n")
-        self.assertEqual(self.passed(ident="c", pr=42)["say"], "it waits: it has a hold row")
-        self.add("d")
-        self.to_working("d")
-        self.pr_open("d", 43)
-        self.forge.prs[43]["draft"] = True
-        self.assertEqual(queue.verified(self.pol, "d", 43, H1, "pass", "auto")["say"], "it waits: the PR is a draft")
-        self.assertEqual(self.forge.merges, [])
-
-    def test_a_preapproved_item_merges_whatever_the_verifier_or_its_thread_says_unless_it_is_held(self):
-        self.assertTrue(self.passed(said="review", preapproved=True)["auto"])
-        self.assertTrue(queue.raise_review(self.pol, "a")["auto"])
-        self.holds.write_text(f"preapprove | #41 | no | {H1} | the owner\npreapprove | #42 | no | {H2} | the owner\n")
-        self.assertTrue(self.passed(said="review", ident="b", pr=41)["auto"])
-        self.assertFalse(self.passed(said="review", ident="c", pr=42)["auto"])
-        self.holds.write_text("hold | #43 | all | x\n")
-        self.assertEqual(self.passed(ident="d", pr=43, preapproved=True)["say"], "it waits: it has a hold row")
-        self.assertEqual(self.forge.merges, [(40, H1), (41, H1)])
-
-    def test_an_issue_with_a_preapproved_label_enters_preapproved(self):
-        self.pick([cand(1, labels=BASE["merge"]["preapproved_labels"]), cand(2), cand(3, "review", labels=BASE["merge"]["preapproved_labels"])])
-        self.assertEqual({k: v["preapproved"] for k, v in self.items().items()}, {"app-1": True, "app-2": False, f"app-3-review-{H1[:7]}": False})
-
-    def test_a_verdict_on_a_head_the_pr_has_left_is_refused(self):
-        self.add("a")
-        self.to_working("a")
-        self.pr_open("a", 40, head=H2)
-        for verdict in (("pass", "auto"), ("fail",)):
-            with self.assertRaisesRegex(queue.Refused, "the head moved"):
-                queue.verified(self.pol, "a", 40, H1, *verdict)
-        self.assertEqual((self.items()["a"]["state"], self.items()["a"]["fixes"], self.forge.merges), ("working", 0, []))
-
-    def test_a_new_head_after_a_pass_is_verified_again_without_waiting_for_the_sweep(self):
-        self.passed(said="review")
+    def test_a_new_push_shuts_the_gate_until_the_verifier_passes_the_new_head(self):
+        self.passed()
         self.forge.prs[40]["head"] = H2
-        got = queue.verified(self.pol, "a", 40, H2, "pass", "auto")
-        self.assertEqual((got["state"], got["head"], self.forge.merges), ("passed", H2, [(40, H2)]))
-
-    def test_a_failed_verification_goes_back_to_the_thread_until_the_attempts_are_spent(self):
-        self.add("a")
-        self.to_working("a")
-        cap = self.pol["ci"]["fix_attempts"]
-        self.pr_open("a", 40)
-        for n in range(1, cap + 1):
-            got = queue.verified(self.pol, "a", 40, H1, "fail")
-            self.assertEqual((got["fixes"], got["state"]), (n, "working" if n < cap else "owner"))
-        with self.assertRaises(queue.Refused):
+        self.assertEqual(self.shut(), f"PR 40 is at {H2}, not {H1}")
+        self.assertEqual(self.shut(head=H2), f"PR 40 does not merge: the verifier has not passed head {H2}")
+        with self.assertRaisesRegex(queue.Refused, "the head moved"):
             queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        queue.verified(self.pol, "a", 40, H2, "pass", "auto")
+        self.assertIsNone(self.shut(head=H2))
 
-    def test_asking_for_review_before_the_pass_leaves_the_merge_to_the_owner(self):
-        self.add("b")
-        self.to_working("b", "t-b")
-        queue.raise_review(self.pol, "b")
-        self.pr_open("b", 41)
-        got = queue.verified(self.pol, "b", 41, H1, "pass", "auto")
-        self.assertEqual((got["auto"], got["review"], self.forge.merges), (False, True, []))
-
-    def test_sweep_closes_merged_items_sends_a_new_head_back_to_work_and_does_not_merge_a_held_one(self):
-        for ident, pr in (("a", 40), ("b", 41), ("c", 42)):
-            self.add(ident)
-            self.to_working(ident)
-            self.pr_open(ident, pr)
-            self.forge.prs[pr]["ci"] = None
-            queue.verified(self.pol, ident, pr, H1, "pass", "auto")
-        self.forge.prs[40]["state"] = "MERGED"
-        self.forge.prs[41]["head"] = H2
-        self.forge.prs[42]["ci"] = "SUCCESS"
+    def test_a_review_pass_the_review_label_a_hold_a_draft_or_a_red_check_keeps_it_shut(self):
+        self.assertEqual(self.passed(said="review")["say"], "its thread does not merge it: it needs a person's review")
+        self.assertEqual(self.shut(), "PR 40 does not merge: it needs a person's review")
+        self.passed(ident="b", pr=41, labels=[BASE["merge"]["review_label"]])
+        self.assertEqual(self.shut(41), "PR 41 does not merge: it needs a person's review")
+        self.passed(ident="c", pr=42)
         self.holds.write_text("hold | #42 | all | x\n")
-        moved = {x["id"]: (x["now"], x["why"]) for x in queue.sweep(self.pol)}
-        self.assertEqual(moved, {"a": ("done", "merged"), "b": ("working", "a new head after it passed"),
-                                 "c": ("passed", "it waits: it has a hold row")})
-        self.assertEqual(self.forge.merges, [])
+        self.assertEqual(self.shut(42), "PR 42 does not merge: it has a hold row")
+        self.holds.unlink()
+        self.assertEqual(self.shut(42), "PR 42 does not merge: it has a hold row")
+        self.holds.write_text("")
+        self.forge.prs[42]["draft"] = True
+        self.assertEqual(self.shut(42), "PR 42 does not merge: the PR is a draft")
+        self.forge.prs[42].update(draft=False, ci="FAILURE")
+        self.assertEqual(self.shut(42), f"PR 42 does not merge: {BASE['merge']['gate_check']} has not passed on that head")
+        self.forge.prs[42].update(ci="SUCCESS", more=[{"name": "lint", "status": "IN_PROGRESS"}])
+        self.assertEqual(self.shut(42), "PR 42 does not merge: a check is still running on that head, and a merge now would arm auto-merge")
+        self.forge.prs[42]["more"] = [{"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"}, {"context": "legacy", "state": "SUCCESS"}]
+        self.assertIsNone(self.shut(42))
 
-    def test_a_passed_item_frees_its_slot_and_a_new_head_takes_it_back(self):
-        self.pol["run"]["threads"] = 1
-        self.passed("review")
+    def test_one_pr_has_one_verdict_whichever_item_recorded_it(self):
+        self.passed()
         self.add("b")
-        self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "b")
-        self.forge.prs[40]["head"] = H2
-        self.assertEqual(queue.sweep(self.pol)[0]["now"], "working")
-        self.assertEqual(queue.next_up(self.pol)["waiting"], "the machine is at its thread cap")
+        self.to_working("b", thread="t-b")
+        self.assertIsNone(self.shut())
+        queue.verified(self.pol, "b", 40, H1, "fail")
+        self.assertEqual(self.shut(), f"PR 40 does not merge: the verifier has not passed head {H1}")
+        queue.verified(self.pol, "b", 40, H1, "pass", "review")
+        self.assertEqual((self.shut(), self.items()["a"]["passed"]), ("PR 40 does not merge: it needs a person's review", None))
 
-    def test_a_quiet_thread_is_nudged_then_its_item_is_the_owners_and_a_late_verdict_still_counts(self):
-        self.pol["run"]["threads"] = 1
-        self.add("a")
-        self.to_working("a", thread="t-a")
-        self.add("b")
-        self.pr_open("a", 40)
-        for n in range(1, queue.NUDGES + 1):
-            got = queue.nudge(self.pol, "a")
-            self.assertEqual((got["state"], got["nudges"]), ("working", n))
-            self.assertIn("finished a", got["send"])
-        got = queue.nudge(self.pol, "a")
-        self.assertEqual((got["state"], got["why"], "send" in got), ("owner", queue.QUIET, False))
-        self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "b")
-        with self.assertRaisesRegex(queue.Refused, "a is owner, not working"):
-            queue.nudge(self.pol, "a")
-        got = queue.verified(self.pol, "a", 40, H1, "pass", "auto")
-        self.assertEqual((got["state"], got["say"], self.forge.merges), ("passed", "merged, or in the merge queue", [(40, H1)]))
-
-    def test_a_verdict_resets_the_nudges_and_spent_fix_attempts_take_no_late_verdict(self):
-        self.add("a")
-        self.to_working("a")
-        self.pr_open("a", 40)
-        queue.nudge(self.pol, "a")
-        for _ in range(self.pol["ci"]["fix_attempts"]):
-            got = queue.verified(self.pol, "a", 40, H1, "fail")
-            self.assertEqual(got["nudges"], 0)
-        self.assertEqual((got["state"], got["why"]), ("owner", "its fix attempts are spent"))
-        with self.assertRaisesRegex(queue.Refused, "a is owner: its fix attempts are spent, so it takes no verdict"):
-            queue.verified(self.pol, "a", 40, H1, "pass", "auto")
-
-    def test_a_thread_finishes_an_item_with_nothing_to_merge_but_not_one_with_a_pr(self):
-        for x in ("a", "b"):
-            self.add(x)
-            self.to_working(x)
-        self.assertEqual(queue.finished(self.pol, "a")["state"], "done")
-        self.pr_open("b", 41)
-        queue.verified(self.pol, "b", 41, H1, "fail")
-        with self.assertRaisesRegex(queue.Refused, "b has PR 41"):
-            queue.finished(self.pol, "b")
-        with self.assertRaisesRegex(queue.Refused, "a is done, not working"):
-            queue.finished(self.pol, "a")
-
-    def test_the_sweep_removes_a_done_items_worktree_only_when_nothing_in_it_is_unpushed(self):
-        import subprocess
-
-        def git(*a, cwd):
-            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
-        up, clone = self.root / "up.git", self.root / "clone"
-        git("init", "-q", "--bare", str(up), cwd=self.root)
-        git("clone", "-q", str(up), str(clone), cwd=self.root)
-        git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
-        git("push", "-q", "origin", "HEAD", cwd=clone)
-        self.pol["host"]["clone"] = str(clone)
-        self.pol["run"]["threads"] = 4
-        for x in ("clean", "dirty", "ahead", "gone"):
-            wt = self.root / f"wt-{x}"
-            if x != "gone":
-                git("worktree", "add", "-q", "-b", x, str(wt), cwd=clone)
-            self.add(x)
-            queue.step(self.pol, "start", x)
-            queue.step(self.pol, "claim", x, thread=f"t-{x}", worktree=str(wt))
-        self.assertEqual(queue.sweep(self.pol), [])
-        for x in ("clean", "dirty", "ahead", "gone"):
-            queue.finished(self.pol, x)
-        (self.root / "wt-dirty" / "new.txt").write_text("x")
-        git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.root / "wt-ahead")
-        self.assertEqual({x["id"]: x["why"] for x in queue.sweep(self.pol)},
-                         {"clean": "its worktree was removed", "gone": "its worktree is already gone"})
-        self.assertEqual([(self.root / f"wt-{x}").exists() for x in ("clean", "dirty", "ahead")], [False, True, True])
-        self.assertEqual({k: bool(v["worktree"]) for k, v in self.items().items()}, {"clean": False, "dirty": True, "ahead": True, "gone": False})
-        self.assertEqual(queue.sweep(self.pol), [])
+    def test_a_preapproved_item_or_head_merges_on_a_review_pass_but_never_past_a_hold(self):
+        self.passed(said="review", preapproved=True)
+        self.assertIsNone(self.shut())
+        self.passed(said="review", ident="b", pr=41)
+        self.holds.write_text(f"preapprove | #41 | all | {H2}\n")
+        self.assertEqual(self.shut(41), "PR 41 does not merge: it needs a person's review")
+        self.holds.write_text(f"preapprove | #41 | all | {H1}\nhold | #40 | all | x\n")
+        self.assertEqual((self.shut(41), self.shut()), (None, "PR 40 does not merge: it has a hold row"))
 
     def test_an_items_own_thread_never_records_its_verdict(self):
         self.add("a")
@@ -375,58 +271,172 @@ class Merge(Case):
         self.pr_open("a", 40)
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}), self.assertRaisesRegex(queue.Refused, "a's own thread"):
             queue.verified(self.pol, "a", 40, H1, "pass", "auto")
-        self.assertEqual(self.items()["a"]["state"], "working")
+        self.assertIsNotNone(self.shut())
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-verifier"}):
-            self.assertEqual(queue.verified(self.pol, "a", 40, H1, "pass", "auto")["state"], "passed")
+            queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        self.assertIsNone(self.shut())
+        self.add("b")
+        with self.assertRaisesRegex(queue.Refused, "b is queued, and no thread has run it"):
+            queue.verified(self.pol, "b", 40, H1, "pass", "auto")
 
-    def test_an_item_left_verifying_by_an_older_queue_is_the_owners_and_the_sweep_closes_it(self):
-        legacy = {**queue.item("task", None, "orchestrator", 0, "t", "t"), "state": "verifying", "pr": 40, "head": H1}
-        (self.root / "queue.json").write_text(json.dumps({"items": {"a": legacy}}))
+
+class Release(Case):
+    def setUp(self):
+        super().setUp()
+        self.wakes = []
+        p = patch.object(queue, "tell", lambda kind, ident, it: self.wakes.append((kind, ident, it["why"])) or ["sent"])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_turn_end_frees_the_slot_tells_the_orchestrator_and_a_late_verdict_still_opens_the_gate(self):
+        self.pol["run"]["threads"] = 1
+        self.add("a")
+        self.to_working("a", thread="t-a")
+        self.add("b")
         self.pr_open("a", 40)
-        self.assertEqual((queue.sweep(self.pol), queue.next_up(self.pol)["waiting"]), ([], "nothing is queued"))
-        self.assertEqual(queue.verified(self.pol, "a", 40, H1, "pass", "review")["state"], "passed")
+        self.assertEqual(queue.next_up(self.pol)["running"], {"a": "t-a"})
+        queue.verified(self.pol, "a", 40, H1, "fail")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+            got = queue.release(self.pol)
+        why = f"PR 40 waits for the owner: the verifier has not passed head {H1}"
+        self.assertEqual((got["released"], got["state"], got["why"], self.wakes), ("a", "released", why, [("blocked", "a", why)]))
+        self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "b")
+        queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+
+    def test_a_session_that_runs_no_item_releases_nothing_and_a_second_turn_end_tells_only_what_changed(self):
+        self.add("a")
+        self.to_working("a", thread="t-a")
+        for thread in ("t-verifier", ""):
+            with patch.dict(os.environ, {queue.THREAD_VAR: thread}):
+                self.assertEqual(queue.release(self.pol), {"released": None})
+        self.assertEqual(self.items()["a"]["state"], "running")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+            self.assertEqual(queue.release(self.pol)["why"], "nothing to merge")
+            queue.release(self.pol)
+        self.assertEqual(self.wakes, [("done", "a", "nothing to merge")])
+        with self.assertRaisesRegex(queue.Refused, "zzz is not queued, not running"):
+            queue.release(self.pol, "zzz")
+
+    def test_the_dispatcher_releases_a_dead_thread_by_id_and_a_merged_pr_is_done(self):
+        self.add("a")
+        self.to_working("a")
+        self.pr_open("a", 40)
+        queue.verified(self.pol, "a", 40, H1, "pass", "auto")
         self.forge.prs[40]["state"] = "MERGED"
-        self.assertEqual(queue.sweep(self.pol), [{"id": "a", "now": "done", "why": "merged"}])
+        got = queue.release(self.pol, "a")
+        self.assertEqual((got["why"], got["open"], self.wakes), ("PR 40 merged", False, [("done", "a", "PR 40 merged")]))
+        self.add("b")
+        self.to_working("b")
+        with patch.object(queue, "gh", lambda *a, **k: (1, "", "gh down")):
+            self.assertEqual(queue.release(self.pol, "b")["state"], "released")
+
+    def test_the_pickup_pass_tidies_a_released_items_worktree_once_it_has_been_idle(self):
+        import subprocess
+
+        def git(*a, cwd):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+        up, clone = self.root / "up.git", self.root / "clone"
+        git("init", "-q", "--bare", str(up), cwd=self.root)
+        git("clone", "-q", str(up), str(clone), cwd=self.root)
+        (clone / ".gitignore").write_text("build/\n")
+        git("add", ".gitignore", cwd=clone)
+        git("commit", "-q", "-m", "one", cwd=clone)
+        git("push", "-q", "origin", "HEAD", cwd=clone)
+        self.pol["host"]["clone"] = str(clone)
+        self.pol["run"]["threads"] = 9
+        for x in ("clean", "dirty", "ahead", "gone", "open"):
+            wt = self.root / f"wt-{x}"
+            if x != "gone":
+                git("worktree", "add", "-q", "-b", x, str(wt), cwd=clone)
+                (wt / "build").mkdir()
+                (wt / "build" / "out.o").write_text("x")
+            self.add(x)
+            queue.step(self.pol, "start", x)
+            queue.step(self.pol, "claim", x, thread=f"t-{x}", worktree=str(wt))
+        (self.root / "wt-dirty" / "new.txt").write_text("x")
+        git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.root / "wt-ahead")
+        self.forge.prs[50] = {"head": H1, "branch": "open"}
+        for x in ("clean", "dirty", "ahead", "gone", "open"):
+            queue.release(self.pol, x)
+        self.assertEqual(self.items()["open"]["why"], f"PR 50 waits for the owner: the verifier has not passed head {H1}")
+        self.assertEqual((self.pick([])["tidied"], (self.root / "wt-clean").exists()), ([], True))
+        with patch.object(queue, "IDLE_S", 0):
+            tidied = {x["id"]: x["worktree"] for x in self.pick([])["tidied"]}
+        self.assertEqual(tidied, {"clean": None, "gone": None})
+        self.assertEqual([(self.root / f"wt-{x}").exists() for x in ("clean", "dirty", "ahead", "open")], [False, True, True, True])
+        self.assertEqual([(self.root / f"wt-{x}" / "build").exists() for x in ("dirty", "open")], [True, False])
+        self.forge.prs[50]["state"] = "MERGED"
+        with patch.object(queue, "IDLE_S", 0):
+            self.assertEqual(self.pick([])["tidied"], [{"id": "open", "why": "PR 50 merged", "worktree": None}])
+        self.assertFalse((self.root / "wt-open").exists())
+
+    def test_an_issue_with_a_released_item_is_never_picked_up_again_and_its_open_pr_blocks_an_overlap(self):
+        self.pick([cand(1)])
+        self.to_working("app-1")
+        self.pr_open("app-1", 40)
+        queue.verified(self.pol, "app-1", 40, H1, "pass", "review")
+        queue.release(self.pol, "app-1")
+        skipped = {x["id"]: x["why"] for x in self.pick([cand(1), cand(40, "review")])["skipped"]}
+        self.assertEqual(skipped, {"app-1": "released", f"app-40-review-{H1[:7]}": "overlap"})
+
+    def test_items_from_an_older_queue_load_as_running_or_released_and_keep_their_pass(self):
+        old = {k: {**queue.item("task", None, "orchestrator", 0, "t", "t"), "state": s, "pr": pr, "head": H1, "auto": auto}
+               for k, s, pr, auto in (("w", "working", None, False), ("p", "passed", 40, True), ("o", "owner", 41, False),
+                                      ("d", "done", 42, False), ("v", "verifying", 43, False))}
+        for it in old.values():
+            del it["passed"], it["open"]
+        (self.root / "queue.json").write_text(json.dumps({"items": old}))
+        self.pr_open("p", 40)
+        got = queue.locked(self.pol, lambda items: (items, False))
+        self.assertEqual({k: (v["state"], v["passed"], v["open"]) for k, v in got.items()}, {
+            "w": ("running", None, False), "p": ("released", "auto", True), "o": ("released", None, True),
+            "d": ("released", None, False), "v": ("released", None, True)})
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
 
     def test_the_steps_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
-        self.assertEqual(queue.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "working"),
+        self.assertEqual(queue.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "running"),
                                        "requeue": ("starting", "queued")})
-        for name, to in (("Start(m, i)", "starting"), ("Claim(m)", "working"), ("Requeue(m)", "queued"), ("Pass(m, i)", "passed"),
-                         ("Finish(m, i)", "done"), ("Quiet(m, i)", "owner")):
+        for name, to in (("Start(m, i)", "starting"), ("Claim(m)", "running"), ("Requeue(m)", "queued"), ("Release(m, i)", "released")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
-        self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "passed", "owner", "done"})
+        self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "released"})
 
 
 class Cli(Case):
     def test_the_commands(self):
         out = io.StringIO()
-        with patch.object(queue.policy, "load", return_value=self.pol), \
+        with patch.object(queue.policy, "load", return_value=self.pol), patch.object(queue, "tell", lambda *a: []), \
                 patch("sys.stdout", out):
             self.assertEqual(queue.main(["add", "a", "--priority", "3"], stdin=io.StringIO("task")), 0)
             self.assertEqual(queue.main(["add", "b", "--priority"], stdin=io.StringIO("task")), 2)
             self.assertEqual(queue.main(["add", "c", "--preapproved", "--priority", "3"], stdin=io.StringIO("task")), 0)
             self.assertEqual(queue.main(["add", "d", "--preapproved", "--preapproved"], stdin=io.StringIO("task")), 2)
             self.assertEqual(queue.main(["start", "a"]), 0)
-            self.assertEqual(queue.main(["claim", "a", "t-1"]), 0)
+            self.assertEqual(queue.main(["claim", "a", "t-1", "/tmp/wt-a"]), 0)
             self.forge.prs[40] = {"head": H1}
-            self.assertEqual(queue.main(["nudge", "a", "x"]), 2)
-            self.assertEqual(queue.main(["nudge", "a"]), 0)
-            self.assertEqual(queue.main(["finished"]), 2)
             self.assertEqual(queue.main(["verified", "a", "pass", "auto"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass", "extreme"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1[:7], "pass", "auto"]), 2)
+            self.assertEqual(queue.main(["gate", "40", H1[:7]]), 2)
+            with patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(queue.main(["gate", "40", H1]), 1)
+            self.assertEqual(err.getvalue(), f"queue: PR 40 does not merge: the verifier has not passed head {H1}\n")
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass", "auto"]), 0)
-            self.assertEqual(queue.main(["sweep"]), 0)
+            self.assertEqual(queue.main(["gate", "40", H1]), 0)
+            self.assertEqual(queue.main(["release"]), 0)
+            self.assertEqual(queue.main(["release", "a"]), 0)
+            self.assertEqual(queue.main(["release", "a", "b"]), 2)
+            self.assertEqual(queue.main(["sweep"]), 2)
             self.assertEqual(queue.main(["list"]), 0)
             self.assertEqual(queue.main(["next"]), 0)
             self.assertEqual(queue.main(["nope"]), 2)
             with patch("sys.stderr", io.StringIO()) as err:
                 self.assertEqual(queue.main(["start", "zzz"]), 1)
             self.assertEqual(err.getvalue(), "queue: no item zzz\n")
-        self.assertEqual(self.items()["a"]["state"], "passed")
+        self.assertEqual(self.items()["a"]["state"], "released")
 
 
 if __name__ == "__main__":
