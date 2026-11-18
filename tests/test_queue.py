@@ -371,9 +371,16 @@ class Release(Case):
         self.assertEqual([(self.root / f"wt-{x}").exists() for x in ("clean", "dirty", "ahead", "open")], [False, True, True, True])
         self.assertEqual([(self.root / f"wt-{x}" / "build").exists() for x in ("dirty", "open")], [True, False])
         self.forge.prs[50]["state"] = "MERGED"
-        with patch.object(queue, "IDLE_S", 0):
-            self.assertEqual(self.pick([])["tidied"], [{"id": "open", "why": "PR 50 merged", "worktree": None}])
+        self.assertEqual(self.pick([])["tidied"], [{"id": "open", "why": "PR 50 merged", "worktree": None}])
         self.assertFalse((self.root / "wt-open").exists())
+        git("worktree", "add", "-q", "-b", "mine", str(self.root / "wt-mine"), cwd=clone)
+        self.add("mine")
+        queue.step(self.pol, "start", "mine")
+        queue.step(self.pol, "claim", "mine", thread="t-mine", worktree=str(self.root / "wt-mine"))
+        self.forge.prs[51] = {"head": H1, "branch": "mine", "state": "MERGED"}
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-mine"}):
+            self.assertEqual(queue.release(self.pol)["why"], "PR 51 merged")
+        self.assertFalse((self.root / "wt-mine").exists())
 
     def test_an_issue_with_a_released_item_is_never_picked_up_again_and_its_open_pr_blocks_an_overlap(self):
         self.pick([cand(1)])

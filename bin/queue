@@ -426,6 +426,8 @@ def release(pol, ident=None):
             kind = "blocked"
             it.update(open=True, why=str(e))
         it.update(state="released", at=now())
+        if it["pr"] and not it["open"]:
+            tidy(pol, it)
         return {"released": key, **it, "wake": tell(kind, key, it) if was != ("released", it["why"]) else []}, True
     return locked(pol, go)
 
@@ -444,7 +446,7 @@ def settle(pol):
                     outcome(pol, it, h)
             except Refused:
                 continue
-            if age(it["at"]) >= IDLE_S:
+            if age(it["at"]) >= IDLE_S or (it["pr"] and not it["open"]):
                 tidy(pol, it)
             if was != (it["open"], it["worktree"]):
                 moved.append({"id": ident, "why": it["why"], "worktree": it["worktree"]})
