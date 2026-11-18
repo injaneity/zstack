@@ -304,7 +304,7 @@ class Release(Case):
         queue.verified(self.pol, "a", 40, H1, "pass", "auto")
         self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
 
-    def test_the_hook_keeps_a_turn_going_while_its_prs_head_has_no_verdict_but_not_for_ever(self):
+    def test_the_hook_keeps_a_turn_going_until_its_prs_head_has_a_verdict_or_the_pr_closes(self):
         self.add("a")
         self.to_working("a", thread="t-a")
         self.pr_open("a", 40)
@@ -321,10 +321,16 @@ class Release(Case):
         self.to_working("b", thread="t-b")
         self.pr_open("b", 41)
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-b"}), patch.object(queue, "branch_pr", return_value=41):
-            for _ in range(queue.HOLDS_BACK):
+            for _ in range(5):
                 with self.assertRaises(queue.Unfinished):
                     queue.release(self.pol, hook=True)
-            self.assertEqual(queue.release(self.pol, hook=True)["state"], "released")
+            self.forge.prs[41]["state"] = "CLOSED"
+            self.assertEqual(queue.release(self.pol, hook=True)["why"], "PR 41 closed")
+        self.add("d")
+        self.to_working("d", thread="t-d")
+        self.pr_open("d", 42)
+        with patch.object(queue, "branch_pr", return_value=42):
+            self.assertEqual(queue.release(self.pol, "d")["state"], "released")
         self.add("c")
         self.to_working("c", thread="t-c")
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-c"}):
