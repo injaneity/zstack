@@ -304,6 +304,32 @@ class Release(Case):
         queue.verified(self.pol, "a", 40, H1, "pass", "auto")
         self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
 
+    def test_the_hook_keeps_a_turn_going_while_its_prs_head_has_no_verdict_but_not_for_ever(self):
+        self.add("a")
+        self.to_working("a", thread="t-a")
+        self.pr_open("a", 40)
+        self.forge.prs[40]["branch"] = "a"
+        env = patch.dict(os.environ, {queue.THREAD_VAR: "t-a"})
+        with env, patch.object(queue, "branch_pr", return_value=40):
+            with self.assertRaisesRegex(queue.Unfinished, "PR 40 has no verdict for its current head"):
+                queue.release(self.pol, hook=True)
+            self.assertEqual((self.items()["a"]["state"], self.wakes), ("running", []))
+            with patch.dict(os.environ, {queue.THREAD_VAR: "t-verifier"}):
+                queue.verified(self.pol, "a", 40, H1, "fail")
+            self.assertEqual(queue.release(self.pol, hook=True)["state"], "released")
+        self.add("b")
+        self.to_working("b", thread="t-b")
+        self.pr_open("b", 41)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-b"}), patch.object(queue, "branch_pr", return_value=41):
+            for _ in range(queue.HOLDS_BACK):
+                with self.assertRaises(queue.Unfinished):
+                    queue.release(self.pol, hook=True)
+            self.assertEqual(queue.release(self.pol, hook=True)["state"], "released")
+        self.add("c")
+        self.to_working("c", thread="t-c")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-c"}):
+            self.assertEqual(queue.release(self.pol, hook=True)["why"], "nothing to merge")
+
     def test_a_session_that_runs_no_item_releases_nothing_and_a_second_turn_end_tells_only_what_changed(self):
         self.add("a")
         self.to_working("a", thread="t-a")
@@ -437,6 +463,7 @@ class Cli(Case):
             self.assertEqual(err.getvalue(), f"queue: PR 40 does not merge: the verifier has not passed head {H1}\n")
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass", "auto"]), 0)
             self.assertEqual(queue.main(["gate", "40", H1]), 0)
+            self.assertEqual(queue.main(["release", "--hook"]), 0)
             self.assertEqual(queue.main(["release"]), 0)
             self.assertEqual(queue.main(["release", "a"]), 0)
             self.assertEqual(queue.main(["release", "a", "b"]), 2)

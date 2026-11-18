@@ -25,8 +25,9 @@ USAGE = (
     "  queue verified <id> <pr> <head> fail\n"
     "                                   the verifier found something in that head: its thread fixes it\n"
     "  queue gate <pr> <head>           may that head of that PR merge now; exits 1 with the reason when it may not\n"
-    "  queue release [<id>]             the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
-    "                                   With no id, the item of the thread that runs it\n"
+    "  queue release [<id>|--hook]      the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
+    "                                   With no id, the item of the thread that runs it. With --hook, exit 3 and free\n"
+    "                                   nothing while its PR's head has no verdict, so the turn goes on\n"
     "  queue list                       the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
@@ -38,6 +39,7 @@ ACTIVE = ("starting", "running")
 OLD = {"working": "running", "passed": "released", "owner": "released", "done": "released", "verifying": "released"}
 STALE_S = 15 * 60
 IDLE_S = 60 * 60
+HOLDS_BACK = 2
 THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
@@ -168,7 +170,7 @@ def task(c, h, pol):
 
 def item(kind, n, source, priority, text, title, preapproved=False):
     return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved,
-            "task": text, "title": title, "thread": None, "worktree": None, "pr": None, "head": None, "passed": None, "open": False,
+            "task": text, "title": title, "thread": None, "worktree": None, "pr": None, "head": None, "passed": None, "open": False, "stops": 0,
             "why": None, "at": now()}
 
 
@@ -330,7 +332,7 @@ def verified(pol, ident, pr, head, result, said="review"):
         for other in items.values():
             if other["pr"] == pr:
                 other["passed"] = None
-        it.update(pr=pr, head=head, passed=said if result == "pass" else None, open=True, at=now())
+        it.update(pr=pr, head=head, passed=said if result == "pass" else None, open=True, stops=0, at=now())
         if result == "fail":
             return {**it, "say": "its thread fixes the findings and has the new head checked"}, True
         why = blocked(pol, it, live, h)
@@ -408,7 +410,20 @@ def tell(kind, ident, it):
     return subprocess.run(args, capture_output=True, text=True).stderr.strip().splitlines()[-1:]
 
 
-def release(pol, ident=None):
+class Unfinished(Exception):
+    pass
+
+
+def unverified(pol, it):
+    try:
+        pr = it["pr"] or branch_pr(pol, it)
+        live = pr_view(pol, pr) if pr else None
+    except Refused:
+        return None
+    return pr if live and live["state"] == "OPEN" and live["headRefOid"] != it["head"] else None
+
+
+def release(pol, ident=None, hook=False):
     h = holds(read_text(pol["host"]["holds"]))
     thread = os.environ.get(THREAD_VAR)
 
@@ -419,6 +434,11 @@ def release(pol, ident=None):
             if ident:
                 raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not running")
             return {"released": None}, False
+        pr = unverified(pol, it) if hook and it["state"] == "running" and it["stops"] < HOLDS_BACK else None
+        if pr:
+            it["stops"] += 1
+            return Unfinished(f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
+                              "wait for its verdict inside this turn. If the verifier cannot run, say so in your report and stop."), True
         was = (it["state"], it["why"])
         try:
             kind = outcome(pol, it, h)
@@ -429,7 +449,10 @@ def release(pol, ident=None):
         if it["pr"] and not it["open"]:
             tidy(pol, it)
         return {"released": key, **it, "wake": tell(kind, key, it) if was != ("released", it["why"]) else []}, True
-    return locked(pol, go)
+    out = locked(pol, go)
+    if isinstance(out, Unfinished):
+        raise out
+    return out
 
 
 def settle(pol):
@@ -477,10 +500,15 @@ def main(argv, stdin=sys.stdin):
             return say(verified(pol, argv[1], int(argv[2]), argv[3], argv[4], argv[5] if argv[4] == "pass" else "review"))
         if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[2]):
             return say(gate(pol, int(argv[1]), argv[2]))
+        if argv == ["release", "--hook"]:
+            return say(release(pol, hook=True))
         if argv[:1] == ["release"] and len(argv) <= 2:
             return say(release(pol, argv[1] if len(argv) == 2 else None))
         if argv == ["list"]:
             return say(locked(pol, lambda items: (items, False)))
+    except Unfinished as e:
+        print(e, file=sys.stderr)
+        return 3
     except Refused as e:
         print(f"queue: {e}", file=sys.stderr)
         return 1
