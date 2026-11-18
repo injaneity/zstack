@@ -13,4 +13,5 @@ export default function (pi: ExtensionAPI) {
 		return reason ? { block: true, reason } : undefined;
 	});
 	pi.on("agent_end", () => release());
+	pi.on("session_shutdown", () => release());
 }

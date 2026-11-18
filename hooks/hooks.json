@@ -30,6 +30,28 @@
           }
         ]
       }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release > /dev/null 2>&1; exit 0",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release > /dev/null 2>&1; exit 0",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }
