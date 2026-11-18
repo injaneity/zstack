@@ -303,7 +303,7 @@ class Release(Case):
         self.to_working("app-2")
         self.pr_open("app-2", 40)
         self.forge.prs[40]["state"] = "MERGED"
-        with patch.object(queue, "branch_pr", side_effect=[None, 40]):
+        with patch.object(queue, "branch_pr", side_effect=[None, 40, 40]):
             got = [queue.release(self.pol, x) for x in ("app-1", "app-2")]
         self.assertEqual([(x["state"], x["why"]) for x in got], [("done", "nothing to merge"), ("done", "PR 40 merged")])
         self.assertEqual(self.wakes, [("done", "app-1", "nothing to merge"), ("done", "app-2", "PR 40 merged")])
