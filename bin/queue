@@ -12,33 +12,27 @@ from datetime import datetime, timezone
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 USAGE = (
-    "  queue pickup [--dry]             read the repo, queue what this machine takes, and tidy up after closed PRs\n"
+    "  queue pickup [--dry]             read the repo, queue what this machine takes, and clear what has finished\n"
     "  queue add <id> [--priority N] [--preapproved]\n"
     "                                   queue a task from the orchestrator; its text on stdin\n"
-    "  queue next                       what to launch now, what to recover, and the running threads, as JSON\n"
-    "  queue start <id>                 reserve the next item before launching its thread\n"
-    "  queue claim <id> <thread> [<worktree>]\n"
-    "                                   the thread now running a started item, and the worktree it works in\n"
-    "  queue requeue <id>               a started item whose thread did not start\n"
+    "  queue next                       what to launch now and the running threads, as JSON\n"
+    "  queue claim <id> <thread> <worktree>\n"
+    "                                   the thread just launched for the next item, and the worktree it works in\n"
     "  queue verified <id> <pr> <head> pass auto|review\n"
     "                                   the verifier passed that head: its thread may merge it, or a person must review it\n"
     "  queue verified <id> <pr> <head> fail\n"
     "                                   the verifier found something in that head: its thread fixes it\n"
     "  queue gate <pr> <head>           may that head of that PR merge now; exits 1 with the reason when it may not\n"
     "  queue release [<id>|--hook]      the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
-    "                                   With no id, the item of the thread that runs it. With --hook, exit 3 and free\n"
-    "                                   nothing while its open PR's head has no verdict, so the turn goes on\n"
+    "                                   A finished item leaves the queue; one whose PR waits for the owner is kept as\n"
+    "                                   review. With no id, the item of the thread that runs it. With --hook, exit 3\n"
+    "                                   and free nothing while its open PR's head has no verdict, so the turn goes on\n"
     "  queue list                       the queue as it stands"
 )
 _l = importlib.machinery.SourceFileLoader("policy", os.path.join(PKG, "bin", "policy"))
 policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(policy)
 Refused = policy.PolicyError
-STEPS = {"start": ("queued", "starting"), "claim": ("starting", "running"), "requeue": ("starting", "queued")}
-ACTIVE = ("starting", "running")
-OLD = {"working": "running", "passed": "released", "owner": "released", "done": "released", "verifying": "released"}
-STALE_S = 15 * 60
-IDLE_S = 60 * 60
 THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
@@ -65,10 +59,6 @@ def gh_json(errors, *args):
 
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def age(at):
-    return (datetime.now(timezone.utc) - datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds()
 
 
 def read_text(path):
@@ -123,11 +113,13 @@ def takes(labels, host):
     return hit[0] in mine if hit else (not mine or host["unlabelled"])
 
 
-def skip(c, h, prs, items, host):
+def skip(c, h, prs, items, done, host):
     if not h["read"]:
         return "holds-unreadable"
     if c["id"] in items:
         return items[c["id"]]["state"]
+    if c["id"] in done:
+        return "done"
     if not takes(c["labels"], host):
         return "other-machine"
     if bot(c["author"]) or c["author"]["login"].lower() in h["skip"] or "hold" in c["labels"]:
@@ -136,7 +128,7 @@ def skip(c, h, prs, items, host):
         return "held"
     if c["kind"] == "issue" and any(n in prs for n in c["linked"]):
         return "pr"
-    busy = {n for i in items.values() if i["state"] != "released" or i["open"] for n in (i["n"], i["pr"]) if n}
+    busy = {n for i in items.values() for n in (i["n"], i["pr"]) if n}
     if c["n"] in busy or any(n in busy for n in c["linked"]):
         return "overlap"
     return None
@@ -169,8 +161,7 @@ def task(c, h, pol):
 
 def item(kind, n, source, priority, text, title, preapproved=False):
     return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved,
-            "task": text, "title": title, "thread": None, "worktree": None, "pr": None, "head": None, "passed": None, "open": False,
-            "why": None, "at": now()}
+            "task": text, "title": title, "thread": None, "worktree": None, "pr": None, "head": None, "passed": None, "why": None, "at": now()}
 
 
 def root(pol):
@@ -184,15 +175,8 @@ def locked(pol, fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = os.path.join(base, "queue.json")
         text = read_text(path)
-        state = json.loads(text) if text else {"items": {}}
-        for it in state["items"].values():
-            if it["state"] in OLD:
-                it.update(passed=("auto" if it.get("auto") else "review") if it["state"] == "passed" else None,
-                          open=it["state"] != "done" and bool(it.get("pr")), state=OLD[it["state"]])
-            for k, v in item(0, 0, 0, 0, 0, 0).items():
-                if k not in ("state", "at"):
-                    it.setdefault(k, v)
-        out, changed = fn(state["items"])
+        state = json.loads(text) if text else {"items": {}, "done": []}
+        out, changed = fn(state["items"], state["done"])
         if changed:
             with open(path + ".tmp", "w") as f:
                 json.dump(state, f, indent=1, sort_keys=True)
@@ -205,12 +189,12 @@ def pickup(pol, dry):
     errors = []
     h = holds(read_text(pol["host"]["holds"]))
     cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
-    tidied = [] if dry or errors else settle(pol)
+    cleared = [] if dry or errors else settle(pol)
 
-    def go(items):
+    def go(items, done):
         queued, skipped = [], []
         for c in [] if errors else cands:
-            why = skip(c, h, prs, items, pol["host"])
+            why = skip(c, h, prs, items, done, pol["host"])
             if why:
                 skipped.append({"id": c["id"], "why": why})
                 continue
@@ -218,7 +202,9 @@ def pickup(pol, dry):
             pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
             items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"], pre)
             queued.append({"id": c["id"], "priority": priority})
-        return {"queued": queued, "skipped": skipped, "tidied": tidied, "errors": errors}, bool(queued) and not dry
+        gone = [] if errors else [d for d in done if d not in {c["id"] for c in cands}]
+        done[:] = [d for d in done if d not in gone]
+        return {"queued": queued, "skipped": skipped, "cleared": cleared, "errors": errors}, bool(queued or gone) and not dry
     return locked(pol, go)
 
 
@@ -226,7 +212,7 @@ def add(pol, ident, text, priority, preapproved=False):
     if not re.fullmatch(ID, ident) or not text.strip():
         raise Refused("an id of letters, digits, . _ - and a task on stdin")
 
-    def go(items):
+    def go(items, done):
         if ident in items:
             raise Refused(f"{ident} is already {items[ident]['state']}")
         items[ident] = item("task", None, "orchestrator", priority, text.strip(), text.strip().splitlines()[0][:120], preapproved)
@@ -239,9 +225,7 @@ def order(items):
 
 
 def first(items, h, cap):
-    if any(v["state"] == "starting" for v in items.values()):
-        return None, "a launch is under way"
-    if sum(1 for v in items.values() if v["state"] in ACTIVE) >= cap:
+    if sum(1 for v in items.values() if v["state"] == "running") >= cap:
         return None, "the machine is at its thread cap"
     if not h["read"]:
         return None, "the holds file is unreadable"
@@ -259,29 +243,24 @@ def brief(pol, ident, it):
 def next_up(pol):
     h = holds(read_text(pol["host"]["holds"]))
 
-    def go(items):
+    def go(items, done):
         pick, waiting = first(items, h, pol["run"]["threads"])
         return {"launch": {"id": pick, "clone": pol["host"]["clone"], "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
-                "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S),
                 "running": {k: v["thread"] for k, v in sorted(items.items()) if v["state"] == "running"}}, False
     return locked(pol, go)
 
 
-def step(pol, name, ident, thread=None, worktree=None):
-    was, to = STEPS[name]
+def claim(pol, ident, thread, worktree):
     h = holds(read_text(pol["host"]["holds"]))
 
-    def go(items):
+    def go(items, done):
         it = items.get(ident)
-        if not it:
-            raise Refused(f"no item {ident}")
-        if it["state"] != was:
-            raise Refused(f"{ident} is {it['state']}, not {was}")
-        if name == "start":
-            pick, waiting = first(items, h, pol["run"]["threads"])
-            if pick != ident:
-                raise Refused(f"{ident} is not next: {waiting or pick + ' is'}")
-        it.update(state=to, thread=thread or it["thread"], worktree=worktree or it["worktree"], at=now())
+        if not it or it["state"] != "queued":
+            raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, not queued")
+        pick, waiting = first(items, h, pol["run"]["threads"])
+        if pick != ident:
+            raise Refused(f"{ident} is not next: {waiting or pick + ' is'}")
+        it.update(state="running", thread=thread, worktree=worktree, at=now())
         return it, True
     return locked(pol, go)
 
@@ -319,10 +298,10 @@ def blocked(pol, it, live, h):
 def verified(pol, ident, pr, head, result, said="review"):
     h = holds(read_text(pol["host"]["holds"]))
 
-    def go(items):
+    def go(items, done):
         it = items.get(ident)
-        if not it or it["state"] not in ("running", "released"):
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, and no thread has run it")
+        if not it or it["state"] == "queued":
+            raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, and no thread has run it")
         if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
             raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)
@@ -331,7 +310,7 @@ def verified(pol, ident, pr, head, result, said="review"):
         for other in items.values():
             if other["pr"] == pr:
                 other["passed"] = None
-        it.update(pr=pr, head=head, passed=said if result == "pass" else None, open=True, at=now())
+        it.update(pr=pr, head=head, passed=said if result == "pass" else None, at=now())
         if result == "fail":
             return {**it, "say": "its thread fixes the findings and has the new head checked"}, True
         why = blocked(pol, it, live, h)
@@ -343,7 +322,7 @@ def verified(pol, ident, pr, head, result, said="review"):
 def gate(pol, pr, head):
     h = holds(read_text(pol["host"]["holds"]))
 
-    def go(items):
+    def go(items, done):
         it = next((v for v in items.values() if v["pr"] == pr and v["passed"]), None)
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
@@ -367,17 +346,15 @@ def listed(pol, path):
     return (clone, path) if not rc and path != clone and f"worktree {path}" in out.splitlines() else (clone, None)
 
 
-def tidy(pol, it):
+def tidy(pol, it, whole):
     clone, path = listed(pol, it["worktree"]) if it["worktree"] else (None, None)
     if not path:
-        it["worktree"] = None
-        return
-    if it["open"]:
+        return True
+    if not whole:
         git("-C", path, "clean", "-Xfdq")
-        return
+        return True
     dirty, ahead = git("-C", path, "status", "--porcelain"), git("-C", path, "rev-list", "-1", "HEAD", "--not", "--remotes")
-    if not (dirty[0] or ahead[0] or dirty[1] or ahead[1]) and not git("-C", clone, "worktree", "remove", path)[0]:
-        it["worktree"] = None
+    return not (dirty[0] or ahead[0] or dirty[1] or ahead[1]) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
 def branch_pr(pol, it):
@@ -392,16 +369,27 @@ def branch_pr(pol, it):
     return found[0]["number"] if found else None
 
 
-def outcome(pol, it, h):
-    it["pr"] = it["pr"] or branch_pr(pol, it)
-    if not it["pr"]:
-        it.update(open=False, why="nothing to merge")
-        return "done"
-    live = pr_view(pol, it["pr"])
-    it["open"] = live["state"] == "OPEN"
-    it["why"] = f"PR {it['pr']} waits for the owner: {blocked(pol, it, live, h) or 'its thread did not merge it'}" if it["open"] else \
-        f"PR {it['pr']} {live['state'].lower()}"
-    return "blocked" if it["open"] else "done"
+def outcome(pol, items, done, key, h):
+    it = items[key]
+    try:
+        it["pr"] = it["pr"] or branch_pr(pol, it)
+        live = pr_view(pol, it["pr"]) if it["pr"] else None
+    except Refused as e:
+        it.update(state="review", why=str(e), at=now())
+        return "blocked"
+    if live and live["state"] == "OPEN":
+        why = f"PR {it['pr']} waits for the owner: {blocked(pol, it, live, h) or 'its thread did not merge it'}"
+        it.update(state="review", why=why, at=now())
+        tidy(pol, it, False)
+        return "blocked"
+    why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
+    if not tidy(pol, it, True):
+        it.update(state="review", why=f"{why}, and its worktree has uncommitted or unpushed work", at=now())
+        return "blocked"
+    it["why"] = why
+    del items[key]
+    done.append(key)
+    return "done"
 
 
 def tell(kind, ident, it):
@@ -426,27 +414,21 @@ def release(pol, ident=None, hook=False):
     h = holds(read_text(pol["host"]["holds"]))
     thread = os.environ.get(THREAD_VAR)
 
-    def go(items):
-        key = ident or next((k for k, v in items.items() if thread and v["thread"] == thread and v["state"] in ("running", "released")), None)
+    def go(items, done):
+        key = ident or next((k for k, v in items.items() if thread and v["thread"] == thread and v["state"] != "queued"), None)
         it = items.get(key)
-        if not it or it["state"] not in ("running", "released"):
+        if not it or it["state"] == "queued":
             if ident:
-                raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not running")
+                raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, not running")
             return {"released": None}, False
         pr = unverified(pol, it) if hook and it["state"] == "running" else None
         if pr:
             return Unfinished(f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
                               "wait for its verdict inside this turn."), False
         was = (it["state"], it["why"])
-        try:
-            kind = outcome(pol, it, h)
-        except Refused as e:
-            kind = "blocked"
-            it.update(open=True, why=str(e))
-        it.update(state="released", at=now())
-        if it["pr"] and not it["open"]:
-            tidy(pol, it)
-        return {"released": key, **it, "wake": tell(kind, key, it) if was != ("released", it["why"]) else []}, True
+        kind = outcome(pol, items, done, key, h)
+        state = items[key]["state"] if key in items else "done"
+        return {"released": key, **it, "state": state, "wake": tell(kind, key, it) if was != (state, it["why"]) else []}, True
     out = locked(pol, go)
     if isinstance(out, Unfinished):
         raise out
@@ -456,22 +438,17 @@ def release(pol, ident=None, hook=False):
 def settle(pol):
     h = holds(read_text(pol["host"]["holds"]))
 
-    def go(items):
+    def go(items, done):
         moved = []
         for ident, it in sorted(items.items()):
-            if it["state"] != "released" or not (it["open"] or it["worktree"]):
-                continue
-            was = (it["open"], it["worktree"])
-            try:
-                if it["open"]:
-                    outcome(pol, it, h)
-            except Refused:
-                continue
-            if age(it["at"]) >= IDLE_S or (it["pr"] and not it["open"]):
-                tidy(pol, it)
-            if was != (it["open"], it["worktree"]):
-                moved.append({"id": ident, "why": it["why"], "worktree": it["worktree"]})
-        return moved, bool(moved)
+            if it["state"] == "review":
+                was = it["why"]
+                outcome(pol, items, done, ident, h)
+                if ident not in items:
+                    moved.append({"id": ident, "why": it["why"]})
+                elif was != it["why"]:
+                    tell("blocked", ident, it)
+        return moved, True
     return locked(pol, go)
 
 
@@ -489,10 +466,8 @@ def main(argv, stdin=sys.stdin):
                 return say(add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv))
         if argv == ["next"]:
             return say(next_up(pol))
-        if len(argv) == 2 and argv[0] in ("start", "requeue"):
-            return say(step(pol, argv[0], argv[1]))
-        if len(argv) in (3, 4) and argv[0] == "claim":
-            return say(step(pol, "claim", argv[1], thread=argv[2], worktree=argv[3] if len(argv) == 4 else None))
+        if len(argv) == 4 and argv[0] == "claim":
+            return say(claim(pol, argv[1], argv[2], argv[3]))
         if argv[:1] == ["verified"] and len(argv) >= 5 and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[3]) and (
                 argv[4:] == ["fail"] or (len(argv) == 6 and argv[4] == "pass" and argv[5] in ("auto", "review"))):
             return say(verified(pol, argv[1], int(argv[2]), argv[3], argv[4], argv[5] if argv[4] == "pass" else "review"))
@@ -503,7 +478,7 @@ def main(argv, stdin=sys.stdin):
         if argv[:1] == ["release"] and len(argv) <= 2:
             return say(release(pol, argv[1] if len(argv) == 2 else None))
         if argv == ["list"]:
-            return say(locked(pol, lambda items: (items, False)))
+            return say(locked(pol, lambda items, done: ({"items": items, "done": done}, False)))
     except Unfinished as e:
         print(e, file=sys.stderr)
         return 3

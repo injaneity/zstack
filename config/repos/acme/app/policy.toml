@@ -2,10 +2,6 @@
 # An optional rules.toml beside this file adds sections to the stack's Hard rules. This one is an example.
 schema = 1
 
-# How many red heads of one PR the orchestrator sends back to the thread that pushed them. Past that the PR is the owner's.
-[ci]
-fix_attempts = 3
-
 # Who "we" are. `me` is the login the pickup works for: its assigned issues and its requested reviews. `owner` is the
 # person the rules and the services' messages name: the one whose calls the holds file relays.
 [people]

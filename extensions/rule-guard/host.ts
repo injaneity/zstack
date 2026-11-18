@@ -68,7 +68,7 @@ const host: Host = { gate, repoAt: originRepo, isHolds: (p) => isHoldsPath(p, ho
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 
-export function checkDelegate(tool: string, input: { subagent_type?: unknown; role?: unknown; target?: { model?: unknown } }): string | undefined {
+export function checkDelegate(tool: string, input: { subagent_type?: unknown; role?: unknown; mode?: unknown; target?: { model?: unknown } }): string | undefined {
 	if (tool === "Agent" || tool === "Task") {
 		const type = String(input.subagent_type ?? "");
 		const role = type.replace(/^zstack:/, "");
@@ -86,6 +86,9 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 		return `blocked: the config could not be read, so the ${agent}'s model is unknown.`;
 	}
 	const model = input.target?.model;
+	if (seats.some((x) => x.model === model))
+		return input.mode === "wait" ? undefined
+			: `blocked: start the ${agent} with mode "wait" and a timeout long enough for its work, and wait for its answer inside this turn. When your turn ends, the queue takes your item as finished.`;
 	return seats.some((x) => x.model === model) ? undefined
 		: `blocked: the ${agent} runs on ${seats.map((x) => x.model).join(" or ")}, not ${typeof model === "string" ? model : "the model this thread runs on"}. Pass it as target.model.`;
 }

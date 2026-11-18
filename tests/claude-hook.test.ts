@@ -95,8 +95,14 @@ test("a helper runs on the model the config gives its role, never as a subagent 
 		assert.match(r.stderr, /runs on its own model/);
 	}
 	assert.equal(guard({ tool_name: "Agent", tool_input: { subagent_type: "Explore", prompt: "x" }, cwd: "/tmp" }).status, 0);
-	const delegate = (role: string, model?: string) =>
-		guard({ tool_name: "mcp__t3-code__delegate_task", tool_input: { task: "x", role, target: model ? { model } : undefined }, cwd: "/tmp" });
+	const delegate = (role: string, model?: string, mode: string | null = "wait") =>
+		guard({ tool_name: "mcp__t3-code__delegate_task", tool_input: { task: "x", role, mode, target: model ? { model } : undefined }, cwd: "/tmp" });
+	for (const mode of ["async", null]) {
+		const r = delegate("review", seat("verifier"), mode);
+		assert.equal(r.status, 2, String(mode));
+		assert.match(r.stderr, /with mode "wait"/);
+	}
+	assert.equal(delegate("implementation", undefined, "async").status, 0);
 	assert.equal(delegate("review", seat("verifier")).status, 0);
 	assert.equal(delegate("research", seat("explorer")).status, 0);
 	const wrong = delegate("review", "some-other-model");

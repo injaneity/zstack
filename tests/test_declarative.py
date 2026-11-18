@@ -50,7 +50,6 @@ def restated(text, pol, repo=False):
                 hits.append((key, m.group(0)))
     numbers = {
         "run.idle_min": rf"\b({pol['run']['idle_min']} ?min(ute)?s?|{pol['run']['idle_min'] / 60:g} ?h(ours?)?)\b",
-        "ci.fix_attempts": rf"\b{pol['ci']['fix_attempts']} (fix )?attempts\b",
     }
     for key, rx in numbers.items():
         hits += [(key, m.group(0)) for m in re.finditer(rx, text)]
