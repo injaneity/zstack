@@ -30,6 +30,19 @@ jobs:
       - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
         run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
 
+  tlc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: TLC, the reference checker, agrees on model/Queue.tla and every mutant
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
+          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/queue-model.sh
   test:
     runs-on: ubuntu-latest
     steps:
@@ -67,15 +80,12 @@ jobs:
         run: node --test tests/claude-hook.test.ts
       - name: ensure-main fast-forwards the package to origin/main or refuses
         run: tests/ensure-main.sh
-      - uses: actions/setup-java@v4
+      - uses: actions/cache@v4
         with:
-          distribution: temurin
-          java-version: 21
-      - name: TLC passes model/Queue.tla (the queue, the verifier's gate and the merge) and every mutant fails on its rule
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
-          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/queue-model.sh
+          path: ~/.cache/zstack
+          key: everystate-${{ runner.os }}-${{ hashFiles('tests/queue-model.sh') }}
+      - name: model/Queue.tla holds (the queue, the verifier's gate and the merge) and every mutant fails on its rule
+        run: tests/queue-model.sh
       - name: skills and agent types have frontmatter
         run: |
           fail=0
