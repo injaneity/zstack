@@ -400,7 +400,8 @@ class Release(Case):
         self.forge.prs[50]["state"] = "MERGED"
         (self.root / "wt-dirty" / "new.txt").unlink()
         self.assertEqual(self.pick([])["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 50 merged"}])
-        self.assertEqual((sorted(self.items()), (self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()), (["ahead", "loose"], False, False))
+        left = [(self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()]
+        self.assertEqual((sorted(self.items()), left), (["ahead", "loose"], [False, False]))
 
     def test_a_queue_file_from_an_older_zstack_is_refused_by_name(self):
         for old in ({"items": {}}, {"items": {"a": {"state": "passed"}}, "done": []}):
