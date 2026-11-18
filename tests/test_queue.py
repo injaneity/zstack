@@ -328,8 +328,12 @@ class Release(Case):
         self.assertEqual((got["why"], got["open"], self.wakes), ("PR 40 merged", False, [("done", "a", "PR 40 merged")]))
         self.add("b")
         self.to_working("b")
-        with patch.object(queue, "gh", lambda *a, **k: (1, "", "gh down")):
-            self.assertEqual(queue.release(self.pol, "b")["state"], "released")
+        self.items()
+        with patch.object(queue, "branch_pr", side_effect=queue.Refused("cannot look up the PR of branch b: gh down")):
+            got = queue.release(self.pol, "b")
+        self.assertEqual((got["state"], got["open"], got["why"]), ("released", True, "cannot look up the PR of branch b: gh down"))
+        with patch.object(queue, "IDLE_S", 0):
+            self.assertEqual((self.pick([])["tidied"][0]["why"], self.items()["b"]["open"]), ("nothing to merge", False))
 
     def test_the_pickup_pass_tidies_a_released_items_worktree_once_it_has_been_idle(self):
         import subprocess

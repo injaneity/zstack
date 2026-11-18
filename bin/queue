@@ -384,8 +384,10 @@ def branch_pr(pol, it):
     rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD") if path else (1, "")
     if rc or not name:
         return None
-    rc, out, _ = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", "all", "--limit", "1", "--json", "number")
-    found = json.loads(out) if not rc and out.strip() else []
+    rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", "all", "--limit", "1", "--json", "number")
+    if rc:
+        raise Refused(f"cannot look up the PR of branch {name}: {err}")
+    found = json.loads(out) if out.strip() else []
     return found[0]["number"] if found else None
 
 
@@ -422,7 +424,7 @@ def release(pol, ident=None):
             kind = outcome(pol, it, h)
         except Refused as e:
             kind = "blocked"
-            it["why"] = str(e)
+            it.update(open=True, why=str(e))
         it.update(state="released", at=now())
         return {"released": key, **it, "wake": tell(kind, key, it) if was != ("released", it["why"]) else []}, True
     return locked(pol, go)
@@ -437,8 +439,11 @@ def settle(pol):
             if it["state"] != "released" or not (it["open"] or it["worktree"]):
                 continue
             was = (it["open"], it["worktree"])
-            if it["open"]:
-                outcome(pol, it, h)
+            try:
+                if it["open"]:
+                    outcome(pol, it, h)
+            except Refused:
+                continue
             if age(it["at"]) >= IDLE_S:
                 tidy(pol, it)
             if was != (it["open"], it["worktree"]):
