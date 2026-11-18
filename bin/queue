@@ -388,6 +388,10 @@ def outcome(pol, items, done, key, h):
     try:
         it["pr"] = it["pr"] or branch_pr(pol, it)
         live = pr_view(pol, it["pr"]) if it["pr"] else None
+        other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
+        if other and other != it["pr"]:
+            it.update(pr=other, head=None, passed=None)
+            live = pr_view(pol, other)
     except Refused as e:
         it.update(state="review", why=str(e), at=now())
         return "blocked"

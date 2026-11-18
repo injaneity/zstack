@@ -397,9 +397,12 @@ class Release(Case):
         self.assertEqual(got["dirty"]["why"], "nothing to merge, and its worktree has uncommitted or unpushed work")
         self.assertEqual([(self.root / f"wt-{x}").exists() for x in ("clean", "dirty", "ahead", "open")], [False, True, True, True])
         self.assertEqual([(self.root / f"wt-{x}" / "build").exists() for x in ("dirty", "open")], [True, False])
-        self.forge.prs[50]["state"] = "MERGED"
+        self.forge.prs[50]["state"] = "CLOSED"
+        self.forge.prs[52] = {"head": H2, "branch": "open"}
+        self.assertEqual((self.pick([])["cleared"], self.items()["open"]["pr"], (self.root / "wt-open").exists()), ([], 52, True))
+        self.forge.prs[52]["state"] = "MERGED"
         (self.root / "wt-dirty" / "new.txt").unlink()
-        self.assertEqual(self.pick([])["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 50 merged"}])
+        self.assertEqual(self.pick([])["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 52 merged"}])
         left = [(self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()]
         self.assertEqual((sorted(self.items()), left), (["ahead", "loose"], [False, False]))
 
