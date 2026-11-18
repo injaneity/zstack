@@ -160,7 +160,7 @@ function ghApiWrites(w: string[]): boolean {
 	return method ? method !== "GET" : fields;
 }
 
-const GH_CORE = new Set(["alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "completion", "config", "extension", "gist", "gpg-key",
+const GH_CORE = new Set(["alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "extension", "gist", "gpg-key",
 	"help", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"]);
 const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
@@ -191,6 +191,8 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => /^--input(=|$)/.test(a) || /^[\w-]+=@/.test(a)))
+		return `a GraphQL query read from a file or stdin, which the guard cannot read, while ${who}`;
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
 	const help = flag("--help") || flag("-h");
 	const [g1, g2] = operands(w.slice(1), GH_VALUE_OPTS);

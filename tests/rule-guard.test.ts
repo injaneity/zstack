@@ -572,9 +572,10 @@ test("a merge in an owned repo runs only as the gated command, and only when the
 		assert.match(run(c) ?? "", /^blocked: /, c);
 	for (const c of [`printf '%s %s' --match-head-commit ${"b".repeat(40)} | xargs gh pr merge 40 --squash --match-head-commit ${H}`,
 		`env GH_DEBUG=1 gh pr merge 40 --squash --match-head-commit ${H}`, `gh pr -R acme/app merge 40 --auto`, `gh pr -R acme/app merge 40 --squash --match-head-commit ${H}`,
-		`gh alias set m 'pr merge'`, `gh m 40 --auto -R acme/app`, `gh alias import aliases.yml`])
+		`gh alias set m 'pr merge'`, `gh m 40 --auto -R acme/app`, `gh alias import aliases.yml`, "gh co 40",
+		"gh api graphql --input mutation.json", "gh api graphql -F query=@mutation.graphql", "cat m.json | gh api graphql --input -"])
 		assert.match(run(c) ?? "", /^blocked: /, c);
-	for (const c of ["gh alias list", "gh pr view 40", "gh pr -R acme/app view 40", "gh run rerun 9 --failed", "gh co 40", "gh m --help"])
+	for (const c of ["gh alias list", "gh pr view 40", "gh pr -R acme/app view 40", "gh run rerun 9 --failed", "gh m --help", "gh api graphql -f query='query { viewer { login } }'"])
 		assert.equal(run(c), undefined, c);
 	assert.equal(run(`gh pr merge 40 -s -d --match-head-commit ${H}`), undefined);
 	asked.pop();
