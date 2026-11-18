@@ -322,7 +322,7 @@ def verified(pol, ident, pr, head, result, said="review"):
     def go(items):
         it = items.get(ident)
         if not it or not takes_verdict(pol, it):
-            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working or passed")
+            raise Refused(f"{ident} is {it['state'] + (': ' + it['why'] if it['why'] else '') if it else 'not queued'}, so it takes no verdict")
         if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
             raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)

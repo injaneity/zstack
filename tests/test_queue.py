@@ -324,7 +324,7 @@ class Merge(Case):
             got = queue.verified(self.pol, "a", 40, H1, "fail")
             self.assertEqual(got["nudges"], 0)
         self.assertEqual((got["state"], got["why"]), ("owner", "its fix attempts are spent"))
-        with self.assertRaisesRegex(queue.Refused, "a is owner"):
+        with self.assertRaisesRegex(queue.Refused, "a is owner: its fix attempts are spent, so it takes no verdict"):
             queue.verified(self.pol, "a", 40, H1, "pass", "auto")
 
     def test_a_thread_finishes_an_item_with_nothing_to_merge_but_not_one_with_a_pr(self):
