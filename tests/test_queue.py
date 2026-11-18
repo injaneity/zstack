@@ -392,6 +392,12 @@ class Release(Case):
         self.assertEqual(self.pick([])["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 50 merged"}])
         self.assertEqual((sorted(self.items()), (self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()), (["ahead"], False, False))
 
+    def test_a_queue_file_from_an_older_zstack_is_refused_by_name(self):
+        for old in ({"items": {}}, {"items": {"a": {"state": "passed"}}, "done": []}):
+            (self.root / "queue.json").write_text(json.dumps(old))
+            with self.assertRaisesRegex(queue.Refused, "queue.json was written by an older zstack: move it aside"):
+                queue.next_up(self.pol)
+
     def test_an_open_pr_under_review_blocks_an_overlapping_pickup(self):
         self.pick([cand(1)])
         self.to_working("app-1")

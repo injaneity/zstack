@@ -176,6 +176,8 @@ def locked(pol, fn):
         path = os.path.join(base, "queue.json")
         text = read_text(path)
         state = json.loads(text) if text else {"items": {}, "done": []}
+        if "done" not in state or any(v["state"] not in ("queued", "running", "review") for v in state["items"].values()):
+            raise Refused(f"{path} was written by an older zstack: move it aside, and the queue starts empty")
         out, changed = fn(state["items"], state["done"])
         if changed:
             with open(path + ".tmp", "w") as f:
