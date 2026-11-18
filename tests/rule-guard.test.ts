@@ -556,12 +556,12 @@ test("a PR title or body that breaks Commits and PR text is refused in the merge
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
 	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto";
 	const inThread = { ...host, thread: "t-9" };
-	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue ended app-1 40",
+	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue nudge app-1",
 		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
 		blocked(c, inApp);
-	for (const c of ["/pkg/zstack/bin/queue raise app-1", "bin/queue raise app-1", "bin/queue list", "gh api repos/acme/app/statuses/abc",
+	for (const c of ["/pkg/zstack/bin/queue raise app-1", "bin/queue raise app-1", "bin/queue finished app-1", "bin/queue list", "gh api repos/acme/app/statuses/abc",
 		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
 		allowed(c, inApp);
 	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 40 abc pass auto",

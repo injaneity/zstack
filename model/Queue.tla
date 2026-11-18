@@ -71,12 +71,13 @@ Raise(m, i) == q[m][i] \in {"working", "passed"} /\ i \notin merged
   /\ raised' = raised \cup {i} /\ armed' = (IF i \in Pre THEN armed ELSE armed \ {i})
   /\ UNCHANGED <<q, threads, live, held, launching, fired, status, fixes, merged, by, verifiedAtMerge, fresh, reviewAtMerge, startedHeld, jumped, crowded, pr>>
 
-Pass(m, i) == q[m][i] \in {"working", "passed"} /\ Set(m, i, "passed") /\ status' = [status EXCEPT ![i] = "pass"]
+Takes(m, i) == q[m][i] \in {"working", "passed"} \/ (q[m][i] = "owner" /\ fixes[i] < MaxFix)
+Pass(m, i) == Takes(m, i) /\ Set(m, i, "passed") /\ status' = [status EXCEPT ![i] = "pass"]
   /\ armed' = (IF NeedsReview(i) THEN armed \ {i} ELSE armed \cup {i})
   /\ fresh' = [fresh EXCEPT ![i] = TRUE] /\ pr' = pr \cup {i} /\ live' = [live EXCEPT ![m] = @ \ {i}]
   /\ UNCHANGED <<threads, held, launching, fired, raised, fixes, merged, by, verifiedAtMerge, reviewAtMerge, startedHeld, jumped, crowded>>
 
-Fail(m, i) == q[m][i] \in {"working", "passed"} /\ fixes' = [fixes EXCEPT ![i] = @ + 1]
+Fail(m, i) == Takes(m, i) /\ fixes' = [fixes EXCEPT ![i] = @ + 1]
   /\ Set(m, i, IF fixes[i] + 1 < MaxFix THEN "working" ELSE "owner")
   /\ fresh' = [fresh EXCEPT ![i] = FALSE] /\ armed' = armed \ {i} /\ status' = [status EXCEPT ![i] = "none"] /\ pr' = pr \cup {i}
   /\ live' = [live EXCEPT ![m] = IF fixes[i] + 1 < MaxFix THEN @ \cup {i} ELSE @ \ {i}]
@@ -98,10 +99,11 @@ Done(m, i) == q[m][i] \in {"working", "passed", "owner"} /\ i \in merged
   /\ Set(m, i, "done") /\ live' = [live EXCEPT ![m] = @ \ {i}]
   /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
 
-End(m, i) == q[m][i] = "working" /\ live' = [live EXCEPT ![m] = @ \ {i}]
-  /\ \/ i \notin pr /\ Set(m, i, "done") /\ pr' = pr
-     \/ Set(m, i, "owner") /\ pr' = pr \cup {i}
-  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded>>
+Quiet(m, i) == q[m][i] = "working" /\ Set(m, i, "owner") /\ live' = [live EXCEPT ![m] = @ \ {i}]
+  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
+
+Finish(m, i) == q[m][i] = "working" /\ i \notin pr /\ Set(m, i, "done") /\ live' = [live EXCEPT ![m] = @ \ {i}]
+  /\ UNCHANGED <<threads, held, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
 
 Hold(i) == i \notin held /\ held' = held \cup {i}
   /\ UNCHANGED <<q, threads, live, launching, fired, raised, status, fixes, merged, by, verifiedAtMerge, fresh, armed, reviewAtMerge, startedHeld, jumped, crowded, pr>>
@@ -112,10 +114,10 @@ Next ==
   \/ \E m \in Machines : Launch(m) \/ Claim(m) \/ Requeue(m) \/ Crash(m)
   \/ \E m \in Machines, i \in Items :
        Pickup(m, i) \/ Add(m, i) \/ Start(m, i) \/ Recover(m, i) \/ Raise(m, i)
-       \/ Pass(m, i) \/ Fail(m, i) \/ Push(m, i) \/ Done(m, i) \/ End(m, i)
+       \/ Pass(m, i) \/ Fail(m, i) \/ Push(m, i) \/ Done(m, i) \/ Quiet(m, i) \/ Finish(m, i)
   \/ \E i \in Items : AutoMerge(i) \/ HumanMerge(i) \/ Hold(i) \/ Unhold(i)
 
-Fair == WF_vars(End("mac", "i1")) /\ \A m \in Machines : WF_vars(Claim(m)) /\ WF_vars(Requeue(m)) /\ \A i \in Items : WF_vars(Recover(m, i))
+Fair == WF_vars(Quiet("mac", "i1")) /\ \A m \in Machines : WF_vars(Claim(m)) /\ WF_vars(Requeue(m)) /\ \A i \in Items : WF_vars(Recover(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
 OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "none"}) <= 1
@@ -127,6 +129,7 @@ PriorityOrder == ~jumped
 FixCap == \A i \in Items : fixes[i] <= MaxFix
 AutoMergeIsVerifiedAndAllowed == \A i \in Items : by[i] = "auto" => verifiedAtMerge[i] /\ ~reviewAtMerge[i]
 WorkingHasThread == \A m \in Machines, i \in Items : q[m][i] \in {"working", "passed"} => threads[i] = 1
+QuietTakesAVerdict == \A m \in Machines, i \in Items : q[m][i] = "owner" /\ fixes[i] < MaxFix => Takes(m, i)
 PrDoneOnlyWhenMerged == \A m \in Machines, i \in Items : q[m][i] = "done" /\ i \in pr => i \in merged
 NoPrFreesItsSlot == (q["mac"]["i1"] = "working" /\ "i1" \notin pr) ~> (q["mac"]["i1"] # "working" \/ "i1" \in pr)
 StartingResolves == \A m \in Machines, i \in Items : (q[m][i] = "starting") ~> (q[m][i] # "starting")

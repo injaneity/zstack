@@ -297,25 +297,77 @@ class Merge(Case):
         self.assertEqual(queue.sweep(self.pol)[0]["now"], "working")
         self.assertEqual(queue.next_up(self.pol)["waiting"], "the machine is at its thread cap")
 
-    def test_an_ended_thread_frees_its_slot_and_its_open_pr_goes_to_the_owner(self):
-        self.pol["run"]["threads"] = 3
-        for x in ("a", "b", "c"):
+    def test_a_quiet_thread_is_nudged_then_its_item_is_the_owners_and_a_late_verdict_still_counts(self):
+        self.pol["run"]["threads"] = 1
+        self.add("a")
+        self.to_working("a", thread="t-a")
+        self.add("b")
+        self.pr_open("a", 40)
+        for n in range(1, queue.NUDGES + 1):
+            got = queue.nudge(self.pol, "a")
+            self.assertEqual((got["state"], got["nudges"]), ("working", n))
+            self.assertIn("finished a", got["send"])
+        got = queue.nudge(self.pol, "a")
+        self.assertEqual((got["state"], got["why"], "send" in got), ("owner", queue.QUIET, False))
+        self.assertEqual(queue.next_up(self.pol)["launch"]["id"], "b")
+        with self.assertRaisesRegex(queue.Refused, "a is owner, not working"):
+            queue.nudge(self.pol, "a")
+        got = queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        self.assertEqual((got["state"], got["say"], self.forge.merges), ("passed", "merged, or in the merge queue", [(40, H1)]))
+
+    def test_a_verdict_resets_the_nudges_and_spent_fix_attempts_take_no_late_verdict(self):
+        self.add("a")
+        self.to_working("a")
+        self.pr_open("a", 40)
+        queue.nudge(self.pol, "a")
+        for _ in range(self.pol["ci"]["fix_attempts"]):
+            got = queue.verified(self.pol, "a", 40, H1, "fail")
+            self.assertEqual(got["nudges"], 0)
+        self.assertEqual((got["state"], got["why"]), ("owner", "its fix attempts are spent"))
+        with self.assertRaisesRegex(queue.Refused, "a is owner"):
+            queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+
+    def test_a_thread_finishes_an_item_with_nothing_to_merge_but_not_one_with_a_pr(self):
+        for x in ("a", "b"):
             self.add(x)
-            self.to_working(x, thread=f"t-{x}")
-        self.assertEqual(queue.next_up(self.pol)["working"], {"a": "t-a", "b": "t-b", "c": "t-c"})
+            self.to_working(x)
+        self.assertEqual(queue.finished(self.pol, "a")["state"], "done")
         self.pr_open("b", 41)
-        self.pr_open("c", 42)
-        queue.verified(self.pol, "c", 42, H1, "fail")
-        got = [queue.ended(self.pol, "a"), queue.ended(self.pol, "b", 41), queue.ended(self.pol, "c")]
-        self.assertEqual([(x["state"], x["pr"], x["why"]) for x in got], [
-            ("done", None, "its thread ended with no PR"),
-            ("owner", 41, "its thread ended before the verifier passed its PR"),
-            ("owner", 42, "its thread ended before the verifier passed its PR")])
-        self.assertEqual(queue.next_up(self.pol)["working"], {})
-        with self.assertRaisesRegex(queue.Refused, "b is owner, not working"):
-            queue.ended(self.pol, "b")
-        self.forge.prs[41]["state"] = "MERGED"
-        self.assertEqual([(x["id"], x["now"]) for x in queue.sweep(self.pol)], [("b", "done")])
+        queue.verified(self.pol, "b", 41, H1, "fail")
+        with self.assertRaisesRegex(queue.Refused, "b has PR 41"):
+            queue.finished(self.pol, "b")
+        with self.assertRaisesRegex(queue.Refused, "a is done, not working"):
+            queue.finished(self.pol, "a")
+
+    def test_the_sweep_removes_a_done_items_worktree_only_when_nothing_in_it_is_unpushed(self):
+        import subprocess
+
+        def git(*a, cwd):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+        up, clone = self.root / "up.git", self.root / "clone"
+        git("init", "-q", "--bare", str(up), cwd=self.root)
+        git("clone", "-q", str(up), str(clone), cwd=self.root)
+        git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
+        git("push", "-q", "origin", "HEAD", cwd=clone)
+        self.pol["host"]["clone"] = str(clone)
+        self.pol["run"]["threads"] = 4
+        for x in ("clean", "dirty", "ahead", "gone"):
+            wt = self.root / f"wt-{x}"
+            if x != "gone":
+                git("worktree", "add", "-q", "-b", x, str(wt), cwd=clone)
+            self.add(x)
+            queue.step(self.pol, "start", x)
+            queue.step(self.pol, "claim", x, thread=f"t-{x}", worktree=str(wt))
+        self.assertEqual(queue.sweep(self.pol), [])
+        for x in ("clean", "dirty", "ahead", "gone"):
+            queue.finished(self.pol, x)
+        (self.root / "wt-dirty" / "new.txt").write_text("x")
+        git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.root / "wt-ahead")
+        self.assertEqual({x["id"]: x["why"] for x in queue.sweep(self.pol)},
+                         {"clean": "its worktree was removed", "gone": "its worktree is already gone"})
+        self.assertEqual([(self.root / f"wt-{x}").exists() for x in ("clean", "dirty", "ahead")], [False, True, True])
+        self.assertEqual({k: bool(v["worktree"]) for k, v in self.items().items()}, {"clean": False, "dirty": True, "ahead": True, "gone": False})
+        self.assertEqual(queue.sweep(self.pol), [])
 
     def test_an_items_own_thread_never_records_its_verdict(self):
         self.add("a")
@@ -332,6 +384,7 @@ class Merge(Case):
         (self.root / "queue.json").write_text(json.dumps({"items": {"a": legacy}}))
         self.pr_open("a", 40)
         self.assertEqual((queue.sweep(self.pol), queue.next_up(self.pol)["waiting"]), ([], "nothing is queued"))
+        self.assertEqual(queue.verified(self.pol, "a", 40, H1, "pass", "review")["state"], "passed")
         self.forge.prs[40]["state"] = "MERGED"
         self.assertEqual(queue.sweep(self.pol), [{"id": "a", "now": "done", "why": "merged"}])
 
@@ -340,7 +393,7 @@ class Merge(Case):
         self.assertEqual(queue.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "working"),
                                        "requeue": ("starting", "queued")})
         for name, to in (("Start(m, i)", "starting"), ("Claim(m)", "working"), ("Requeue(m)", "queued"), ("Pass(m, i)", "passed"),
-                         ("End(m, i)", "done"), ("End(m, i)", "owner")):
+                         ("Finish(m, i)", "done"), ("Quiet(m, i)", "owner")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
         self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "passed", "owner", "done"})
@@ -358,7 +411,9 @@ class Cli(Case):
             self.assertEqual(queue.main(["start", "a"]), 0)
             self.assertEqual(queue.main(["claim", "a", "t-1"]), 0)
             self.forge.prs[40] = {"head": H1}
-            self.assertEqual(queue.main(["ended", "a", "x"]), 2)
+            self.assertEqual(queue.main(["nudge", "a", "x"]), 2)
+            self.assertEqual(queue.main(["nudge", "a"]), 0)
+            self.assertEqual(queue.main(["finished"]), 2)
             self.assertEqual(queue.main(["verified", "a", "pass", "auto"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass", "extreme"]), 2)

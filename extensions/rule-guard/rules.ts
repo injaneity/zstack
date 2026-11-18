@@ -201,7 +201,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	return hit ? `${act} in ${hit}: a PR there merges itself once it is verified, or the owner merges it (Hard rules, Merging)` : undefined;
 }
 
-const QUEUE_OPEN = new Set(["raise", "list", "next"]);
+const QUEUE_OPEN = new Set(["raise", "finished", "list", "next"]);
 export const THREAD_VAR = "T3CODE_THREAD_ID";
 
 function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
@@ -213,7 +213,7 @@ function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefine
 	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
 		return `\`queue verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
 	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && w[i + 1] !== "verified" && !QUEUE_OPEN.has(w[i + 1]))
-		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue raise <id>\``;
+		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue raise <id>\` or \`queue finished <id>\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
 		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
 	return undefined;

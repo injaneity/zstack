@@ -96,16 +96,22 @@ M = [
         "SlotOnlyWhileWorking",
     ),
     (
-        "end-an-item-with-a-pr",
-        "an item whose thread ended is closed though its PR is still open",
-        [('  /\\ \\/ i \\notin pr /\\ Set(m, i, "done") /\\ pr\' = pr\n', '  /\\ \\/ Set(m, i, "done") /\\ pr\' = pr\n')],
+        "finish-an-item-with-a-pr",
+        "a thread closes its item as finished though the verifier already checked its PR",
+        [('Finish(m, i) == q[m][i] = "working" /\\ i \\notin pr /\\ Set', 'Finish(m, i) == q[m][i] = "working" /\\ Set')],
         "PrDoneOnlyWhenMerged",
     ),
     (
-        "no-end",
-        "an item whose thread ended holds its slot for good",
-        [('End(m, i) == q[m][i] = "working" /\\ live\'', 'End(m, i) == q[m][i] = "working" /\\ FALSE /\\ live\'')],
+        "no-quiet",
+        "an item whose thread went quiet holds its slot for good",
+        [('Quiet(m, i) == q[m][i] = "working" /\\ Set', 'Quiet(m, i) == q[m][i] = "working" /\\ FALSE /\\ Set')],
         "a temporal property",
+    ),
+    (
+        "a-late-verdict-is-refused",
+        "the verdict of a verifier still running when its item went to the owner as quiet is thrown away",
+        [(' \\/ (q[m][i] = "owner" /\\ fixes[i] < MaxFix)\n', "\n")],
+        "QuietTakesAVerdict",
     ),
 ]
 
