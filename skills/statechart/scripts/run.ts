@@ -193,6 +193,9 @@ const runToFiles = (
 async function findTlc(cwd: string) {
   const { TLA2TOOLS, JAVA } = process.env;
   if (TLA2TOOLS) return { jar: TLA2TOOLS, java: JAVA || "java" };
+  const bundled = path.resolve(import.meta.dirname, "../../../bin/everystate");
+  if (fs.existsSync(bundled) && (await runChild(bundled, ["-help"], { cwd, env: process.env })).status === 0)
+    return { jar: "unused", java: `${bundled}-java` };
   const mise = (...args: string[]) =>
     runChild("mise", args, { cwd, env: { ...process.env, MISE_CEILING_PATHS: cwd } });
   const where = () =>

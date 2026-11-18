@@ -66,7 +66,7 @@ jobs:
       - name: lint the services and tests
         run: |
           pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy bin/queue model
-          shellcheck services/pre-push services/ensure-main tests/ensure-main.sh tests/queue-model.sh
+          shellcheck services/pre-push services/ensure-main tests/ensure-main.sh tests/queue-model.sh bin/everystate bin/everystate-java
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/zstack
-          key: everystate-${{ runner.os }}-${{ hashFiles('tests/queue-model.sh') }}
+          key: everystate-${{ runner.os }}-${{ hashFiles('bin/everystate') }}
       - name: model/Queue.tla holds (the queue, the verifier's gate and the merge) and every mutant fails on its rule
         run: tests/queue-model.sh
       - name: skills and agent types have frontmatter

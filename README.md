@@ -56,7 +56,8 @@ A rule names a value by its key in braces (`{merge.repo}`) and `bin/policy` fill
 - **`onigiri-mode`**: the one skill it reads. The hard rule (one thread, one task), the working choices this stack makes, the delegates and when to use each, autonomy, and the pull-requests playbook.
 - **`unslop`**: strips AI tells from prose.
 - **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `verify-<app>` skill that launches the real app, drives it like a user and captures evidence, then keep its feature map honest.
-- **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, unchanged. statechart model-checks a TLA+ spec with TLC and draws it as a Mermaid statechart. All three are slash-command only.
+- **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, changed only to use the bundled checker. statechart model-checks a TLA+ spec and draws it as a Mermaid statechart.
+- **`bin/everystate`**: a TLA+ model checker with TLC's command line and output and no Java, built on first use from a fork pinned to one commit. statechart and `tests/queue-model.sh` both check with it, and CI runs TLC beside it so the two must agree. All three are slash-command only.
 - **The rule guard** (`extensions/rule-guard/`, with a pi adapter beside it and a Claude Code adapter in `hooks/`): blocks the calls the Hard rules ban outright. `docs/RULE-GUARD.md` lists them.
 - **The pi extensions** `subagent` (`docs/SUBAGENT.md`) and `tool-guard`, which bounds a bash call that declares no timeout by `run.idle_min`.
 

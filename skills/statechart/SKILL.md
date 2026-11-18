@@ -18,7 +18,7 @@ Work in a scratch folder outside the repo. Write a TLA+ spec and its config. The
 
 `scripts/statechart.ts` is TypeScript, so run it with a runtime that can execute TypeScript.
 
-The first run installs TLC and Java with mise and needs the network.
+The command checks the spec with `everystate`, the TLC-compatible checker this package ships as `bin/everystate`. Its first run builds it with Rust's `cargo` and needs the network. Without Rust, the command installs TLC and Java with mise instead. Where the text below says TLC, either one is meant: they print the same output.
 
 ## Write the spec
 
