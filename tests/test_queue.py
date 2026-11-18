@@ -288,11 +288,42 @@ class Merge(Case):
                                  "c": ("passed", "it waits: it has a hold row")})
         self.assertEqual(self.forge.merges, [])
 
+    def test_an_ended_thread_frees_its_slot_and_its_open_pr_goes_to_the_owner(self):
+        self.pol["run"]["threads"] = 3
+        for x in ("a", "b", "c"):
+            self.add(x)
+            self.to_working(x, thread=f"t-{x}")
+        self.assertEqual(queue.next_up(self.pol)["working"], {"a": "t-a", "b": "t-b", "c": "t-c"})
+        self.pr_open("b", 41)
+        self.pr_open("c", 42)
+        queue.verified(self.pol, "c", 42, H1, "fail")
+        got = [queue.ended(self.pol, "a"), queue.ended(self.pol, "b", 41), queue.ended(self.pol, "c")]
+        self.assertEqual([(x["state"], x["pr"], x["why"]) for x in got], [
+            ("done", None, "its thread ended with no PR"),
+            ("owner", 41, "its thread ended before the verifier passed its PR"),
+            ("owner", 42, "its thread ended before the verifier passed its PR")])
+        self.assertEqual(queue.next_up(self.pol)["working"], {})
+        with self.assertRaisesRegex(queue.Refused, "b is owner, not working"):
+            queue.ended(self.pol, "b")
+        self.forge.prs[41]["state"] = "MERGED"
+        self.assertEqual([(x["id"], x["now"]) for x in queue.sweep(self.pol)], [("b", "done")])
+
+    def test_an_items_own_thread_never_records_its_verdict(self):
+        self.add("a")
+        self.to_working("a", thread="t-a")
+        self.pr_open("a", 40)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}), self.assertRaisesRegex(queue.Refused, "a's own thread"):
+            queue.verified(self.pol, "a", 40, H1, "pass", "auto")
+        self.assertEqual(self.items()["a"]["state"], "working")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-verifier"}):
+            self.assertEqual(queue.verified(self.pol, "a", 40, H1, "pass", "auto")["state"], "passed")
+
     def test_the_steps_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
         self.assertEqual(queue.STEPS, {"start": ("queued", "starting"), "claim": ("starting", "working"),
                                        "requeue": ("starting", "queued")})
-        for name, to in (("Start(m, i)", "starting"), ("Claim(m)", "working"), ("Requeue(m)", "queued"), ("Pass(m, i)", "passed")):
+        for name, to in (("Start(m, i)", "starting"), ("Claim(m)", "working"), ("Requeue(m)", "queued"), ("Pass(m, i)", "passed"),
+                         ("End(m, i)", "done"), ("End(m, i)", "owner")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
         self.assertEqual(states - {"none"}, {*queue.ACTIVE, "queued", "owner", "done"})
@@ -310,6 +341,7 @@ class Cli(Case):
             self.assertEqual(queue.main(["start", "a"]), 0)
             self.assertEqual(queue.main(["claim", "a", "t-1"]), 0)
             self.forge.prs[40] = {"head": H1}
+            self.assertEqual(queue.main(["ended", "a", "x"]), 2)
             self.assertEqual(queue.main(["verified", "a", "pass", "auto"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass"]), 2)
             self.assertEqual(queue.main(["verified", "a", "40", H1, "pass", "extreme"]), 2)

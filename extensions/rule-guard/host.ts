@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { holdsPaths, isHoldsPath } from "./holds.ts";
-import { checkBash, checkWrite, type Host, mergeOwned, reviewOnlyLogins } from "./rules.ts";
+import { checkBash, checkWrite, type Host, mergeOwned, reviewOnlyLogins, THREAD_VAR } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -48,7 +48,7 @@ function readText(file: string, dir: string | undefined): string | undefined {
 	}
 }
 
-const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; } };
+const host: Host = { repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 

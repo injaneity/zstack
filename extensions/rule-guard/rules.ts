@@ -25,6 +25,7 @@ export interface Host {
 	authorOf?(repo: string, n: number): string | undefined;
 	reviewOnly?(): ReadonlySet<string> | null;
 	readText?(file: string, dir: string | undefined): string | undefined;
+	thread?: string;
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
@@ -201,13 +202,18 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 }
 
 const QUEUE_OPEN = new Set(["raise", "list", "next"]);
+export const THREAD_VAR = "T3CODE_THREAD_ID";
 
 function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
 	const at = cwd === undefined ? undefined : host.repoAt(cwd);
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
+	if (c.raw.some((a) => a === THREAD_VAR || a.startsWith(`${THREAD_VAR}=`)))
+		return `it sets or clears ${THREAD_VAR}: the queue tells an item's own thread from its verifier by it`;
 	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
-	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && !QUEUE_OPEN.has(w[i + 1]))
-		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue, and only the verifier records a verdict. A thread runs \`queue raise <id>\``;
+	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
+		return `\`queue verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
+	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && w[i + 1] !== "verified" && !QUEUE_OPEN.has(w[i + 1]))
+		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread runs \`queue raise <id>\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
 		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
 	return undefined;

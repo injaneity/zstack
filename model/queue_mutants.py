@@ -87,6 +87,18 @@ M = [
         [('Recover(m, i) == q[m][i] = "starting" /\\ launching[m] # i\n', 'Recover(m, i) == q[m][i] = "starting" /\\ launching[m] # i /\\ FALSE\n')],
         "a temporal property",
     ),
+    (
+        "end-an-item-with-a-pr",
+        "an item whose thread ended is closed though its PR is still open",
+        [('  /\\ \\/ i \\notin pr /\\ Set(m, i, "done") /\\ pr\' = pr\n', '  /\\ \\/ Set(m, i, "done") /\\ pr\' = pr\n')],
+        "PrDoneOnlyWhenMerged",
+    ),
+    (
+        "no-end",
+        "an item whose thread ended holds its slot for good",
+        [('End(m, i) == q[m][i] = "working" /\\ live\'', 'End(m, i) == q[m][i] = "working" /\\ FALSE /\\ live\'')],
+        "a temporal property",
+    ),
 ]
 
 

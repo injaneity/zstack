@@ -554,7 +554,9 @@ test("a PR title or body that breaks Commits and PR text is refused in the merge
 });
 
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
-	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", "python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto", "/pkg/zstack/bin/queue ready app-1 40",
+	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto";
+	const inThread = { ...host, thread: "t-9" };
+	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue ended app-1 40",
 		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
@@ -566,4 +568,10 @@ test("a coding thread reports to the queue but never moves it, and never marks a
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
 		allowed(c, "/zs");
 	assert.match(checkBash("bin/queue start app-1", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
+	assert.equal(checkBash(verdict, OWNED, inThread, inApp), undefined);
+	assert.equal(checkBash("echo $T3CODE_THREAD_ID", OWNED, inThread, inApp), undefined);
+	for (const c of [`T3CODE_THREAD_ID=t-0 ${verdict}`, `env -u T3CODE_THREAD_ID ${verdict}`, `unset T3CODE_THREAD_ID; ${verdict}`,
+		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "bin/queue start app-1"])
+		assert.match(checkBash(c, OWNED, inThread, inApp) ?? "", /^blocked: /, c);
 });
+

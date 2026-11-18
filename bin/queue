@@ -23,6 +23,7 @@ USAGE = (
     "                                   the verifier passed that head: it may merge itself, or a person must review it\n"
     "  queue verified <id> <pr> <head> fail\n"
     "                                   the verifier found something in that head: its thread fixes it\n"
+    "  queue ended <id> [<pr>]          the item's thread ended with no verdict: the owner's with its open PR, else done\n"
     "  queue raise <id>                 the thread says this needs a person; no auto-merge\n"
     "  queue sweep                      merge what may merge, close merged items, send a new head back to work\n"
     "  queue list                       the queue as it stands"
@@ -35,6 +36,7 @@ STEPS = {"start": ("queued", "starting"), "claim": ("starting", "working"), "req
 ACTIVE = ("starting", "working", "passed")
 OPEN = ("working", "passed", "owner")
 STALE_S = 15 * 60
+THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 ENV = {**os.environ, "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", "/opt/homebrew/bin",
@@ -248,7 +250,8 @@ def next_up(pol):
     def go(items):
         pick, waiting = first(items, h, pol["run"]["threads"])
         return {"launch": {"id": pick, "clone": pol["host"]["clone"], "brief": brief(pol, pick, items[pick])} if pick else None, "waiting": waiting,
-                "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S)}, False
+                "recover": sorted(k for k, v in items.items() if v["state"] == "starting" and age(v["at"]) >= STALE_S),
+                "working": {k: v["thread"] for k, v in sorted(items.items()) if v["state"] == "working"}}, False
     return locked(pol, go)
 
 
@@ -304,6 +307,8 @@ def verified(pol, ident, pr, head, result, said="review"):
         it = items.get(ident)
         if not it or it["state"] not in ("working", "passed"):
             raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working or passed")
+        if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
+            raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
@@ -317,6 +322,21 @@ def verified(pol, ident, pr, head, result, said="review"):
         review = it["review"] or said != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]
         it.update(state="passed", auto=pre or not review, why=None if pre or not review else "it needs a person's review", at=now())
         return {**it, "say": merge(pol, it, live, h)}, True
+    return locked(pol, go)
+
+
+def ended(pol, ident, pr=None):
+    def go(items):
+        it = items.get(ident)
+        if not it or it["state"] != "working":
+            raise Refused(f"{ident} is {it['state'] if it else 'not queued'}, not working")
+        if pr:
+            pr_view(pol, pr)
+        if pr or it["pr"]:
+            it.update(state="owner", pr=pr or it["pr"], auto=False, why="its thread ended before the verifier passed its PR", at=now())
+        else:
+            it.update(state="done", why="its thread ended with no PR", at=now())
+        return it, True
     return locked(pol, go)
 
 
@@ -374,6 +394,8 @@ def main(argv, stdin=sys.stdin):
         if argv[:1] == ["verified"] and len(argv) >= 5 and argv[2].isdigit() and re.fullmatch(r"[0-9a-f]{40}", argv[3]) and (
                 argv[4:] == ["fail"] or (len(argv) == 6 and argv[4] == "pass" and argv[5] in ("auto", "review"))):
             return say(verified(pol, argv[1], int(argv[2]), argv[3], argv[4], argv[5] if argv[4] == "pass" else "review"))
+        if argv[:1] == ["ended"] and (len(argv) == 2 or (len(argv) == 3 and argv[2].isdigit())):
+            return say(ended(pol, argv[1], int(argv[2]) if len(argv) == 3 else None))
         if len(argv) == 2 and argv[0] == "raise":
             return say(raise_review(pol, argv[1]))
         if argv == ["sweep"]:
