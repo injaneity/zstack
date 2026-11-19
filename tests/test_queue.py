@@ -80,9 +80,15 @@ class Case(unittest.TestCase):
     def claim(self, ident, thread, worktree=None):
         if worktree:
             self.trees[ident] = worktree
-        queue.claim(self.pol, ident)
-        queue.attach(self.pol, ident, thread)
+        at = queue.claim(self.pol, ident)["worktree"]
+        self.assertEqual(self.start(thread, at), {"attached": ident, "thread": thread})
         return self.file()["running"][ident]
+
+    def start(self, thread, cwd):
+        with patch.dict(os.environ, {queue.THREAD_VAR: thread} if thread else {}), patch.object(os, "getcwd", return_value=cwd):
+            if not thread:
+                os.environ.pop(queue.THREAD_VAR, None)
+            return queue.attach(self.pol)
 
     def pr_open(self, pr, head=H1, labels=()):
         self.forge.prs[pr] = {"head": head, "labels": list(labels)}
@@ -208,14 +214,17 @@ class Launch(Case):
         self.assertEqual(queue.claim(self.pol, "a"), got)
         got = queue.next_up(self.pol)
         self.assertEqual((got["claim"], got["waiting"], got["running"]), (None, "the machine is at its thread cap", {"a": None}))
-        self.assertEqual(queue.attach(self.pol, "a", "t-1"), {"id": "a", "thread": "t-1", "worktree": "/nowhere/wt-a"})
-        self.assertEqual(queue.attach(self.pol, "a", "t-1")["thread"], "t-1")
-        with self.assertRaisesRegex(queue.Refused, "a already has the thread t-1"):
-            queue.attach(self.pol, "a", "t-2")
+        self.pr_open(40)
+        with self.assertRaisesRegex(queue.Refused, "a has no thread recorded yet, so its verifier cannot be told from its thread"):
+            queue.verified(self.pol, "a", 40, H1, "auto")
+        for thread, cwd in ((None, "/nowhere/wt-a"), ("t-1", "/nowhere/wt-ab"), ("t-1", "/nowhere")):
+            self.assertEqual(self.start(thread, cwd), {"attached": None})
+        self.assertEqual(self.start("t-1", "/nowhere/wt-a/src"), {"attached": "a", "thread": "t-1"})
+        for later in ("t-1", "t-verifier"):
+            self.assertEqual(self.start(later, "/nowhere/wt-a"), {"attached": None})
+        self.assertEqual(self.file()["running"]["a"]["thread"], "t-1")
         with self.assertRaisesRegex(queue.Refused, "a is already running"):
             queue.claim(self.pol, "a")
-        with self.assertRaisesRegex(queue.Refused, "b is not running, so no thread was launched for it"):
-            queue.attach(self.pol, "b", "t-2")
 
     def test_a_claim_that_cannot_make_its_worktree_takes_nothing(self):
         self.add("a")
@@ -234,9 +243,6 @@ class Launch(Case):
         git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
         git("push", "-q", "origin", "HEAD:trunk", cwd=clone)
         self.pol["host"]["clone"] = str(clone)
-        with self.assertRaisesRegex(queue.Refused, "does not know its remote's default branch: run git remote set-head origin --auto"):
-            PLANT(self.pol, "a")
-        git("remote", "set-head", "origin", "--auto", cwd=clone)
         git("clone", "-q", str(up), str(other), cwd=self.root)
         git("commit", "-q", "--allow-empty", "-m", "two", cwd=other)
         git("push", "-q", "origin", "HEAD:trunk", cwd=other)
@@ -244,17 +250,28 @@ class Launch(Case):
         path = PLANT(self.pol, "a")
         self.assertEqual(path, os.path.realpath(self.root / "trees" / "a"))
         self.assertEqual(git("log", "-1", "--format=%s %D", cwd=path).strip(), "two HEAD -> zstack/a, origin/trunk, origin/HEAD")
-        (Path(path) / "kept.txt").write_text("x")
-        self.assertEqual((PLANT(self.pol, "a"), (Path(path) / "kept.txt").exists()), (path, True))
+        with self.assertRaisesRegex(queue.Refused, "trees/a is already there, and may hold someone's work: move it aside"):
+            PLANT(self.pol, "a")
         self.trees["a"] = path
         self.add("a")
         queue.claim(self.pol, "a")
-        (Path(path) / "kept.txt").unlink()
         self.assertEqual((queue.release(self.pol, "a")["state"], os.path.exists(path)), ("done", False))
         self.assertEqual(git("branch", "--list", "zstack/*", cwd=clone), "")
-        with patch.object(queue, "git", lambda *a, **k: (0, "origin/trunk\n") if "rev-parse" in a else (1, "")):
+        git("branch", "zstack/b", cwd=clone)
+        with self.assertRaisesRegex(queue.Refused, "on a new branch zstack/b from origin/trunk: if that branch is there, it may hold work"):
+            PLANT(self.pol, "b")
+        self.assertEqual(git("log", "-1", "--format=%s", "zstack/b", cwd=clone).strip(), "local only")
+        git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone", cwd=clone)
+        self.assertEqual(git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")).strip(), "HEAD -> zstack/c, origin/trunk, origin/HEAD")
+        with patch.object(queue, "git", lambda *a, **k: (0, "origin/trunk\n") if "rev-parse" in a or "set-head" in a else (1, "")):
             with self.assertRaisesRegex(queue.Refused, "git fetch origin failed in .*, so the worktree would start from an old origin/trunk"):
-                PLANT(self.pol, "b")
+                PLANT(self.pol, "d")
+        with patch.object(queue, "git", lambda *a, **k: (1, "")):
+            with self.assertRaisesRegex(queue.Refused, "cannot read the default branch of origin"):
+                PLANT(self.pol, "d")
+        for bad in ("a..b", "a.", "a.lock", ".a"):
+            with self.assertRaisesRegex(queue.Refused, "that can name a branch"):
+                self.add(bad)
 
     def test_the_brief_tells_the_thread_how_to_report(self):
         self.add("a", "Fix the parser")
@@ -555,10 +572,11 @@ class Cli(Case):
             self.assertEqual(queue.main(["add", "b", "--priority"], stdin=io.StringIO("task")), 2)
             self.assertEqual(queue.main(["add", "c", "--preapproved", "--priority", "1"], stdin=io.StringIO("task")), 0)
             self.assertEqual(queue.main(["add", "d", "--preapproved", "--preapproved"], stdin=io.StringIO("task")), 2)
-            for gone in (["pickup"], ["holds"], ["hold", "add", "x"], ["start", "a"], ["claim", "a", "t-1", "/w"], ["attach", "a"], ["nope"]):
+            for gone in (["pickup"], ["holds"], ["hold", "add", "x"], ["start", "a"], ["claim", "a", "t-1", "/w"], ["attach", "a", "t-1"], ["nope"]):
                 self.assertEqual(queue.main(gone), 2, gone)
             self.assertEqual(queue.main(["claim", "a"]), 0)
-            self.assertEqual(queue.main(["attach", "a", "t-1"]), 0)
+            with patch.dict(os.environ, {queue.THREAD_VAR: "t-1"}), patch.object(os, "getcwd", return_value="/nowhere/wt-a"):
+                self.assertEqual(queue.main(["attach"]), 0)
             self.forge.prs[40] = {"head": H1}
             for bad in (["verified", "a", "auto"], ["verified", "a", "40", H1], ["verified", "a", "40", H1, "pass", "auto"],
                         ["verified", "a", "40", H1, "extreme"], ["verified", "a", "40", H1[:7], "auto"], ["gate", "40", H1[:7]],

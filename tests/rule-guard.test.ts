@@ -356,7 +356,7 @@ test("a merge in an owned repo runs only as the gated command, and only when the
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
 	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/queue.py verified app-1 40 abc auto";
 	const inThread = { ...host, thread: "t-9" };
-	for (const c of ["./queue.py claim app-1", "/pkg/zstack/queue.py attach app-1 t-9", verdict, "queue.py release app-2",
+	for (const c of ["./queue.py claim app-1", "/pkg/zstack/queue.py attach", verdict, "queue.py release app-2",
 		"python3 queue.py add x", "cd /tmp && /pkg/zstack/queue.py add y --preapproved", "python3 -I ../zstack/queue.py claim a",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
@@ -364,10 +364,10 @@ test("a coding thread reports to the queue but never moves it, and never marks a
 	for (const c of ["/pkg/zstack/queue.py release", "queue.py release --hook", "queue.py gate 40 abc", "queue.py list", "queue.py next", "queue.py invariants",
 		"queue.py seat verifier", "gh api repos/acme/app/statuses/abc", "gh api repos/acme/app/commits/abc/check-runs", "ls queue.py", "git add queue.py"])
 		allowed(c, inApp);
-	for (const c of ["./queue.py claim app-1", "./queue.py attach app-1 t-9", "queue.py verified app-1 40 abc auto",
+	for (const c of ["./queue.py claim app-1", "./queue.py attach", "queue.py verified app-1 40 abc auto",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
 		allowed(c, "/zs");
-	assert.match(checkBash("./queue.py attach app-1 t-9", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
+	assert.match(checkBash("./queue.py attach", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
 	assert.equal(checkBash(verdict, OWNED, inThread, inApp), undefined);
 	assert.equal(checkBash("echo $T3CODE_THREAD_ID", OWNED, inThread, inApp), undefined);
 	for (const c of [`T3CODE_THREAD_ID=t-0 ${verdict}`, `env -u T3CODE_THREAD_ID ${verdict}`, `unset T3CODE_THREAD_ID; ${verdict}`,

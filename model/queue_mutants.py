@@ -52,9 +52,15 @@ M = [
     ),
     (
         "a-launched-thread-is-never-recorded",
-        "an item whose thread was launched but never recorded holds its slot for good",
+        "an item whose thread never records itself at its session start holds its slot for good",
         [("Attach(m, i) == Unattached(m, i) /\\ threads[i] > 0", "Attach(m, i) == Unattached(m, i) /\\ FALSE /\\ threads[i] > 0")],
         LIVE,
+    ),
+    (
+        "a-verdict-before-the-thread-is-recorded",
+        "a verdict is recorded while the queue cannot tell the item's thread from its verifier",
+        [("Verdict(m, i, v) == Takes(m, i) /\\ i \\in known /\\ i \\in pr", "Verdict(m, i, v) == Takes(m, i) /\\ i \\in pr")],
+        "AVerdictNeedsARecordedThread",
     ),
     ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (

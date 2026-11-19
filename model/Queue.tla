@@ -47,7 +47,7 @@ Takes(m, i) == q[m][i] \in {"running", "waiting"}
 Push(m, i) == Takes(m, i) /\ threads[i] > 0 /\ i \notin NoTree /\ i \notin merged
   /\ pr' = pr \cup {i} /\ status' = [status EXCEPT ![i] = "none"] /\ stale' = stale \cup {i}
   /\ UNCHANGED <<q, launch, held, up, merged, by, okAtMerge, history>>
-Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
+Verdict(m, i, v) == Takes(m, i) /\ i \in known /\ i \in pr /\ i \notin merged
   /\ status' = [status EXCEPT ![i] = v] /\ stale' = stale \ {i}
   /\ UNCHANGED <<q, launch, held, up, pr, merged, by, okAtMerge, history>>
 
@@ -88,6 +88,7 @@ OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "n
 CapHolds == ~crowded
 OneThreadPerItem == \A i \in Items : threads[i] <= 1
 AThreadWorksInTheQueuesTree == \A i \in Items : threads[i] > 0 => i \in tree
+AVerdictNeedsARecordedThread == \A i \in Items : status[i] # "none" => i \in known
 HeldNeverStarted == ~startedHeld
 PriorityOrder == ~jumped
 ThreadMergesOnlyAVerifiedAllowedHead == \A i \in Items : by[i] = "thread" => okAtMerge[i]

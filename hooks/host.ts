@@ -60,11 +60,13 @@ function gate(repo: string, pr: number, head: string): string | undefined {
 	}
 }
 
-export function release(): void {
+function queue(step: string): void {
 	try {
-		execFileSync("python3", [QUEUE, "release"], { timeout: 60000, stdio: "ignore" });
+		execFileSync("python3", [QUEUE, step], { timeout: 60000, stdio: "ignore" });
 	} catch {}
 }
+export const attach = () => queue("attach");
+export const release = () => queue("release");
 
 const host: Host = { gate, labels, readonly, repoAt: originRepo, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
 

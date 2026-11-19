@@ -21,7 +21,7 @@ USAGE = (
     "                                   a task from the orchestrator; its text on stdin\n"
     "  queue.py claim <id>              take the next item: it runs from now, in a new worktree of the clone. Prints the\n"
     "                                   worktree and the brief to launch its thread with, again while no thread is recorded\n"
-    "  queue.py attach <id> <thread>    the thread launched in that worktree\n"
+    "  queue.py attach                  a session started: if it is the first in a claimed worktree, it is that item's thread\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -50,7 +50,7 @@ except ModuleNotFoundError:
 CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "config"))
 INVARIANTS = os.path.join(PKG, "config", "invariants.toml")
 THREAD_VAR = "T3CODE_THREAD_ID"
-ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
+ID = r"(?!.*\.\.)(?!.*\.(lock)?$)[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 SHA = r"[0-9a-f]{40}"
 ENV = {**{k: v for k, v in os.environ.items() if k != "GIT_NO_LAZY_FETCH"},
        "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
@@ -585,7 +585,7 @@ def first(pol, q):
 
 def add(pol, ident, said, priority, preapproved=False):
     if not re.fullmatch(ID, ident) or not said.strip():
-        raise Refused("an id of letters, digits, . _ - and a task on stdin")
+        raise Refused("an id of letters, digits, . _ - that can name a branch, and a task on stdin")
 
     def go(q):
         for part in ("tasks", "running", "waiting"):
@@ -635,18 +635,16 @@ def next_up(pol):
 
 
 def plant(pol, ident):
-    path = os.path.join(root(pol), "trees", ident)
-    clone, there = listed(pol, path)
-    if there:
-        return there
-    rc, base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")
-    base = base.strip()
-    if rc or "/" not in base:
-        raise Refused(f"{clone} does not know its remote's default branch: run git remote set-head origin --auto there")
+    clone, path = os.path.realpath(os.path.expanduser(pol["host"]["clone"])), os.path.join(root(pol), "trees", ident)
+    if os.path.lexists(path):
+        raise Refused(f"{path} is already there, and may hold someone's work: move it aside")
+    if git("-C", clone, "remote", "set-head", "origin", "--auto")[0]:
+        raise Refused(f"cannot read the default branch of origin from {clone} (network or remote?)")
+    base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")[1].strip()
     if git("-C", clone, "fetch", "--quiet", "origin", base.split("/", 1)[1])[0]:
         raise Refused(f"git fetch origin failed in {clone}, so the worktree would start from an old {base}")
-    if git("-C", clone, "worktree", "add", "--quiet", "-B", f"zstack/{ident}", path, base)[0]:
-        raise Refused(f"cannot make the worktree {path} from {base}")
+    if git("-C", clone, "worktree", "add", "--quiet", "-b", f"zstack/{ident}", path, base)[0]:
+        raise Refused(f"cannot make the worktree {path} on a new branch zstack/{ident} from {base}: if that branch is there, it may hold work")
     return os.path.realpath(path)
 
 
@@ -671,15 +669,15 @@ def claim(pol, ident):
     return locked(pol, go)
 
 
-def attach(pol, ident, thread):
+def attach(pol):
+    thread, here = os.environ.get(THREAD_VAR), os.path.realpath(os.getcwd())
+
     def go(q):
-        it = q["running"].get(ident)
-        if not it:
-            raise Refused(f"{ident} is not running, so no thread was launched for it")
-        if it["thread"] and it["thread"] != thread:
-            raise Refused(f"{ident} already has the thread {it['thread']}")
-        changed, it["thread"] = it["thread"] != thread, thread
-        return {"id": ident, "thread": thread, "worktree": it["worktree"]}, changed
+        for key, it in sorted(q["running"].items()):
+            if thread and not it["thread"] and (here + os.sep).startswith(os.path.realpath(it["worktree"]) + os.sep):
+                it["thread"] = thread
+                return {"attached": key, "thread": thread}, True
+        return {"attached": None}, False
     return locked(pol, go)
 
 
@@ -740,7 +738,9 @@ def verified(pol, ident, pr, head, result):
         it = q["running"].get(ident) or q["waiting"].get(ident)
         if not it:
             raise Refused(f"{ident} is not running or waiting on its PR, so no thread has run it")
-        if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
+        if not it["thread"]:
+            raise Refused(f"{ident} has no thread recorded yet, so its verifier cannot be told from its thread")
+        if os.environ.get(THREAD_VAR) == it["thread"]:
             raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
@@ -1091,8 +1091,8 @@ def queue_command(pol, argv, stdin):
         return next_up(pol)
     if len(argv) == 2 and argv[0] == "claim":
         return claim(pol, argv[1])
-    if len(argv) == 3 and argv[0] == "attach":
-        return attach(pol, argv[1], argv[2])
+    if argv == ["attach"]:
+        return attach(pol)
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
         return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):

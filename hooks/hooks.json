@@ -6,6 +6,11 @@
           {
             "type": "command",
             "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" invariants"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" attach > /dev/null 2>&1; exit 0",
+            "timeout": 60
           }
         ]
       }
