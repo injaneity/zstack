@@ -93,6 +93,8 @@ function pushAt(w: string[]): number {
 }
 
 function gitPush(w: string[], raw: string[]): string | undefined {
+	if (w[0] === "git" && [...raw, ...w].some((a, k, all) => /^alias\./i.test(a) && (all[k - 1] === "-c" || all[k - 1] === "--config-env") || /^(-c|--config-env=?)alias\./i.test(a) || /^GIT_CONFIG_(COUNT|KEY_\d+)=/.test(a)))
+		return "it defines a git alias or config for this one command, which the guard cannot read";
 	const i = pushAt(w);
 	if (i < 0) return undefined;
 	if ([...raw.slice(0, raw.length - w.length), ...w.slice(1, i)].some((a) => /core\.hookspath/i.test(a)))

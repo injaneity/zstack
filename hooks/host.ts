@@ -20,7 +20,7 @@ function originRepo(dir: string): string | null | undefined {
 
 const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../queue.py");
 const dump = () => execFileSync("python3", ["-I", QUEUE, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
-function config(): { merge: { hold_label: string; review_label: string; preapproved_labels: string[] } } | null {
+function config(): { merge: { hold_label: string; review_label: string; preapproved_labels: string[] }; host: { repos: string[] } } | null {
 	try {
 		return JSON.parse(dump());
 	} catch {
@@ -32,9 +32,10 @@ const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labe
 function readonly(): boolean | undefined {
 	const thread = process.env[THREAD_VAR];
 	if (!thread) return false;
-	if (!owned) return undefined;
+	const here = config()?.host.repos;
+	if (!here) return undefined;
 	try {
-		return [...owned].some((repo) => {
+		return here.some((repo) => {
 			const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } }));
 			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => v.thread === thread && v.readonly));
 		});

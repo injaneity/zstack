@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree
 
 VARIABLES q, held, up, pr, status, stale, merged, by, okAtMerge, startedHeld, jumped, crowded, endedUnverified
 
@@ -36,7 +36,7 @@ Claim(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m,
   /\ UNCHANGED <<held, work, endedUnverified>>
 
 Takes(m, i) == q[m][i] \in {"running", "waiting"}
-Push(m, i) == Takes(m, i) /\ i \notin merged
+Push(m, i) == Takes(m, i) /\ i \notin NoTree /\ i \notin merged
   /\ pr' = pr \cup {i} /\ status' = [status EXCEPT ![i] = "none"] /\ stale' = stale \cup {i}
   /\ UNCHANGED <<q, held, up, merged, by, okAtMerge, history>>
 Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
@@ -57,7 +57,7 @@ Leave(m, i) ==
   /\ \/ Finished(i) /\ Set(m, i, "done")
      \/ i \notin merged /\ Set(m, i, "waiting")
   /\ UNCHANGED <<held, work, startedHeld, jumped, crowded>>
-TurnEnd(m, i) == q[m][i] = "running" /\ up /\ ~Unverified(i)
+TurnEnd(m, i) == q[m][i] = "running" /\ (up \/ i \in NoTree) /\ ~Unverified(i)
   /\ endedUnverified' = (endedUnverified \/ Unverified(i)) /\ Leave(m, i)
 Freed(m, i) == q[m][i] = "running" /\ UNCHANGED endedUnverified /\ Leave(m, i)
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>

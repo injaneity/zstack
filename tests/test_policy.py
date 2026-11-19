@@ -53,7 +53,8 @@ class Policy(unittest.TestCase):
                          {k: project[k] for k in ("people", "patent", "issues", "review")})
         self.assertEqual(dump["merge"], {"repo": "acme/app", **project["merge"]})
         self.assertEqual(dump["repos"], ["acme/app"])
-        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "labels": [], "unlabelled": True, "all_labels": []})
+        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "repos": ["acme/app"], "labels": [], "unlabelled": True,
+                                        "all_labels": []})
         self.env["ONIGIRI_ROOT"] = "/somewhere/else/"
         self.assertEqual(self.run_("get", "host.root").stdout, "/somewhere/else\n")
 

@@ -23,7 +23,7 @@ test = "tests/rule-guard.test.ts"
 [[invariant]]
 id = "teammates"
 text = '''A PR or issue by {people.review_only:or} gets a first review and nothing else: its review thread pushes nothing and posts nothing, and puts every comment for the author in its report.'''
-enforced = "the queue marks that review read-only, and the guard refuses every push and every GitHub write from its thread"
+enforced = "the queue marks that review read-only, and the guard refuses every push and every GitHub write from its thread while the item is running or waiting"
 test = "tests/rule-guard.test.ts"
 
 [[guidance]]

@@ -253,7 +253,7 @@ def load(want=None):
     root = (os.environ.get("ONIGIRI_ROOT") or place["root"]).rstrip("/")
     return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO if k in project},
             "merge": {"repo": name, **project["merge"]}, "repos": known,
-            "host": {"clone": place["clone"], "root": root,
+            "host": {"clone": place["clone"], "root": root, "repos": [by[x.lower()] for x in machine["repos"]],
                      "labels": place["labels"], "unlabelled": place["unlabelled"], "all_labels": sorted(every)}}
 
 
@@ -773,6 +773,16 @@ def branch_pr(pol, it):
     return None
 
 
+def its_pr(pol, q, it):
+    it["pr"] = it["pr"] or branch_pr(pol, it)
+    live = pr_view(pol, it["pr"]) if it["pr"] else None
+    other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
+    if other and other != it["pr"]:
+        q["verdicts"].pop(str(it["pr"]), None)
+        it["pr"], live = other, pr_view(pol, other)
+    return live
+
+
 def outcome(pol, q, key):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
 
@@ -780,12 +790,7 @@ def outcome(pol, q, key):
         q["waiting"][key] = it
         return "waiting", why
     try:
-        it["pr"] = it["pr"] or branch_pr(pol, it)
-        live = pr_view(pol, it["pr"]) if it["pr"] else None
-        other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
-        if other and other != it["pr"]:
-            q["verdicts"].pop(str(it["pr"]), None)
-            it["pr"], live = other, pr_view(pol, other)
+        live = its_pr(pol, q, it)
         if live and live["state"] == "OPEN":
             why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
             tidy(pol, it, False)
@@ -802,12 +807,11 @@ def outcome(pol, q, key):
 
 def unverified(pol, q, it):
     try:
-        pr = it["pr"] or branch_pr(pol, it)
-        live = pr_view(pol, pr) if pr else None
+        live = its_pr(pol, q, it)
     except Refused as e:
         return f"Whether your PR's head has a verdict cannot be told ({e}), so your turn is not over. Try again."
-    if live and live["state"] == "OPEN" and live["headRefOid"] != q["verdicts"].get(str(pr), {}).get("head"):
-        return (f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
+    if live and live["state"] == "OPEN" and live["headRefOid"] != q["verdicts"].get(str(it["pr"]), {}).get("head"):
+        return (f"PR {it['pr']} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
                 "wait for its verdict inside this turn.")
     return None
 
