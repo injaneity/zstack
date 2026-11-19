@@ -42,19 +42,20 @@ function running(): Item[] | undefined {
 		return undefined;
 	}
 }
-function unrecorded(items: Item[]): boolean {
-	const cwd = fs.realpathSync(process.cwd()) + path.sep;
-	return items.some((v) => v.thread === null && v.worktree !== null && cwd.startsWith(v.worktree + path.sep));
+function unrecorded(items: Item[], cwd: string | undefined): string | undefined {
+	const at = [process.cwd(), cwd].flatMap((d) => (d && stat(d) ? [fs.realpathSync(d) + path.sep] : []));
+	return items.find((v) => v.thread === null && v.worktree !== null && at.some((d) => d.startsWith(v.worktree + path.sep)))?.worktree ?? undefined;
 }
-function readonly(): boolean | undefined {
+function readonly(cwd?: string): boolean | undefined {
 	const thread = process.env[THREAD_VAR];
 	if (!thread) return false;
 	let items = running();
-	if (items && unrecorded(items)) {
-		attach();
+	const tree = items && unrecorded(items, cwd);
+	if (tree) {
+		queue("attach", tree);
 		items = running();
 	}
-	return !items || unrecorded(items) ? undefined : items.some((v) => v.thread === thread && v.readonly);
+	return !items || unrecorded(items, cwd) ? undefined : items.some((v) => v.thread === thread && v.readonly);
 }
 function readText(file: string, dir: string | undefined): string | undefined {
 	try {
@@ -73,9 +74,9 @@ function gate(repo: string, pr: number, head: string): string | undefined {
 	}
 }
 
-function queue(step: string): void {
+function queue(step: string, cwd?: string): void {
 	try {
-		execFileSync("python3", [QUEUE, step], { timeout: 60000, stdio: "ignore" });
+		execFileSync("python3", [QUEUE, step], { timeout: 60000, stdio: "ignore", cwd });
 	} catch {}
 }
 export const attach = () => queue("attach");
@@ -85,7 +86,9 @@ const host: Host = { gate, labels, readonly, repoAt: originRepo, readText, get g
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 
-export function checkDelegate(tool: string, input: { subagent_type?: unknown; role?: unknown; mode?: unknown; target?: { model?: unknown } }): string | undefined {
+export function checkDelegate(tool: string, input: { subagent_type?: unknown; role?: unknown; mode?: unknown; target?: { model?: unknown } }, cwd?: string): string | undefined {
+	if (readonly(cwd) === undefined)
+		return "blocked: the queue could not say whether this thread is recorded for its item, so no helper starts: its session would be taken for the item's thread.";
 	if (tool === "Agent" || tool === "Task") {
 		const type = String(input.subagent_type ?? "");
 		const role = type.replace(/^zstack:/, "");
@@ -95,8 +98,6 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 	}
 	const agent = ROLES[String(input.role ?? "")];
 	if (!agent) return undefined;
-	if (readonly() === undefined)
-		return `blocked: the queue could not say whether this thread is recorded for its item, so the ${agent} does not start: its session would be taken for the item's thread.`;
 	let seats: { model: string }[];
 	try {
 		const entry = JSON.parse(dump()).models[agent];

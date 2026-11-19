@@ -52,7 +52,6 @@ INVARIANTS = os.path.join(PKG, "config", "invariants.toml")
 THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 SHA = r"[0-9a-f]{40}"
-OURS = "zstack-"
 ENV = {**{k: v for k, v in os.environ.items() if k != "GIT_NO_LAZY_FETCH"},
        "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", "/opt/homebrew/bin",
@@ -635,6 +634,10 @@ def next_up(pol):
     return locked(pol, go)
 
 
+def branch(ident):
+    return "zstack-" + re.sub(r"[^A-Za-z0-9_-]", "-", ident)
+
+
 def plant(pol, ident):
     clone, path = os.path.realpath(os.path.expanduser(pol["host"]["clone"])), os.path.join(root(pol), "trees", ident)
     if os.path.lexists(path):
@@ -644,9 +647,8 @@ def plant(pol, ident):
     base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")[1].strip()
     if git("-C", clone, "fetch", "--quiet", "origin", base.split("/", 1)[1])[0]:
         raise Refused(f"git fetch origin failed in {clone}, so the worktree would start from an old {base}")
-    branch = OURS + re.sub(r"[^A-Za-z0-9_-]", "-", ident)
-    if git("-C", clone, "worktree", "add", "--quiet", "-b", branch, path, base)[0]:
-        raise Refused(f"cannot make the worktree {path} on a new branch {branch} from {base}: if that branch is there, it may hold work")
+    if git("-C", clone, "worktree", "add", "--quiet", "-b", branch(ident), path, base)[0]:
+        raise Refused(f"cannot make the worktree {path} on a new branch {branch(ident)} from {base}: if that branch is there, it may hold work")
     return os.path.realpath(path)
 
 
@@ -790,7 +792,7 @@ def listed(pol, path):
     return (clone, path) if path != clone and f"worktree {path}" in out.splitlines() else (clone, None)
 
 
-def tidy(pol, it, whole):
+def tidy(pol, key, it, whole):
     try:
         clone, path = listed(pol, it["worktree"]) if it["worktree"] else (None, None)
     except Refused:
@@ -803,11 +805,11 @@ def tidy(pol, it, whole):
     dirty, ahead = git("-C", path, "status", "--porcelain"), git("-C", path, "rev-list", "-1", "HEAD", "--not", "--remotes")
     if dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip():
         return False
-    ours = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")[1].strip()
+    on = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")[1].strip()
     if git("-C", clone, "worktree", "remove", path)[0]:
         return False
-    if ours.startswith(OURS):
-        git("-C", clone, "branch", "-D", ours)
+    if on == branch(key):
+        git("-C", clone, "branch", "-D", on)
     return True
 
 
@@ -849,12 +851,12 @@ def outcome(pol, q, key):
         live = its_pr(pol, q, it)
         if live and live["state"] == "OPEN":
             why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
-            tidy(pol, it, False)
+            tidy(pol, key, it, False)
             return wait(f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if not tidy(pol, it, True):
+    if not tidy(pol, key, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
     q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}

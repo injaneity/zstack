@@ -17,7 +17,7 @@ export interface Host {
 	repoAt(dir: string): string | null | undefined;
 	labels?: readonly string[] | null;
 	ghRepo?: string;
-	readonly?(): boolean | undefined;
+	readonly?(cwd?: string): boolean | undefined;
 	readText?(file: string, dir: string | undefined): string | undefined;
 	thread?: string;
 	gate?(repo: string, pr: number, head: string): string | undefined;
@@ -251,7 +251,7 @@ function writes(w: string[]): boolean {
 }
 
 function threadOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
-	if (writes(c.words) && host.readonly && host.readonly() !== false)
+	if (writes(c.words) && host.readonly && host.readonly(cwd) !== false)
 		return "a push or a GitHub write from a read-only item: this thread is a first review of a review-only teammate's PR (or the queue could not be read), so it pushes and posts nothing and puts every comment in its report";
 	const at = cwd === undefined ? undefined : host.repoAt(cwd);
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;

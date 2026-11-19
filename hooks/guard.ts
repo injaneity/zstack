@@ -14,7 +14,7 @@ const cwd = typeof call.cwd === "string" ? call.cwd : undefined;
 const tool = String(call.tool_name ?? "");
 const reason =
 	tool === "Bash" ? check("bash", String(input.command ?? ""), cwd) :
-	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input) :
+	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input, cwd) :
 	check("write", String(input.file_path ?? input.notebook_path ?? ""), cwd);
 if (reason) {
 	console.error(reason);

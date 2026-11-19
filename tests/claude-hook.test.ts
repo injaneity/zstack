@@ -110,7 +110,12 @@ test("a thread the queue has not recorded is recorded by its first guarded call,
 		assert.equal(run(helper, "t-1").status, 0);
 		fs.writeFileSync(file, "not json");
 		assert.match(run(push, "t-1").stderr, /or the queue could not be read/);
-		assert.match(run(helper, "t-1").stderr, /could not say whether this thread is recorded for its item, so the verifier does not start/);
+		for (const call of [helper, { ...helper, tool_input: { role: "general" } }, { tool_name: "Agent", tool_input: { subagent_type: "Explore" }, cwd: tree }])
+			assert.match(run(call, "t-1").stderr, /could not say whether this thread is recorded for its item, so no helper starts/);
+		fs.writeFileSync(file, JSON.stringify({ running: { a: item }, waiting: {}, tasks: {}, verdicts: {}, done: [] }));
+		const away = spawnSync("sh", ["-c", command("PreToolUse")], { input: JSON.stringify(push), encoding: "utf8", cwd: os.tmpdir(), env: { ...process.env, ZSTACK_CONFIG: dir, T3CODE_THREAD_ID: "t-2" } });
+		assert.equal(away.status, 0);
+		assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).running.a.thread, "t-2");
 	} finally {
 		fs.rmSync(dir, { recursive: true });
 	}

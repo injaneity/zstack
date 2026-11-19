@@ -257,12 +257,19 @@ class Launch(Case):
         queue.claim(self.pol, "a")
         self.assertEqual((queue.release(self.pol, "a")["state"], os.path.exists(path)), ("done", False))
         self.assertEqual(git("branch", "--list", "zstack-*", cwd=clone), "")
+        other = PLANT(self.pol, "e")
+        git("switch", "-q", "-c", "zstack-someone-elses", cwd=other)
+        self.trees["e"] = other
+        self.add("e")
+        queue.claim(self.pol, "e")
+        self.assertEqual((queue.release(self.pol, "e")["state"], os.path.exists(other)), ("done", False))
+        self.assertEqual(git("branch", "--list", "zstack-*", "--format=%(refname:short)", cwd=clone).split(), ["zstack-e", "zstack-someone-elses"])
         git("branch", "zstack-b", cwd=clone)
         with self.assertRaisesRegex(queue.Refused, "on a new branch zstack-b from origin/trunk: if that branch is there, it may hold work"):
             PLANT(self.pol, "b")
         self.assertEqual(git("log", "-1", "--format=%s", "zstack-b", cwd=clone).strip(), "local only")
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone", cwd=clone)
-        self.assertEqual(git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")).strip(), "HEAD -> zstack-c, origin/trunk, origin/HEAD")
+        self.assertIn("HEAD -> zstack-c, origin/trunk, origin/HEAD", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")))
         with patch.object(queue, "git", lambda *a, **k: (0, "origin/trunk\n") if "rev-parse" in a or "set-head" in a else (1, "")):
             with self.assertRaisesRegex(queue.Refused, "git fetch origin failed in .*, so the worktree would start from an old origin/trunk"):
                 PLANT(self.pol, "d")
