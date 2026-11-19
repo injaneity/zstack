@@ -277,7 +277,7 @@ class Launch(Case):
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone", cwd=clone)
         self.assertIn("HEAD -> zstack-c, origin/trunk", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")))
         with patch.object(queue, "git", lambda *a, **k: (1, "")):
-            with self.assertRaisesRegex(queue.Refused, "cannot read the default branch of origin and fetch it from .*, so the worktree would .* stale"):
+            with self.assertRaisesRegex(queue.Refused, "cannot read the default branch of origin and fetch it from .*, so the worktree .* stale"):
                 PLANT(self.pol, "d")
         git("commit", "-q", "--allow-empty", "-m", "three", cwd=other)
         git("push", "-q", "origin", "HEAD:next", cwd=other)
