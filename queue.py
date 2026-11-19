@@ -640,11 +640,13 @@ def branch(ident):
 
 def plant(pol, ident):
     clone, path = os.path.realpath(os.path.expanduser(pol["host"]["clone"])), os.path.join(root(pol), "trees", ident)
-    if os.path.lexists(path):
+    if os.path.lexists(path) and (not tidy(pol, ident, {"worktree": path}, True) or os.path.lexists(path)):
         raise Refused(f"{path} is already there, and may hold someone's work: move it aside")
-    if git("-C", clone, "fetch", "--quiet", "origin")[0] or git("-C", clone, "remote", "set-head", "origin", "--auto")[0]:
-        raise Refused(f"cannot fetch origin and read its default branch from {clone} (network or remote?), so the worktree would start stale")
-    base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")[1].strip()
+    rc, head = git("-C", clone, "ls-remote", "--symref", "origin", "HEAD")
+    name = re.match(r"ref: refs/heads/(\S+)\tHEAD\n", head) if not rc else None
+    if not name or git("-C", clone, "fetch", "--quiet", "origin", f"+refs/heads/{name.group(1)}:refs/remotes/origin/{name.group(1)}")[0]:
+        raise Refused(f"cannot read the default branch of origin and fetch it from {clone} (network or remote?), so the worktree would start stale")
+    base = f"origin/{name.group(1)}"
     if git("-C", clone, "worktree", "add", "--quiet", "-b", branch(ident), path, base)[0]:
         raise Refused(f"cannot make the worktree {path} on a new branch {branch(ident)} from {base}: if that branch is there, it may hold work")
     return os.path.realpath(path)

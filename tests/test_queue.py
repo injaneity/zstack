@@ -249,9 +249,15 @@ class Launch(Case):
         git("commit", "-q", "--allow-empty", "-m", "local only", cwd=clone)
         path = PLANT(self.pol, "a")
         self.assertEqual(path, os.path.realpath(self.root / "trees" / "a"))
-        self.assertEqual(git("log", "-1", "--format=%s %D", cwd=path).strip(), "two HEAD -> zstack-a, origin/trunk, origin/HEAD")
+        self.assertEqual(git("log", "-1", "--format=%s %D", cwd=path).strip(), "two HEAD -> zstack-a, origin/trunk")
+        self.assertEqual(PLANT(self.pol, "a"), path)
+        (Path(path) / "kept.txt").write_text("x")
         with self.assertRaisesRegex(queue.Refused, "trees/a is already there, and may hold someone's work: move it aside"):
             PLANT(self.pol, "a")
+        (Path(path) / "kept.txt").unlink()
+        (self.root / "trees" / "stray").mkdir()
+        with self.assertRaisesRegex(queue.Refused, "trees/stray is already there"):
+            PLANT(self.pol, "stray")
         self.trees["a"] = path
         self.add("a")
         queue.claim(self.pol, "a")
@@ -269,14 +275,15 @@ class Launch(Case):
             PLANT(self.pol, "b")
         self.assertEqual(git("log", "-1", "--format=%s", "zstack-b", cwd=clone).strip(), "local only")
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone", cwd=clone)
-        self.assertIn("HEAD -> zstack-c, origin/trunk, origin/HEAD", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")))
+        self.assertIn("HEAD -> zstack-c, origin/trunk", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")))
         with patch.object(queue, "git", lambda *a, **k: (1, "")):
-            with self.assertRaisesRegex(queue.Refused, "cannot fetch origin and read its default branch from .*, so the worktree would start stale"):
+            with self.assertRaisesRegex(queue.Refused, "cannot read the default branch of origin and fetch it from .*, so the worktree would .* stale"):
                 PLANT(self.pol, "d")
         git("commit", "-q", "--allow-empty", "-m", "three", cwd=other)
         git("push", "-q", "origin", "HEAD:next", cwd=other)
         git("symbolic-ref", "HEAD", "refs/heads/next", cwd=up)
-        self.assertIn("HEAD -> zstack-d, origin/next, origin/HEAD", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "d")))
+        git("config", "remote.origin.fetch", "+refs/heads/trunk:refs/remotes/origin/trunk", cwd=clone)
+        self.assertEqual(git("log", "-1", "--format=%s %D", cwd=PLANT(self.pol, "d")).strip(), "three HEAD -> zstack-d, origin/next")
         for odd in (".app-1", "a..b", "a.lock"):
             self.assertIn(f"HEAD -> zstack-{odd.replace('.', '-')},", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, odd)))
 
