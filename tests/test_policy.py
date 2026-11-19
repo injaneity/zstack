@@ -163,6 +163,8 @@ class Policy(unittest.TestCase):
             ('t3 = "t3"\n', "", "missing run.t3"),
             ('t3 = "t3"', 't3 = ""', "run.t3 must be the T3 Code command"),
             ("lost_min = 15\n", "", "missing run.lost_min"),
+            ("lost_min = 15", "lost_min = 0", "run.lost_min must be whole minutes"),
+            ("lost_min = 15", 'lost_min = "15"', "run.lost_min must be whole minutes"),
             ("lost_min = 15", "lost_min = 2", "run.lost_min must be whole minutes, more than the 120 seconds a start may take, not 2"),
             ("schema = 1\n\n# Who", "schema = 1\nslot = 3\n\n# Who", "unknown key slot"),
             ('[review]\noutside = "salvage"\n', "", "[review] is missing or empty"),
