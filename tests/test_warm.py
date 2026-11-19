@@ -108,15 +108,30 @@ class Warm(unittest.TestCase):
         (self.clone / ".git" / "info" / "exclude").write_text("deep/\n")
         (self.tree / "deep").symlink_to(self.root / "elsewhere")
         self.assertEqual(self.warm(self.tree), [SHARED + "node_modules, web/dist"])
-        with patch.object(queue, "git", lambda *a, **k: (0, "deep/cache/\0")):
+        real = subprocess.run
+        with patch.object(subprocess, "run", lambda cmd, **k: real(["printf", "deep/cache/\\0"], **k) if "ls-files" in cmd else real(cmd, **k)):
             self.assertEqual(self.warm(self.tree), ["deep/cache is not shared from the clone: a link on the way to it leads elsewhere"])
         self.assertEqual(os.listdir(self.root / "elsewhere"), [])
 
-    def test_a_long_list_is_cut_short(self):
+    def test_a_long_list_is_cut_short_and_costs_two_git_calls_however_long(self):
         for i in range(25):
             (self.clone / f"-cache{i:02}").write_text("c")
-        said = self.warm(self.tree)
+        calls, real = [], subprocess.run
+        with patch.object(subprocess, "run", lambda cmd, **k: calls.append(cmd[:4]) or real(cmd, **k)):
+            said = self.warm(self.tree)
         self.assertEqual((len(said), said[0].endswith("-cache19 and 7 more"), len(self.copied)), (1, True, 27))
+        self.assertEqual([c[3] for c in calls if c[0] == "git" and c[3] in ("ls-files", "check-ignore")], ["ls-files", "check-ignore"])
+        self.assertEqual(len([c for c in calls if c[0] == "git"]), 4)
+
+    def test_a_name_git_can_hold_and_a_terminal_cannot_is_shared_and_shown_plainly(self):
+        odd = os.fsdecode(b"-cache \xff\nx")
+        try:
+            (self.clone / odd).write_text("c")
+        except OSError:
+            odd = "-cache \nx"
+            (self.clone / odd).write_text("c")
+        self.assertEqual(self.warm(self.tree), [SHARED + f"-cache {'?' * (len(odd) - 8)}x, node_modules, web/dist"])
+        self.assertEqual((self.tree / odd).read_text(), "c")
 
     def test_a_path_that_cannot_be_cloned_by_reference_is_left_out_and_said_never_copied(self):
         def refuse(src, dst):

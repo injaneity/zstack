@@ -399,10 +399,16 @@ def share(src, dst):
         if libc.clonefile(os.fsencode(src), os.fsencode(dst), 1):
             raise OSError(os.strerror(ctypes.get_errno()))
         return
-    p = subprocess.run(["cp", "-R", "-P", "--reflink=always", src, dst], capture_output=True, text=True)
-    if p.returncode:
-        shutil.rmtree(dst) if os.path.isdir(dst) and not os.path.islink(dst) else os.path.lexists(dst) and os.unlink(dst)
-        raise OSError(p.stderr.strip().splitlines()[-1] if p.stderr.strip() else "cp --reflink=always failed")
+    part = f"{dst}.zstack-warm-{os.getpid()}"
+    p = subprocess.run(["cp", "-R", "-P", "--reflink=always", "--", src, part], capture_output=True)
+    try:
+        if p.returncode:
+            raise OSError((os.fsdecode(p.stderr).strip().splitlines() or ["cp --reflink=always failed"])[-1])
+        if os.path.lexists(dst):
+            raise OSError("something was put there meanwhile")
+        os.rename(part, dst)
+    finally:
+        shutil.rmtree(part) if os.path.isdir(part) and not os.path.islink(part) else os.path.lexists(part) and os.unlink(part)
 
 
 def git_dirs(where):
@@ -413,28 +419,31 @@ def git_dirs(where):
 
 
 def warm(pol):
+    def paths(where, *args, stdin=None):
+        p = subprocess.run(["git", "-C", where, *args], capture_output=True, input=stdin)
+        return [os.fsdecode(x).rstrip("/") for x in p.stdout.split(b"\0") if x]
     (top, common), (clone, its) = git_dirs("."), git_dirs(os.path.expanduser(pol["host"]["clone"]))
     if not top or top == clone or common != its:
         return []
-    rc, out = git("-C", clone, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    there = paths(clone, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    wanted = [x for x in sorted(there) if not os.path.lexists(os.path.join(top, x))]
+    asked = b"\0".join(os.fsencode(x + "/" * os.path.isdir(os.path.join(clone, x))) for x in wanted)
+    ignored = set(paths(top, "check-ignore", "-z", "--stdin", stdin=asked)) if wanted else set()
     shared, said = [], []
-    for path in sorted(x.rstrip("/") for x in out.split("\0") if x) if not rc else []:
-        src, dst = os.path.join(clone, path), os.path.join(top, path)
-        if os.path.lexists(dst):
-            continue
+    for path in wanted:
+        src, dst, name = os.path.join(clone, path), os.path.join(top, path), re.sub(r"[^\x20-\x7e]", "?", path)
         try:
             if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
                 raise OSError("a link on the way to it leads elsewhere")
             if any(os.path.lexists(os.path.join(src, x)) for x in ("pyvenv.cfg", ".git")):
                 raise OSError("it is a Python virtualenv or a checkout, whose files point back at where they are")
-            folder = os.path.isdir(src) and not os.path.islink(src)
-            if subprocess.run(["git", "-C", top, "check-ignore", "-q", "--", path + "/" * folder], capture_output=True).returncode:
+            if path not in ignored:
                 raise OSError("git does not ignore it here")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             share(src, dst)
-            shared.append(path)
+            shared.append(name)
         except OSError as e:
-            said.append(f"{path} is not shared from the clone: {e}")
+            said.append(f"{name} is not shared from the clone: {e}")
     more = f" and {len(shared) - 20} more" if len(shared) > 20 else ""
     return [f"shared from the clone copy-on-write, as they were there: {', '.join(shared[:20])}{more}"] * bool(shared) + said
 
