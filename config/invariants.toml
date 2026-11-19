@@ -44,8 +44,8 @@ test = "model/Queue.tla::OneThreadPerItem"
 
 [[invariant]]
 id = "warm"
-text = '''What git ignores in the clone, such as installed packages and build output, is shared into a new worktree copy-on-write: cloned by reference, never copied. A Python virtualenv or a nested checkout is left out, since its files point back at the clone. Your session start says what was shared and what could not be.'''
-enforced = "the session-start hook runs `queue.py warm`, which clones by reference or says why not, and never copies"
+text = '''What git ignores in the clone, such as installed packages and build output, is shared into a new worktree copy-on-write: cloned by reference, never copied. A folder that holds a Python virtualenv or a checkout is left out, since its files point back at the clone. Your session start says what was shared and what could not be.'''
+enforced = "the session-start hook runs `queue.py warm`, which clones by reference or says why not, and never copies; it looks for a virtualenv or a checkout in a folder and in the folders directly inside it"
 test = "tests/test_warm.py"
 
 [[invariant]]

@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -399,16 +400,16 @@ def share(src, dst):
         if libc.clonefile(os.fsencode(src), os.fsencode(dst), 1):
             raise OSError(os.strerror(ctypes.get_errno()))
         return
-    part = f"{dst}.zstack-warm-{os.getpid()}"
-    p = subprocess.run(["cp", "-R", "-P", "--reflink=always", "--", src, part], capture_output=True)
+    aside = tempfile.mkdtemp(prefix=".zstack-warm-", dir=os.path.dirname(dst))
     try:
+        p = subprocess.run(["cp", "-R", "-P", "--reflink=always", "--", src, os.path.join(aside, "it")], capture_output=True)
         if p.returncode:
             raise OSError((os.fsdecode(p.stderr).strip().splitlines() or ["cp --reflink=always failed"])[-1])
         if os.path.lexists(dst):
             raise OSError("something was put there meanwhile")
-        os.rename(part, dst)
+        os.rename(os.path.join(aside, "it"), dst)
     finally:
-        shutil.rmtree(part) if os.path.isdir(part) and not os.path.islink(part) else os.path.lexists(part) and os.unlink(part)
+        shutil.rmtree(aside)
 
 
 def git_dirs(where):
@@ -416,6 +417,11 @@ def git_dirs(where):
     p = subprocess.run(cmd, capture_output=True, text=True)
     at = [os.path.realpath(x) for x in p.stdout.splitlines()]
     return at if p.returncode == 0 and len(at) == 2 else (None, None)
+
+
+def points_back(src):
+    inner = [x.path for x in os.scandir(src) if x.is_dir(follow_symlinks=False)] if os.path.isdir(src) and not os.path.islink(src) else []
+    return any(os.path.lexists(os.path.join(d, mark)) for d in (src, *inner) for mark in ("pyvenv.cfg", ".git"))
 
 
 def warm(pol):
@@ -435,8 +441,8 @@ def warm(pol):
         try:
             if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
                 raise OSError("a link on the way to it leads elsewhere")
-            if any(os.path.lexists(os.path.join(src, x)) for x in ("pyvenv.cfg", ".git")):
-                raise OSError("it is a Python virtualenv or a checkout, whose files point back at where they are")
+            if points_back(src):
+                raise OSError("it holds a Python virtualenv or a checkout, whose files point back at where they are")
             if path not in ignored:
                 raise OSError("git does not ignore it here")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -444,7 +450,7 @@ def warm(pol):
             shared.append(name)
         except OSError as e:
             said.append(f"{name} is not shared from the clone: {e}")
-    more = f" and {len(shared) - 20} more" if len(shared) > 20 else ""
+    more = f" and {len(shared) - 20} more, which `git status --short --ignored` lists" if len(shared) > 20 else ""
     return [f"shared from the clone copy-on-write, as they were there: {', '.join(shared[:20])}{more}"] * bool(shared) + said
 
 

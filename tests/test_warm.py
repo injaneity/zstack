@@ -17,7 +17,7 @@ queue = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(queue)
 BASE = queue.load()
 SHARED = "shared from the clone copy-on-write, as they were there: "
-BACK = "it is a Python virtualenv or a checkout, whose files point back at where they are"
+BACK = "it holds a Python virtualenv or a checkout, whose files point back at where they are"
 
 
 def clones(where):
@@ -90,14 +90,15 @@ class Warm(unittest.TestCase):
         self.assertEqual(os.listdir(self.root / "next" / "node_modules"), ["mine.js"])
 
     def test_what_points_back_at_the_clone_or_is_not_ignored_here_is_left_out(self):
-        (self.clone / ".git" / "info" / "exclude").write_text(".venv/\nvendored/\nlocal.txt\n")
-        for d, mark in ((".venv", "pyvenv.cfg"), ("vendored", ".git")):
-            (self.clone / d).mkdir()
+        (self.clone / ".git" / "info" / "exclude").write_text(".venv/\nvendored/\nlocal.txt\n.tox/\n")
+        for d, mark in ((".venv", "pyvenv.cfg"), ("vendored", ".git"), (".tox/py39", "pyvenv.cfg")):
+            (self.clone / d).mkdir(parents=True)
             (self.clone / d / mark).write_text("x")
         (self.clone / "local.txt").write_text("x")
         (self.clone / "-cache").write_text("c")
         (self.tree / ".gitignore").write_text("node_modules/\n-cache*\n")
-        self.assertEqual(self.warm(self.tree), [SHARED + "-cache, local.txt, node_modules", f".venv is not shared from the clone: {BACK}",
+        self.assertEqual(self.warm(self.tree), [SHARED + "-cache, local.txt, node_modules", f".tox is not shared from the clone: {BACK}",
+                                                f".venv is not shared from the clone: {BACK}",
                                                 f"vendored is not shared from the clone: {BACK}",
                                                 "web/dist is not shared from the clone: git does not ignore it here"])
         self.assertEqual((self.copied, (self.tree / "-cache").read_text()), (["-cache", "local.txt", "node_modules"], "c"))
@@ -119,7 +120,8 @@ class Warm(unittest.TestCase):
         calls, real = [], subprocess.run
         with patch.object(subprocess, "run", lambda cmd, **k: calls.append(cmd[:4]) or real(cmd, **k)):
             said = self.warm(self.tree)
-        self.assertEqual((len(said), said[0].endswith("-cache19 and 7 more"), len(self.copied)), (1, True, 27))
+        self.assertTrue(said[0].endswith("-cache19 and 7 more, which `git status --short --ignored` lists"))
+        self.assertEqual((len(said), len(self.copied)), (1, 27))
         self.assertEqual([c[3] for c in calls if c[0] == "git" and c[3] in ("ls-files", "check-ignore")], ["ls-files", "check-ignore"])
         self.assertEqual(len([c for c in calls if c[0] == "git"]), 4)
 
