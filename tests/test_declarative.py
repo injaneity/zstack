@@ -193,7 +193,8 @@ class Harness(unittest.TestCase):
 
 
 class Parts(unittest.TestCase):
-    OTHERS = re.compile(r"(?<!usr/)(?<!homebrew/)bin/(?!everystate\b)[a-z][\w-]*|services/|(?<!skills/)dispatch/|extensions/|patent_push|wake\.py")
+    OTHERS = re.compile(r"(?<!usr/)(?<!homebrew/)(?<!#!/)bin/(?!everystate\b)[a-z][\w-]*|services/|(?<!skills/)dispatch/|extensions/"
+                        r"|patent_push|wake\.py")
 
     def test_the_code_names_no_file_that_is_gone(self):
         wrong = [f"{f}: {m.group(0)}" for f in tracked("queue.py", "pi/*", "pi/**", "hooks/*", ".claude-plugin/*", "package.json", "skills/dispatch/*")  # noqa: E501
@@ -212,7 +213,7 @@ class Parts(unittest.TestCase):
     def test_the_check_catches_a_file_that_names_one(self):
         for gone in ('path.join(PKG, "bin/queue")', "services/wake.py", "bin/policy dump", "extensions/rule-guard/host.ts"):
             self.assertTrue(self.OTHERS.search(gone), gone)
-        self.assertFalse(self.OTHERS.search("python3 queue.py rules; queue.py hold add; bin/everystate; /opt/homebrew/bin/gh"))
+        self.assertFalse(self.OTHERS.search("#!/bin/sh\npython3 queue.py rules; queue.py hold add; bin/everystate; /opt/homebrew/bin/gh"))
 
 
 class NoVerifiedComment(unittest.TestCase):

@@ -48,7 +48,7 @@ A rule names a value by its key in braces (`{merge.repo}`) and `queue.py` fills 
 
 1. Write your config (above) and set `ZSTACK_CONFIG` where every thread sees it: under `env` in `~/.claude/settings.json`, and in the shell profile. Run `queue.py check`.
 2. Check that `merge.gate_check` names the CI check that must be green before a merge. A thread merges with the machine's own `gh` login, so that login needs push access.
-3. Link the pre-push hook into the clone: `ln -s <zstack>/hooks/pre-push <clone>/.git/hooks/pre-push`.
+3. Link the pre-push hook into the clone: `ln -s <zstack>/hooks/pre-push <clone>/.git/hooks/pre-push`. Git skips a hook whose link dangles, with no warning, so the patent hold is off until the link resolves. `services/pre-push` is a link to the same file, kept only because clones set up before 0.5.0 link to that path.
 4. Create `<root>/hold-prs.txt` (it may hold only a comment). The queue starts nothing while it is missing or has a row it cannot read. `<root>` holds the machine's state for that repo: `queue.json`, the holds file and `events.log`, where the patent hold notes each push it kept local.
 5. Schedule one thread in the zstack project, every few minutes, on the model `models.orchestrator` names, with a fresh session each run and this prompt: `You are this machine's zstack dispatcher. Read the dispatch skill at <zstack>/skills/dispatch/SKILL.md and do one pass exactly as it says.`
 
