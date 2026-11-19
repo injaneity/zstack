@@ -52,13 +52,13 @@ class Wake(unittest.TestCase):
         os.environ[q.THREAD_VAR] = "t-1"
         with self.urlopen(None, None):
             said = q.wake(self.pol, "blocked", "app-1: PR 31 waits for the owner", 31)
-            q.wake(self.pol, "done", "app-2: nothing to merge")
+            q.wake(self.pol, "done", "app-2: nothing to merge", thread="t-2")
         url, auth, body, timeout = self.sent[0]
         self.assertEqual((url, auth, said), ("https://example.invalid/wake", "Bearer sekrit", "webhook sent (200)"))
         self.assertLessEqual(timeout, 10)
         self.assertEqual({k: body[k] for k in ("kind", "reason", "id", "pr")},
                          {"kind": "blocked", "reason": "app-1: PR 31 waits for the owner", "id": "t-1", "pr": 31})
-        self.assertEqual((self.sent[1][2]["kind"], self.sent[1][2]["pr"]), ("done", None))
+        self.assertEqual((self.sent[1][2]["kind"], self.sent[1][2]["pr"], self.sent[1][2]["id"]), ("done", None, "t-2"))
 
     def test_retries_network_errors_and_5xx_but_not_4xx(self):
         self.key.write_text("k")

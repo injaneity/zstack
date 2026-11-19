@@ -1,6 +1,6 @@
 {
   "name": "zstack",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A harness-agnostic stack for coding agents: one thread writes the code, delegates explore, design and verify, and a guard enforces the rules.",
   "license": "MIT",
   "keywords": [

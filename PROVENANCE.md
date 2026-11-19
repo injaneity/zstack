@@ -33,6 +33,8 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 **One file, 18 Nov 2026.** `bin/queue`, `bin/policy`, `bin/hold-row` and `services/` became `queue.py`. The guard moved to `hooks/` and the pi extensions to `pi/`. The dispatcher's playbook became the `dispatch` skill. The Hard rules became invariants, the stack's in `config/invariants.toml` and each repo's beside its `policy.toml`, and the holds file became a label. The header and build-output checks at push went to the target repo's own CI, and the author lookup on closes became read-only review items.
 
+**A pass with no model, 19 Nov 2026.** The dispatcher thread, its `dispatch` skill and the `orchestrator` seat were removed. `queue.py pass` does the whole pass from a schedule: it records an item, then starts its thread through T3 Code's command, so `queue.py next` and `claim` are gone.
+
 ## Vendored verbatim
 
 `statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied with `statechart/scripts/`. The statechart's own test suite and corpus (`scripts/test/`, and the `fast-check` dev dependency in its `package.json`) are left upstream at that commit: no zstack CI step or session ran them. Same MIT license and copyright as the rest of pstack.

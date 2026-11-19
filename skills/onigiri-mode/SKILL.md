@@ -10,8 +10,7 @@ license: MIT
 
 ## Who is reading
 
-- **A coding thread** does the work. Every section below applies. Its model is `models.coding` in the config.
-- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `queue.py` names, frees the slot of a thread that died, and relays what comes back. Its instructions are the `dispatch` skill in the package, not this skill.
+A coding thread, which does the work. Its model is `models.coding` in the config. For a queue item, `queue.py pass` started it with its brief.
 
 ## Invariants
 
@@ -51,7 +50,7 @@ The three delegates are the role files in the package's `agents/`. Each runs on 
 
 Reversible work proceeds without asking. Never block on a question you could answer by looking. If asked to do something you think is wrong, say why, then do the version that holds up.
 
-End with a final report: the PR URLs, then `follow-ups:` and `questions:` lists. A question for the owner goes under `questions:`, and the orchestrator relays it. A thread that cannot go on says so in its report and stops.
+End with a final report: the PR URLs, then `follow-ups:` and `questions:` lists. A question for the owner goes under `questions:`, and the orchestrator reads it from your report. A thread that cannot go on says so in its report and stops.
 
 Pause for the irreversible: force-pushes to shared branches, deploys, data deletion, and messages to people. A playbook the user asked for covers its own posts on that PR.
 

@@ -212,7 +212,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host): string | undefined {
 	return host.gate(hit, Number(pr), head);
 }
 
-const QUEUE_DISPATCHER = new Set(["add", "claim"]);
+const QUEUE_MOVES = new Set(["add", "pass"]);
 
 function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
 	const w = c.words;
@@ -264,10 +264,10 @@ function threadOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): 
 		return `\`queue.py verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
 	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined && w[i + 2] !== "--hook")
 		return "`queue.py release <id>` from a coding thread: a thread releases only its own item, with `queue.py release`";
-	if (i >= 0 && i <= 2 && QUEUE_DISPATCHER.has(w[i + 1]))
-		return `\`queue.py ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue.py list\``;
+	if (i >= 0 && i <= 2 && QUEUE_MOVES.has(w[i + 1]))
+		return `\`queue.py ${w[i + 1]}\` from a coding thread: only the machine's scheduled pass and the orchestrator move the queue. A thread reads it with \`queue.py list\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
-		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
+		return "posting a commit status or check from a coding thread: only the verifier marks a head verified, with `queue.py verified`";
 	return undefined;
 }
 

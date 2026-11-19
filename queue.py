@@ -16,11 +16,10 @@ from datetime import datetime, timezone
 PKG = os.path.dirname(os.path.realpath(__file__))
 USAGE = (
     "The queue:\n"
-    "  queue.py next                    read the repo and say what to launch now, as JSON; also clears what has finished\n"
+    "  queue.py pass                    one pass of the machine: clear what has finished, free the slot of a thread\n"
+    "                                   that died, and launch a thread for each ready item, up to the cap\n"
     "  queue.py add <id> [--priority N] [--preapproved]\n"
     "                                   a task from the orchestrator; its text on stdin\n"
-    "  queue.py claim <id> <thread> <worktree>\n"
-    "                                   the thread just launched for the next item, and the worktree it works in\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -101,8 +100,9 @@ def line_with(key):
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 PATHISH = (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/")
 MACHINE = {
-    "models": {role: SEAT for role in ("coding", "orchestrator", "explorer", "designer", "verifier")},
-    "run": {"idle_min": (pos_int, "a positive integer"), "threads": (pos_int, "a positive integer")},
+    "models": {role: SEAT for role in ("coding", "explorer", "designer", "verifier")},
+    "run": {"idle_min": (pos_int, "a positive integer"), "threads": (pos_int, "a positive integer"),
+            "t3": (text, "the T3 Code command: a name on PATH or a path")},
     "wake": {"url": (lambda v: text(v) and v.startswith("https://"), "an https URL"), "key_file": PATHISH},
 }
 PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
@@ -391,8 +391,9 @@ def sha():
     return r.stdout.strip() or "unknown"
 
 
-def now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def now(ms=False):
+    at = datetime.now(timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%S.") + f"{at.microsecond // 1000:03d}Z" if ms else at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def read_text(path):
@@ -428,8 +429,8 @@ def send(pol, body, attempts=3, timeout=5):
     return status
 
 
-def wake(pol, kind, message, pr=None):
-    body = {"kind": kind, "id": os.environ.get(THREAD_VAR) or None, "pr": pr, "reason": message[:1000],
+def wake(pol, kind, message, pr=None, thread=None):
+    body = {"kind": kind, "id": thread or os.environ.get(THREAD_VAR) or None, "pr": pr, "reason": message[:1000],
             "time": now(), "source": "queue", "host": socket.gethostname().split(".")[0]}
     if os.environ.get("ONIGIRI_WAKE_DRY"):
         print(json.dumps(body), file=sys.stderr)
@@ -568,7 +569,7 @@ def work(pol, q):
         pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
         ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
                       "preapproved": pre, "task": task(c, pol), "title": c["title"], "readonly": teammate(c, pol)})
-    ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items()]
+    ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items() if k not in q["running"]]
     ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
     return ready, skipped, errors, {c["id"] for c in cands}
 
@@ -622,31 +623,112 @@ def brief(pol, it):
                         guidance=said, env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
-def next_up(pol):
-    def go(q):
+DEAD = ("completed", "failed", "interrupted", "cancelled")
+START_SECONDS, LOST_SECONDS = 120, 600
+
+
+def t3(pol, *args, stdin=None):
+    cmd = [os.path.expanduser(pol["run"]["t3"]), "thread", *args, "--json"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, input=stdin, env=ENV, timeout=START_SECONDS)
+        return json.loads(p.stdout) if p.returncode == 0 else (p.stderr or p.stdout).strip()[-200:]
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        return f"{type(e).__name__}: {e}"[:200]
+
+
+def launch(pol, up):
+    clone = os.path.expanduser(pol["host"]["clone"])
+    if git("-C", clone, "fetch", "--quiet", "origin")[0]:
+        raise Refused(f"git fetch origin failed in {clone}; not launching on an old tree")
+    rc, base = git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if rc:
+        raise Refused(f"{clone} has no origin/HEAD, so its default branch is unknown: run `git remote set-head origin --auto` there")
+    provider, model = model_for("coding", pol)
+    got = t3(pol, "start", clone, "-", "--title", up["id"], "--provider", provider, "--model", model, "--worktree", base.strip(),
+             stdin=brief(pol, up))
+    if not isinstance(got, dict):
+        raise Refused(f"no thread started for {up['id']}: {got}")
+    seen = t3(pol, "show", got["threadId"], "--messages", "0")
+    return got["threadId"], seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
+
+
+def step(pol):
+    def intend(q):
         cleared = settle(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
-        launch = {"id": up["id"], "clone": pol["host"]["clone"], "brief": brief(pol, up)} if up else None
-        return {"launch": launch, "waiting": waiting, "running": {k: v["thread"] for k, v in sorted(q["running"].items())},
-                "cleared": cleared, "skipped": skipped}, bool(cleared or gone)
-    return locked(pol, go)
+        if up:
+            q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
+                                      "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
+        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "skipped": skipped}), bool(cleared or gone or up)
+    up, out = locked(pol, intend)
+    if not up:
+        return out
+    try:
+        thread, worktree = launch(pol, up)
+    except Refused as e:
+        return dict(out, waiting=f"{e}; a later pass takes the thread if one did start, and launches {up['id']} again if none shows")
+
+    def record(q):
+        q["tasks"].pop(up["id"], None)
+        q["running"][up["id"]].update(thread=thread, worktree=worktree)
+        return dict(out, launched={"id": up["id"], "thread": thread, "worktree": worktree}), True
+    return locked(pol, record)
 
 
-def claim(pol, ident, thread, worktree):
+def reconcile(pol):
     def go(q):
-        for part in ("running", "waiting"):
-            if ident in q[part]:
-                raise Refused(f"{ident} is already {part}")
-        up, waiting, _, _ = first(pol, q)
-        if not up or up["id"] != ident:
-            raise Refused(f"{ident} is not next: {waiting or up['id'] + ' is'}")
-        q["tasks"].pop(ident, None)
-        q["running"][ident] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
-                               "thread": thread, "worktree": worktree, "pr": None, "at": now()}
-        return q["running"][ident], True
+        dead, changed, rows = [], False, None
+
+        def listing():
+            got = t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
+            if not isinstance(got, list):
+                raise Refused(f"T3 Code does not answer, so no thread can be read or launched: {got}")
+            return got
+        for key, it in sorted(q["running"].items()):
+            if not it["thread"]:
+                rows = listing() if rows is None else rows
+                mine = [r["threadId"] for r in rows if r["title"] == key and r["createdAt"] >= it["at"]]
+                asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                if not mine and (datetime.now(timezone.utc) - asked).total_seconds() >= LOST_SECONDS:
+                    del q["running"][key]
+                    changed = True
+                if not mine:
+                    continue
+                it["thread"], changed = mine[0], True
+                q["tasks"].pop(key, None)
+            seen = t3(pol, "show", it["thread"], "--messages", "0")
+            if not isinstance(seen, dict):
+                rows = listing() if rows is None else rows
+                dead += [key] if it["thread"] not in [r["threadId"] for r in rows] else []
+            elif seen["thread"]["status"] in DEAD:
+                dead.append(key)
+            elif not it["worktree"] and seen["thread"]["worktreePath"]:
+                it["worktree"], changed = seen["thread"]["worktreePath"], True
+        return dead, changed
     return locked(pol, go)
+
+
+def run_pass(pol):
+    os.makedirs(root(pol), exist_ok=True)
+    with open(os.path.join(root(pol), "pass.lock"), "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise Refused("another pass is running on this machine") from None
+        out = {"released": [], "launched": [], "cleared": []}
+        for key in reconcile(pol):
+            try:
+                out["released"].append(release(pol, key))
+            except Refused:
+                pass
+        while True:
+            got = step(pol)
+            out["cleared"] += got["cleared"]
+            if not got["launched"]:
+                return dict(out, waiting=got["waiting"], skipped=got["skipped"])
+            out["launched"].append(got["launched"])
 
 
 def pr_view(pol, pr):
@@ -844,7 +926,7 @@ def release(pol, ident=None, hook=False):
             return Unfinished(held_back), False
         it = q[was][key]
         state, why = outcome(pol, q, key)
-        said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"])
+        said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
         return {"released": key, "state": state, "why": why, "wake": said}, True
     out = locked(pol, go)
     if isinstance(out, Unfinished):
@@ -1046,10 +1128,8 @@ def queue_command(pol, argv, stdin):
         prio = not rest or (len(rest) == 2 and rest[0] == "--priority" and re.fullmatch(r"-?\d+", rest[1]))
         if argv[2:].count("--preapproved") <= 1 and prio:
             return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv)
-    if argv == ["next"]:
-        return next_up(pol)
-    if len(argv) == 4 and argv[0] == "claim":
-        return claim(pol, argv[1], argv[2], argv[3])
+    if argv == ["pass"]:
+        return run_pass(pol)
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
         return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):
