@@ -84,14 +84,16 @@ def run(jar, java, scratch, src, cfg, name, why, edits, rule, *conf):
     open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
     for attempt in range(2):
         cmd = [java, "-XX:+UseParallelGC", "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, f"meta{attempt}")]
-        p = subprocess.run([*cmd, "-config", "Queue.cfg", "Queue.tla"], cwd=d, capture_output=True, text=True, timeout=900)
-        out = p.stdout
+        try:
+            p = subprocess.run([*cmd, "-config", "Queue.cfg", "Queue.tla"], cwd=d, capture_output=True, text=True, timeout=900)
+            out, end = p.stdout, f"exit {p.returncode}: " + ((p.stdout + p.stderr).strip().splitlines()[-1:] or ["no output"])[0][:200]
+        except subprocess.TimeoutExpired:
+            out, end = "", "no answer in 900 seconds"
         m = re.search(r"Invariant (\w+) is violated|(Temporal properties were violated)|(not completely specified|Deadlock)", out)
         if m or "Model checking completed" in out:
             break
     else:
-        last = (out + p.stderr).strip().splitlines()[-1:] or ["no output"]
-        return f"BROKEN   {name}: the checker did not finish, twice (exit {p.returncode}): {last[0][:200]}"
+        return f"BROKEN   {name}: the checker did not finish, twice ({end})"
     got = m and (m.group(1) or (m.group(2) and LIVE))
     if got == rule:
         return f"killed   {name}: {why} -> {got} breaks"
