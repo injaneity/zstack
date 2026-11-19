@@ -450,7 +450,8 @@ def warm(pol):
             shared.append(name)
         except OSError as e:
             said.append(f"{name} is not shared from the clone: {e}")
-    more = f" and {len(shared) - 20} more, which `git -C {shlex.quote(top)} ls-files -oi --exclude-standard --directory` lists" if len(shared) > 20 else ""
+    rest = f"`git -C {shlex.quote(top)} ls-files -oi --exclude-standard --directory`"
+    more = f" and {len(shared) - 20} more, which {rest} lists" if len(shared) > 20 else ""
     return [f"shared from the clone copy-on-write, as they were there: {', '.join(shared[:20])}{more}"] * bool(shared) + said
 
 
