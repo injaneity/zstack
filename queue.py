@@ -8,7 +8,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -17,10 +16,9 @@ from datetime import datetime, timezone
 PKG = os.path.dirname(os.path.realpath(__file__))
 USAGE = (
     "The queue:\n"
-    "  queue.py pickup [--dry]          read the repo, queue what this machine takes, and clear what has finished\n"
+    "  queue.py next                    read the repo and say what to launch now, as JSON; also clears what has finished\n"
     "  queue.py add <id> [--priority N] [--preapproved]\n"
-    "                                   queue a task from the orchestrator; its text on stdin\n"
-    "  queue.py next                    what to launch now and the running threads, as JSON\n"
+    "                                   a task from the orchestrator; its text on stdin\n"
     "  queue.py claim <id> <thread> <worktree>\n"
     "                                   the thread just launched for the next item, and the worktree it works in\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
@@ -28,26 +26,20 @@ USAGE = (
     "                                   review it, or its thread fixes what was found\n"
     "  queue.py gate <pr> <head>        may that head of that PR merge now; exits 1 with the reason when it may not\n"
     "  queue.py release [<id>|--hook]   the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
-    "                                   A finished item leaves the queue; one whose PR waits for the owner is kept as\n"
-    "                                   review. With no id, the item of the thread that runs it. With --hook, exit 3\n"
-    "                                   and free nothing while its open PR's head has no verdict, so the turn goes on\n"
-    "  queue.py list                    the queue as it stands\n"
+    "                                   An item whose PR is still open waits on it and keeps its worktree; a finished\n"
+    "                                   one is forgotten. With no id, the item of the thread that runs it. With --hook,\n"
+    "                                   exit 3 and free nothing while its open PR's head has no verdict\n"
+    "  queue.py list                    what this machine holds: running, waiting, tasks, verdicts, done\n"
     "The config:\n"
-    "  queue.py check                   parse and validate the machine file, each repo it works on and the rules\n"
+    "  queue.py check                   parse and validate the machine file, each repo it works on and the invariants\n"
     '  queue.py seat <role>[:<n>]       "<provider> <model>" for a role from [models]; a role with several seats needs :<n>\n'
     "  queue.py seats                   every role and seat\n"
     "  queue.py get <key>               one config value by dotted key (`merge.repo`): a string or number as is, else JSON\n"
     "  queue.py dump                    the merged config as JSON\n"
-    "  queue.py rules [--thread] [<id>...]\n"
-    "                                   the Hard rules as markdown; --thread leaves out the orchestrator's; ids name single rules\n"
-    "The holds file:\n"
-    "  queue.py holds                   the holds file as this program reads it, as JSON\n"
-    "  queue.py hold add '<kind> | <target> | <rules> | ... | <source>'\n"
-    "  queue.py hold retire '<row as it stands in the file>' '<source>'\n"
-    "  queue.py hold replace '<row as it stands in the file>' '<new row>'\n"
+    "  queue.py invariants [<id>...]    the invariants as markdown, as a thread reads them; ids name single ones\n"
     "The machine:\n"
     "  queue.py update                  bring this checkout to origin/main, and the installed plugin with it\n"
-    "  queue.py pre-push <remote> <url> the clone's pre-push hook: the patent hold and the commit rules"
+    "  queue.py pre-push <remote> <url> the clone's pre-push hook: the repo's publishing invariants"
 )
 try:
     import tomllib
@@ -55,7 +47,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.join(PKG, "vendor"))
     import tomli as tomllib
 CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "config"))
-RULES = os.path.join(PKG, "config", "rules.toml")
+INVARIANTS = os.path.join(PKG, "config", "invariants.toml")
 THREAD_VAR = "T3CODE_THREAD_ID"
 ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 SHA = r"[0-9a-f]{40}"
@@ -116,7 +108,8 @@ MACHINE = {
 PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
          "unlabelled": (lambda v: type(v) is bool, "true or false")}
 REPO = {
-    "people": {"me": (text, "a login"), "owner": (text, "a name")},
+    "people": {"me": (text, "a login"), "owner": (text, "a name"), "review_only": (names, "a list of distinct logins"),
+               "skip": (names, "a list of distinct logins")},
     "patent": {
         "held_words": (lambda v: words(v) and bool(v), "a non-empty list of distinct lowercase words"),
         "skip_lockfiles": (lambda v: names(v) and bool(v) and not any("/" in x for x in v), "a non-empty list of distinct file names"),
@@ -125,6 +118,7 @@ REPO = {
     "merge": {
         "gate_check": (text, "a check name"),
         "review_label": (text, "a label name"),
+        "hold_label": (text, "a label name"),
         "preapproved_labels": (names, "a list of distinct label names"),
     },
     "issues": {
@@ -136,13 +130,15 @@ REPO = {
 }
 
 
-def sections(where, data, schema, extra=()):
+def sections(where, data, schema, extra=(), optional=()):
     if type(data.get("schema")) is not int or data["schema"] != 1:
         raise Refused(f"{where}: schema must be 1, not {data.get('schema')!r}")
     for key in data.keys() - schema.keys() - {"schema", *extra}:
         raise Refused(f"unknown key {key}")
     for name, spec in schema.items():
         sec = data.get(name)
+        if sec is None and name in optional:
+            continue
         if not isinstance(sec, dict) or not sec:
             raise Refused(f"[{name}] is missing or empty")
         table(name, sec, spec)
@@ -172,11 +168,12 @@ def validate_machine(data):
 
 
 def validate_repo(name, data):
-    sections(name, data, REPO)
-    if name.lower() == data["patent"]["private_repo"].lower():
+    sections(name, data, REPO, optional=("patent",))
+    if "patent" in data and name.lower() == data["patent"]["private_repo"].lower():
         raise Refused("patent.private_repo must differ from merge.repo")
-    if data["merge"]["review_label"] in data["merge"]["preapproved_labels"]:
-        raise Refused("merge.review_label cannot also be one of merge.preapproved_labels")
+    m = data["merge"]
+    if len({m["review_label"], m["hold_label"], *m["preapproved_labels"]}) != 2 + len(m["preapproved_labels"]):
+        raise Refused("merge.review_label, merge.hold_label and merge.preapproved_labels must all differ")
     return data
 
 
@@ -254,9 +251,9 @@ def load(want=None):
             if clash:
                 raise Refused(f"machines/{mine} and machines/{f} overlap on {name}: {clash}, so two machines would take one item")
     root = (os.environ.get("ONIGIRI_ROOT") or place["root"]).rstrip("/")
-    return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO},
+    return {"schema": 1, **{k: machine[k] for k in MACHINE}, **{k: project[k] for k in REPO if k in project},
             "merge": {"repo": name, **project["merge"]}, "repos": known,
-            "host": {"clone": place["clone"], "root": root, "holds": root + "/hold-prs.txt",
+            "host": {"clone": place["clone"], "root": root,
                      "labels": place["labels"], "unlabelled": place["unlabelled"], "all_labels": sorted(every)}}
 
 
@@ -282,75 +279,68 @@ def get(data, key):
 def fill(where, s, pol):
     def one(m):
         v, how = get(pol, m.group(1)), m.group(2)
-        if isinstance(v, list) and all(type(x) in (str, int) for x in v) and v and how:
+        if v == [] and how:
+            return "no one"
+        if isinstance(v, list) and all(type(x) in (str, int) for x in v) and how:
             v = [str(x) for x in v]
             return (", ".join(v[:-1]) + f" {how} " + v[-1] if len(v) > 1 else v[0]) if how in ("and", "or") else how.join(v)
         if type(v) not in (str, int) or how:
             why = "a list and needs a joiner" if isinstance(v, list) and not how else "not one value"
-            raise Refused(f"rules: {where} names {m.group(0)}, which is {why}")
+            raise Refused(f"invariants: {where} names {m.group(0)}, which is {why}")
         return re.sub(r"\{(\w+)\}", r"<\1>", str(v))
     try:
         out = re.sub(r"\{([a-z_]+(?:\.[a-z_]+)+)(?::([^{}]+))?\}", one, s)
     except Refused as e:
-        raise Refused(e.args[0] if e.args[0].startswith("rules:") else f"rules: {where}: {e.args[0]} in the config") from None
+        raise Refused(e.args[0] if e.args[0].startswith("invariants:") else f"invariants: {where}: {e.args[0]} in the config") from None
     if "{" in out or "}" in out:
-        raise Refused(f"rules: {where} has a brace that names no config key")
+        raise Refused(f"invariants: {where} has a brace that names no config key")
     return out
 
 
-def validate_rules(data, pol):
-    keys("rules", data, ("schema", "intro", "section"))
-    if type(data["schema"]) is not int or data["schema"] != 1:
-        raise Refused(f"rules: schema must be 1, not {data['schema']!r}")
-    if not text(data["intro"]) or not isinstance(data["section"], list) or not data["section"]:
-        raise Refused("rules: intro must be text and section a non-empty list")
-    seen = {}
-    for n, sec in enumerate(data["section"], 1):
-        keys(f"section {n}", sec, ("title", "rule"), ("paragraphs",))
-        if not text(sec["title"]) or type(sec.get("paragraphs", False)) is not bool:
-            raise Refused(f"rules: section {n} needs a title, and paragraphs is true or false")
-        if not isinstance(sec["rule"], list) or not sec["rule"]:
-            raise Refused(f"rules: section {sec['title']!r} has no rule")
-        for r in sec["rule"]:
-            keys(f"{sec['title']} rule", r, ("id", "text"), ("source", "for"))
-            if not text(r.get("source", "x")) or r.get("for", "orchestrator") != "orchestrator":
-                raise Refused(f"rules: {r.get('id')!r} source must be text, and for is \"orchestrator\" or absent")
+def entries(where, data, pol, seen):
+    out = {"invariant": [], "guidance": []}
+    for kind, want in (("invariant", ("id", "text", "enforced", "test")), ("guidance", ("id", "text"))):
+        rows = data.get(kind, [])
+        if not isinstance(rows, list):
+            raise Refused(f"invariants: {where} {kind} must be a list")
+        for r in rows:
+            keys(f"{where} {kind}", r, want)
             if not (isinstance(r["id"], str) and re.fullmatch(r"[a-z]+(-[a-z]+)*", r["id"])) or not text(r["text"]) or "\n" in r["text"]:
-                raise Refused(f"rules: {sec['title']} rule {r.get('id')!r} needs a kebab-case id and one line of text")
+                raise Refused(f"invariants: {where} {kind} {r.get('id')!r} needs a kebab-case id and one line of text")
+            if not all(text(r[k]) for k in want):
+                raise Refused(f"invariants: {r['id']} needs each of {', '.join(want)} as text")
             if r["id"] in seen:
-                raise Refused(f"rules: two rules have the id {r['id']}")
-            seen[r["id"]] = r["text"]
-    data["intro"] = fill("intro", data["intro"], pol)
-    for sec in data["section"]:
-        for r in sec["rule"]:
-            r["text"] = fill(r["id"], r["text"], pol)
-    return data
+                raise Refused(f"invariants: two entries have the id {r['id']}")
+            seen.add(r["id"])
+            out[kind].append({**r, "text": fill(r["id"], r["text"], pol)})
+    return out
 
 
-def rules(path=RULES, want=None):
+def invariants(path=INVARIANTS, want=None):
     pol, data = load(want), read_toml(path)
-    more = os.path.join(CONFIG, "repos", pol["merge"]["repo"], "rules.toml")
-    if os.path.isfile(more):
-        extra = read_toml(more)
-        keys(more, extra, ("schema", "section"))
-        data["section"] = [*data.get("section", []), *(extra["section"] if isinstance(extra["section"], list) else [None])]
-    return validate_rules(data, pol)
+    keys("invariants", data, ("schema", "intro", "invariant"), ("guidance",))
+    if data["schema"] != 1 or not text(data["intro"]) or not data["invariant"]:
+        raise Refused("invariants: schema must be 1, intro text, and at least one invariant")
+    seen, more = set(), os.path.join(CONFIG, "repos", pol["merge"]["repo"], "invariants.toml")
+    stack = entries("the stack's", data, pol, seen)
+    there = read_toml(more) if os.path.isfile(more) else {"schema": 1}
+    keys(more, there, ("schema",), ("invariant", "guidance"))
+    mine = entries(pol["merge"]["repo"] + "'s", there, pol, seen)
+    return {"intro": fill("intro", data["intro"], pol), "stack": stack["invariant"], "repo": mine["invariant"],
+            "guidance": stack["guidance"] + mine["guidance"]}
 
 
-def render(data, ids=(), thread=False):
+def render(data, ids=()):
+    every = data["stack"] + data["repo"] + data["guidance"]
     if ids:
-        by = {r["id"]: r["text"] for s in data["section"] for r in s["rule"]}
+        by = {r["id"]: r["text"] for r in every}
         if miss := [i for i in ids if i not in by]:
-            raise Refused(f"no rule {', '.join(miss)} in {RULES}")
+            raise Refused(f"no invariant or guidance {', '.join(miss)} in {INVARIANTS} or the repo's invariants.toml")
         return "".join(f"- {by[i]}\n" for i in ids)
-    out = ["## Hard rules", "", data["intro"]]
-    for s in data["section"]:
-        shown = [r for r in s["rule"] if not (thread and r.get("for"))]
-        if not shown:
-            continue
-        out += ["", f"### {s['title']}", ""]
-        out += ("\n\n" if s.get("paragraphs") else "\n").join(
-            r["text"] if s.get("paragraphs") else f"- {r['text']}" for r in shown).split("\n")
+    out = ["## Invariants", "", data["intro"]]
+    for title, part in (("Always", "stack"), ("In this repo", "repo"), ("Judgment, which nothing enforces", "guidance")):
+        if data[part]:
+            out += ["", f"### {title}", "", *(f"- {r['text']}" for r in data[part])]
     return "\n".join(out) + "\n"
 
 
@@ -376,10 +366,10 @@ def config_command(argv):
     if argv == ["check"]:
         every = list(validate_machine(read_toml(machine_file()))["repos"])
         for name in every:
-            rules(want=name)
+            invariants(want=name)
         return print(f"queue: {CONFIG} is valid for {', '.join(every)} on {os.path.basename(machine_file())[:-5]}") or 0
-    if argv[:1] == ["rules"]:
-        return print(render(rules(), [x for x in argv[1:] if x != "--thread"], "--thread" in argv), end="") or 0
+    if argv[:1] == ["invariants"]:
+        return print(render(invariants(), argv[1:]), end="") or 0
     if argv == ["dump"]:
         return print(json.dumps(load())) or 0
     if len(argv) == 2 and argv[0] == "seat":
@@ -411,35 +401,6 @@ def read_text(path):
 
 def root(pol):
     return os.path.abspath(os.path.expanduser(pol["host"]["root"]))
-
-
-def parse_holds(rows):
-    h = {"hold": set(), "skip": set(), "review_only": set()}
-    for ln, raw in enumerate(rows.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        f = [x.strip() for x in line.split("|")]
-        pr = re.fullmatch(r"#?(\d+)", f[1]) if len(f) > 1 else None
-        if f[0] == "hold":
-            if len(f) < 4 or not pr:
-                raise ValueError(f"holds file line {ln}: hold needs a PR number | rules | note")
-            h["hold"].add(int(pr.group(1)))
-        elif len(f) < 2 or not f[1] or pr:
-            raise ValueError(f"holds file line {ln}: {line[:80]}")
-        elif f[0] in ("skip-author", "review-only"):
-            h["skip" if f[0] == "skip-author" else "review_only"].add(f[1].lower())
-    return h
-
-
-def holds(pol):
-    rows = read_text(pol["host"]["holds"])
-    try:
-        if rows is None:
-            raise ValueError(f"cannot read {pol['host']['holds']}")
-        return {**parse_holds(rows), "read": True, "error": None}
-    except ValueError as e:
-        return {"hold": set(), "skip": set(), "review_only": set(), "read": False, "error": str(e)}
 
 
 def send(pol, body, attempts=3, timeout=5):
@@ -510,7 +471,8 @@ def candidates(errors, pol):
 
 
 def open_prs(errors, name):
-    return {p["number"] for p in gh_json(errors, "pr", "list", "-R", name, "--state", "open", "--limit", "3000", "--json", "number")}
+    rows = gh_json(errors, "pr", "list", "-R", name, "--state", "open", "--limit", "3000", "--json", "number,labels")
+    return {p["number"]: [x["name"] for x in p["labels"]] for p in rows}
 
 
 def takes(labels, host):
@@ -518,28 +480,27 @@ def takes(labels, host):
     return hit[0] in mine if hit else (not mine or host["unlabelled"])
 
 
-def skip(c, h, prs, items, done, host):
-    if not h["read"]:
-        return "holds-unreadable"
-    if c["id"] in items:
-        return items[c["id"]]["state"]
-    if c["id"] in done:
-        return "done"
-    if not takes(c["labels"], host):
+def skip(c, q, prs, pol):
+    hold = pol["merge"]["hold_label"]
+    held_prs = {n for n, labels in prs.items() if hold in labels}
+    for part in ("running", "waiting", "done"):
+        if c["id"] in q[part]:
+            return part
+    if not takes(c["labels"], pol["host"]):
         return "other-machine"
-    if bot(c["author"]) or c["author"]["login"].lower() in h["skip"] or "hold" in c["labels"]:
-        return "held"
-    if (c["kind"] != "issue" and c["n"] in h["hold"]) or any(n in h["hold"] for n in c["linked"]):
+    if bot(c["author"]) or c["author"]["login"].lower() in [x.lower() for x in pol["people"]["skip"]]:
+        return "skipped-author"
+    if hold in c["labels"] or any(n in held_prs for n in c["linked"]):
         return "held"
     if c["kind"] == "issue" and any(n in prs for n in c["linked"]):
         return "pr"
-    busy = {n for i in items.values() for n in (i["n"], i["pr"]) if n}
+    busy = {n for part in ("running", "waiting") for i in q[part].values() for n in (i["n"], i["pr"]) if n}
     if c["n"] in busy or any(n in busy for n in c["linked"]):
         return "overlap"
     return None
 
 
-def task(c, h, pol):
+def task(c, pol):
     name, me, iss = pol["merge"]["repo"], pol["people"]["me"], pol["issues"]
     if c["kind"] == "issue":
         return (f"{name}#{c['n']}: {c['title']}\n{c['url']}\n\nKind: fix in {name}, picked from the issues assigned to {me}. "
@@ -547,7 +508,7 @@ def task(c, h, pol):
     salvage = pol["review"]["outside"] == "salvage"
     outside = "salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes" if salvage else \
         "request changes on a fixable PR, and do not rewrite it as a PR of ours"
-    teammate = c["author"]["login"].lower() in h["review_only"]
+    teammate = c["author"]["login"].lower() in [x.lower() for x in pol["people"]["review_only"]]
     who = "teammate (review-only: a first review and nothing else)" if teammate else f"outside contributor ({outside})"
     said = (f"{name}#{c['n']} at head {c['head']} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first "
             f"review, requested of {me}. Run playbooks/pull-requests.md Verify. Post nothing under the owner's name: put every "
@@ -564,9 +525,7 @@ def task(c, h, pol):
             f"commit; the body still says `{frm}`.")
 
 
-def item(kind, n, source, priority, said, title, preapproved=False):
-    return {"state": "queued", "kind": kind, "n": n, "source": source, "priority": priority, "preapproved": preapproved,
-            "task": said, "title": title, "thread": None, "worktree": None, "pr": None, "verdict": None, "why": None, "at": now()}
+KEYS = ("running", "waiting", "tasks", "verdicts", "done")
 
 
 def locked(pol, fn):
@@ -576,64 +535,56 @@ def locked(pol, fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         path = os.path.join(base, "queue.json")
         rows = read_text(path)
-        state = json.loads(rows) if rows else {"items": {}, "done": []}
-        if "done" not in state or any("verdict" not in v or v["state"] not in ("queued", "running", "review") for v in state["items"].values()):
+        q = json.loads(rows) if rows else {**{k: {} for k in KEYS}, "done": []}
+        if set(q) != set(KEYS):
             raise Refused(f"{path} was written by an older zstack: move it aside, and the queue starts empty")
-        out, changed = fn(state["items"], state["done"])
+        out, changed = fn(q)
         if changed:
             with open(path + ".tmp", "w") as f:
-                json.dump(state, f, indent=1, sort_keys=True)
+                json.dump(q, f, indent=1, sort_keys=True)
                 f.write("\n")
             os.replace(path + ".tmp", path)
         return out
 
 
-def pickup(pol, dry):
-    h = holds(pol)
-    errors = [] if h["read"] else [h["error"]]
+def work(pol, q):
+    errors = []
     cands, prs = candidates(errors, pol), open_prs(errors, pol["merge"]["repo"])
-    cleared = [] if dry or errors else settle(pol)
+    ready, skipped = [], {}
+    for c in [] if errors else cands:
+        why = skip(c, q, prs, pol)
+        if why:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
+        pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
+        ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
+                      "preapproved": pre, "task": task(c, pol), "title": c["title"]})
+    ready += [{"id": k, "kind": "task", "n": None, **t} for k, t in q["tasks"].items()]
+    ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
+    return ready, skipped, errors, {c["id"] for c in cands}
 
-    def go(items, done):
-        queued, skipped = [], []
-        for c in [] if errors else cands:
-            why = skip(c, h, prs, items, done, pol["host"])
-            if why:
-                skipped.append({"id": c["id"], "why": why})
-                continue
-            priority = 100 if "urgent" in c["labels"] else 0
-            pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
-            items[c["id"]] = item(c["kind"], c["n"], "pickup", priority, task(c, h, pol), c["title"], pre)
-            queued.append({"id": c["id"], "priority": priority})
-        gone = [] if errors else [d for d in done if d not in {c["id"] for c in cands}]
-        done[:] = [d for d in done if d not in gone]
-        return {"queued": queued, "skipped": skipped, "cleared": cleared, "errors": errors}, bool(queued or gone) and not dry
-    return locked(pol, go)
+
+def first(pol, q):
+    if len(q["running"]) >= pol["run"]["threads"]:
+        return None, "the machine is at its thread cap", {}, None
+    ready, skipped, errors, listed_ids = work(pol, q)
+    if errors:
+        return None, errors[0], skipped, None
+    return (ready[0], None, skipped, listed_ids) if ready else (None, "nothing is ready", skipped, listed_ids)
 
 
 def add(pol, ident, said, priority, preapproved=False):
     if not re.fullmatch(ID, ident) or not said.strip():
         raise Refused("an id of letters, digits, . _ - and a task on stdin")
 
-    def go(items, done):
-        if ident in items:
-            raise Refused(f"{ident} is already {items[ident]['state']}")
-        items[ident] = item("task", None, "orchestrator", priority, said.strip(), said.strip().splitlines()[0][:120], preapproved)
-        return items[ident], True
+    def go(q):
+        for part in ("tasks", "running", "waiting"):
+            if ident in q[part]:
+                raise Refused(f"{ident} is already {'a task' if part == 'tasks' else part}")
+        q["tasks"][ident] = {"task": said.strip(), "title": said.strip().splitlines()[0][:120], "priority": priority,
+                             "preapproved": preapproved, "at": now()}
+        return q["tasks"][ident], True
     return locked(pol, go)
-
-
-def order(items):
-    return sorted((k for k, v in items.items() if v["state"] == "queued"), key=lambda k: (-items[k]["priority"], items[k]["at"], k))
-
-
-def first(items, h, cap):
-    if sum(1 for v in items.values() if v["state"] == "running") >= cap:
-        return None, "the machine is at its thread cap"
-    if not h["read"]:
-        return None, f"the holds file is unreadable: {h['error']}"
-    free = [k for k in order(items) if items[k]["n"] not in h["hold"]]
-    return (free[0], None) if free else (None, "nothing is queued")
 
 
 BRIEF = """# {id}
@@ -642,8 +593,8 @@ BRIEF = """# {id}
 
 repo: a worktree of `{clone}`
 
-Follow onigiri-mode and its Hard rules, which are already in your context.
-No invented limits: a restriction must trace to the owner's words or the Hard rules. If you think one is needed, put it under `questions:` instead of applying it.
+Follow onigiri-mode and the invariants, which are already in your context.
+No invented limits: a restriction must trace to the owner's words or the invariants. If you think one is needed, put it under `questions:` instead of applying it.
 
 When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do. On a fail, fix the findings, push, and have it check the new head.
 On `auto`, wait for the PR's checks, then merge that head yourself: `gh pr merge <pr number> -R {repo} --squash --match-head-commit <head sha>`. The guard lets that command through only for the head the verifier passed, with the checks green and no hold; when it refuses, read its reason, and do not try another way. On `review`, or when you think the change needs a person whatever the verifier says, do not merge: say why in your report.
@@ -655,35 +606,36 @@ questions:
 """  # noqa: E501
 
 
-def brief(pol, ident, it):
+def brief(pol, it):
     env = {"ZSTACK_CONFIG": CONFIG, "ZSTACK_MACHINE": os.environ.get("ZSTACK_MACHINE"), "ZSTACK_REPO": pol["merge"]["repo"]}
-    return BRIEF.format(id=ident, task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "queue.py"), repo=pol["merge"]["repo"],
+    return BRIEF.format(id=it["id"], task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "queue.py"), repo=pol["merge"]["repo"],
                         env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
 def next_up(pol):
-    h = holds(pol)
-
-    def go(items, done):
-        ident, waiting = first(items, h, pol["run"]["threads"])
-        launch = {"id": ident, "clone": pol["host"]["clone"], "brief": brief(pol, ident, items[ident])} if ident else None
-        return {"launch": launch, "waiting": waiting,
-                "running": {k: v["thread"] for k, v in sorted(items.items()) if v["state"] == "running"}}, False
+    def go(q):
+        cleared = settle(pol, q)
+        up, waiting, skipped, listed_ids = first(pol, q)
+        gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
+        q["done"] = [d for d in q["done"] if d not in gone]
+        launch = {"id": up["id"], "clone": pol["host"]["clone"], "brief": brief(pol, up)} if up else None
+        return {"launch": launch, "waiting": waiting, "running": {k: v["thread"] for k, v in sorted(q["running"].items())},
+                "cleared": cleared, "skipped": skipped}, bool(cleared or gone)
     return locked(pol, go)
 
 
 def claim(pol, ident, thread, worktree):
-    h = holds(pol)
-
-    def go(items, done):
-        it = items.get(ident)
-        if not it or it["state"] != "queued":
-            raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, not queued")
-        up, waiting = first(items, h, pol["run"]["threads"])
-        if up != ident:
-            raise Refused(f"{ident} is not next: {waiting or up + ' is'}")
-        it.update(state="running", thread=thread, worktree=worktree, at=now())
-        return it, True
+    def go(q):
+        for part in ("running", "waiting"):
+            if ident in q[part]:
+                raise Refused(f"{ident} is already {part}")
+        up, waiting, _, _ = first(pol, q)
+        if not up or up["id"] != ident:
+            raise Refused(f"{ident} is not next: {waiting or up['id'] + ' is'}")
+        q["tasks"].pop(ident, None)
+        q["running"][ident] = {"kind": up["kind"], "n": up["n"], "preapproved": up["preapproved"], "title": up["title"],
+                               "thread": thread, "worktree": worktree, "pr": None, "at": now()}
+        return q["running"][ident], True
     return locked(pol, go)
 
 
@@ -700,14 +652,26 @@ def gate_green(pol, live):
                for c in live.get("statusCheckRollup") or [])
 
 
-def blocked(pol, it, live, h):
-    v = it["verdict"]
+def held(pol, it, live):
+    hold = pol["merge"]["hold_label"]
+    if hold in [x["name"] for x in live["labels"]]:
+        return True
+    if not it or it["kind"] != "issue":
+        return False
+    rc, out, err = gh("issue", "view", str(it["n"]), "-R", pol["merge"]["repo"], "--json", "labels")
+    if rc:
+        raise Refused(f"cannot read issue {it['n']}, so whether it is held is unknown: {err}")
+    return hold in [x["name"] for x in json.loads(out)["labels"]]
+
+
+def blocked(pol, it, v, live):
     if not v or v["result"] == "fail" or v["head"] != live["headRefOid"]:
         return f"the verifier has not passed head {live['headRefOid']}"
-    if not it["preapproved"] and (v["result"] != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]):
+    pre = bool(it) and it["preapproved"]
+    if not pre and (v["result"] != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]):
         return "it needs a person's review"
-    if it["pr"] in h["hold"] or it["n"] in h["hold"] or not h["read"]:
-        return "it has a hold row"
+    if held(pol, it, live):
+        return f"it is labelled {pol['merge']['hold_label']}"
     if live.get("isDraft"):
         return "the PR is a draft"
     if not gate_green(pol, live):
@@ -717,39 +681,36 @@ def blocked(pol, it, live, h):
     return "a check is still running on that head, and a merge now would arm auto-merge" if running else None
 
 
-def verified(pol, ident, pr, head, result):
-    h = holds(pol)
+def owner_of(q, pr):
+    return next((v for part in ("running", "waiting") for v in q[part].values() if v["pr"] == pr), None)
 
-    def go(items, done):
-        it = items.get(ident)
-        if not it or it["state"] == "queued":
-            raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, and no thread has run it")
+
+def verified(pol, ident, pr, head, result):
+    def go(q):
+        it = q["running"].get(ident) or q["waiting"].get(ident)
+        if not it:
+            raise Refused(f"{ident} is not running or waiting on its PR, so no thread has run it")
         if it["thread"] and os.environ.get(THREAD_VAR) == it["thread"]:
             raise Refused(f"this is {ident}'s own thread: the verifier it starts records the verdict, never the thread")
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
-        for other in items.values():
-            if other["pr"] == pr:
-                other["verdict"] = None
-        it.update(pr=pr, verdict={"head": head, "result": result}, at=now())
+        it["pr"] = pr
+        q["verdicts"][str(pr)] = {"head": head, "result": result}
         if result == "fail":
-            return {**it, "say": "its thread fixes the findings and has the new head checked"}, True
-        why = blocked(pol, it, live, h)
+            return {"id": ident, "pr": pr, "say": "its thread fixes the findings and has the new head checked"}, True
+        why = blocked(pol, it, q["verdicts"][str(pr)], live)
         cmd = f"gh pr merge {pr} -R {pol['merge']['repo']} --squash --match-head-commit {head}"
-        return {**it, "say": f"its thread does not merge it: {why}" if why else f"its thread merges it with `{cmd}`"}, True
+        return {"id": ident, "pr": pr, "say": f"its thread does not merge it: {why}" if why else f"its thread merges it with `{cmd}`"}, True
     return locked(pol, go)
 
 
 def gate(pol, pr, head):
-    h = holds(pol)
-
-    def go(items, done):
-        it = next((v for v in items.values() if v["pr"] == pr and v["verdict"]), None)
+    def go(q):
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}")
-        why = blocked(pol, it, live, h) if it else f"the verifier has not passed head {head}"
+        why = blocked(pol, owner_of(q, pr), q["verdicts"].get(str(pr)), live)
         if why:
             raise Refused(f"PR {pr} does not merge: {why}")
         return {"merge": pr, "head": head}, False
@@ -804,189 +765,72 @@ def branch_pr(pol, it):
     return None
 
 
-def outcome(pol, items, done, key, h):
-    it = items[key]
+def outcome(pol, q, key):
+    it = q["running"].pop(key, None) or q["waiting"].pop(key)
+
+    def wait(why):
+        q["waiting"][key] = it
+        return "waiting", why
     try:
         it["pr"] = it["pr"] or branch_pr(pol, it)
         live = pr_view(pol, it["pr"]) if it["pr"] else None
         other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
         if other and other != it["pr"]:
-            it.update(pr=other, verdict=None)
-            live = pr_view(pol, other)
+            it["pr"], live = other, pr_view(pol, other)
+        if live and live["state"] == "OPEN":
+            why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
+            tidy(pol, it, False)
+            return wait(f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        it.update(state="review", why=str(e), at=now())
-        return "blocked"
-    if live and live["state"] == "OPEN":
-        why = f"PR {it['pr']} waits for the owner: {blocked(pol, it, live, h) or 'its thread did not merge it'}"
-        it.update(state="review", why=why, at=now())
-        tidy(pol, it, False)
-        return "blocked"
+        return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
     if not tidy(pol, it, True):
-        it.update(state="review", why=f"{why}, and its worktree has uncommitted or unpushed work", at=now())
-        return "blocked"
-    it["why"] = why
-    del items[key]
-    done.append(key)
-    return "done"
+        return wait(f"{why}, and its worktree has uncommitted or unpushed work")
+    q["verdicts"].pop(str(it["pr"]), None)
+    q["done"].append(key)
+    return "done", why
 
 
-def tell(pol, kind, ident, it):
-    return "wake: " + kind + " " + wake(pol, kind, ident + ": " + it["why"], it["pr"])
-
-
-def unverified(pol, it):
+def unverified(pol, q, it):
     try:
         pr = it["pr"] or branch_pr(pol, it)
         live = pr_view(pol, pr) if pr else None
     except Refused:
         return None
-    return pr if live and live["state"] == "OPEN" and live["headRefOid"] != (it["verdict"] or {}).get("head") else None
+    return pr if live and live["state"] == "OPEN" and live["headRefOid"] != q["verdicts"].get(str(pr), {}).get("head") else None
 
 
 def release(pol, ident=None, hook=False):
-    h = holds(pol)
     thread = os.environ.get(THREAD_VAR)
 
-    def go(items, done):
-        key = ident or next((k for k, v in items.items() if thread and v["thread"] == thread and v["state"] != "queued"), None)
-        it = items.get(key)
-        if not it or it["state"] == "queued":
+    def go(q):
+        key = ident or next((k for k, v in q["running"].items() if thread and v["thread"] == thread), None)
+        was = "running" if key in q["running"] else "waiting" if key in q["waiting"] else None
+        if not was:
             if ident:
-                raise Refused(f"{ident} is {it['state'] if it else 'not in the queue'}, not running")
+                raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
-        pr = unverified(pol, it) if hook and it["state"] == "running" else None
+        pr = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
         if pr:
             return Unfinished(f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
                               "wait for its verdict inside this turn."), False
-        was = (it["state"], it["why"])
-        kind = outcome(pol, items, done, key, h)
-        state = items[key]["state"] if key in items else "done"
-        return {"released": key, **it, "state": state, "wake": tell(pol, kind, key, it) if was != (state, it["why"]) else None}, True
+        it = q[was][key]
+        state, why = outcome(pol, q, key)
+        said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"])
+        return {"released": key, "state": state, "why": why, "wake": said}, True
     out = locked(pol, go)
     if isinstance(out, Unfinished):
         raise out
     return out
 
 
-def settle(pol):
-    h = holds(pol)
-
-    def go(items, done):
-        moved = []
-        for ident, it in sorted(items.items()):
-            if it["state"] == "review":
-                was = it["why"]
-                outcome(pol, items, done, ident, h)
-                if ident not in items:
-                    moved.append({"id": ident, "why": it["why"]})
-                elif was != it["why"]:
-                    tell(pol, "blocked", ident, it)
-        return moved, True
-    return locked(pol, go)
-
-
-MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
-WHEN = re.compile(rf"\b(\d{{1,2}} ({MONTHS})|({MONTHS}) \d{{1,2}}|\d{{4}}-\d{{2}}-\d{{2}})[ ,T]+\d{{1,2}}:\d{{2}}\b")
-
-
-def source_ok(owner, src):
-    return bool(re.search(rf"\b{re.escape(owner)}\b", src)) and bool(WHEN.search(src))
-
-
-def check_row(owner, row):
-    if row.splitlines() != [row]:
-        return "one row only: it has a line break"
-    f = [x.strip() for x in row.split("|")]
-    if len(f) < 3 or not all(f[:2]) or row.lstrip().startswith("#"):
-        return "a row is `kind | target | rules | ... | source`"
-    if not source_ok(owner, f[-1]):
-        return f"the last column must name {owner}'s call and its time (e.g. `{owner} 11 Nov 14:56 SGT`), not {f[-1]!r}"
-    return None
-
-
-def put(path, rows):
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".hold-prs.txt.")
-    with os.fdopen(fd, "w") as f:
-        f.write(rows)
-        f.flush()
-        os.fsync(f.fileno())
-    shutil.copymode(path, tmp)
-    os.replace(tmp, path)
-
-
-def hold_edit(path, change):
-    if not os.path.isfile(path):
-        raise Refused(f"{path} does not exist; rows are written only to the merge host's holds file")
-    with open(os.path.join(os.path.dirname(path), ".hold-row.lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        old = read_text(path)
-        try:
-            parse_holds(old)
-        except ValueError as e:
-            raise Refused(f"the holds file is already unreadable ({e}); not changing it") from None
-        new, said = change(old)
-        if new is None:
-            return said
-        try:
-            parse_holds(new)
-        except ValueError as e:
-            raise Refused(f"the holds parser rejects the result ({e}); nothing written") from None
-        backup = f"{path}.bak-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
-        shutil.copy2(path, backup)
-        put(path, new)
-        return f"{said}\nbackup: {backup}"
-
-
-def hold_add(owner, path, row):
-    if why := check_row(owner, row):
-        raise Refused(why)
-    row = row.strip()
-
-    def change(old):
-        if row in (x.strip() for x in old.splitlines()):
-            return None, f"already there: {row}"
-        return old + ("" if not old or old.endswith("\n") else "\n") + row + "\n", f"added: {row}"
-    return hold_edit(path, change)
-
-
-def hold_retire(owner, path, old_row, source, new_row=None):
-    if old_row.splitlines() != [old_row] or not old_row.strip() or old_row.lstrip().startswith("#"):
-        raise Refused("name the row to retire exactly as it stands in the file, one line")
-    old_row = old_row.strip()
-    if source.splitlines() != [source] or not source_ok(owner, source):
-        raise Refused(f"the source must name {owner}'s call and its time (e.g. `{owner} 11 Nov 14:56 SGT`), not {source!r}")
-    if new_row is not None:
-        if why := check_row(owner, new_row):
-            raise Refused(why)
-        new_row = new_row.strip()
-    tomb = f"# retired {source.strip()}: {old_row}"
-
-    def change(rows):
-        lines = rows.splitlines()
-        hits = [i for i, x in enumerate(lines) if x.strip() == old_row]
-        if not hits:
-            if tomb in (x.strip() for x in lines) and (new_row is None or new_row in (x.strip() for x in lines)):
-                return None, f"already retired: {old_row}"
-            raise Refused(f"no row in the file is exactly {old_row!r}")
-        if len(hits) > 1:
-            raise Refused(f"{len(hits)} rows are exactly {old_row!r}; retire them by hand")
-        if new_row is not None and new_row in (x.strip() for x in lines):
-            raise Refused(f"the new row is already in the file: {new_row!r}")
-        lines[hits[0]:hits[0] + 1] = [tomb] + ([new_row] if new_row is not None else [])
-        return "\n".join(lines) + "\n", f"retired: {old_row}" + (f"\nadded: {new_row}" if new_row is not None else "")
-    return hold_edit(path, change)
-
-
-def hold_command(pol, argv):
-    owner, path = pol["people"]["owner"], os.path.realpath(os.path.expanduser(pol["host"]["holds"]))
-    if len(argv) == 2 and argv[0] == "add":
-        return hold_add(owner, path, argv[1])
-    if len(argv) == 3 and argv[0] == "retire":
-        return hold_retire(owner, path, argv[1], argv[2])
-    if len(argv) == 3 and argv[0] == "replace":
-        return hold_retire(owner, path, argv[1], [x.strip() for x in argv[2].split("|")][-1], argv[2])
-    return None
+def settle(pol, q):
+    cleared = []
+    for key in sorted(q["waiting"]):
+        state, why = outcome(pol, q, key)
+        if state == "done":
+            cleared.append({"id": key, "why": why})
+    return cleared
 
 
 def plugin(head, out):
@@ -1059,10 +903,8 @@ def lint(head, cwd=None):
         if kind.startswith("D"):
             continue
         parts = path.split("/")
-        if parts[-1] == ".onigiri.json":
-            out.append(f"{path} is onigiri config and is never committed (Hard rules, scope-no-config)")
         if "target" in parts[:-1]:
-            out.append(f"{path} is build output under target/ (Hard rules, checks-target)")
+            out.append(f"{path} is build output under target/ (the repo invariant commit-content)")
         if kind.startswith("A"):
             added.append(path)
     for path in added:
@@ -1070,7 +912,7 @@ def lint(head, cwd=None):
         rc2, found = git("ls-tree", "--name-only", base, (folder + "/") if folder else ".", cwd=cwd)
         near = [n for n in found.splitlines() if ext and n.endswith(ext) and n != path][:20]
         if rc2 == 0 and not has_spdx(head, path, cwd) and any(has_spdx(base, n, cwd) for n in near):
-            out.append(f"{path} is new and lacks the SPDX header its neighbours carry (Hard rules, text-spdx)")
+            out.append(f"{path} is new and lacks the SPDX header its neighbours carry (the repo invariant commit-content)")
     _, ident = git("var", "GIT_COMMITTER_IDENT", cwd=cwd)
     me = ident[ident.find("<") + 1:ident.find(">")]
     rc3, log = git("log", "--no-merges", "--format=%H%x00%ce%x00%B%x01", head, "--not", "refs/remotes/origin/main", cwd=cwd)
@@ -1078,17 +920,18 @@ def lint(head, cwd=None):
         c, _, rest = entry.strip().partition("\x00")
         who, _, body = rest.partition("\x00")
         if c and who == me and re.search(rf"^co-authored-by:.*({TOOLS})", body, re.I | re.M):
-            out.append(f"commit {c[:12]} carries a Co-authored-by trailer for a model, agent or tool (Hard rules, text-no-trailers)")
+            out.append(f"commit {c[:12]} carries a Co-authored-by trailer for a model, agent or tool (the repo invariant text)")
     return list(dict.fromkeys(out))[:8]
 
 
 class Patent:
     def __init__(self, pol):
-        self.pol, pt = pol, pol["patent"]
+        self.pol, pt = pol, pol.get("patent") or {"held_words": [], "skip_lockfiles": ["-"], "private_repo": ""}
+        self.on = "patent" in pol
         self.held = re.compile(r"(?<![a-z0-9])(" + "|".join(map(re.escape, pt["held_words"])) + ")", re.I)
         self.lockfile = re.compile(r"(^|/)(" + "|".join(map(re.escape, pt["skip_lockfiles"])) + ")$")
         self.public, self.staging = pol["merge"]["repo"], pt["private_repo"]
-        self.words = ", ".join(pt["held_words"][:-1]) + " or " + pt["held_words"][-1] if len(pt["held_words"]) > 1 else pt["held_words"][0]
+        self.words = " or ".join(filter(None, [", ".join(pt["held_words"][:-1]), *pt["held_words"][-1:]]))
 
     def is_staging(self, url):
         return bool(re.search(rf"github\.com[:/]{re.escape(self.staging)}(\.git)?/?$", url or ""))
@@ -1164,10 +1007,10 @@ class Patent:
             branch = remote_ref[len("refs/heads/"):] if remote_ref.startswith("refs/heads/") else remote_ref
             if problems := lint(head, cwd):
                 refuse = 1
-                out.write(f"push refused: {branch} breaks the Hard rules: " + "; ".join(problems)
+                out.write(f"push refused: {branch} breaks the repo's invariants: " + "; ".join(problems)
                           + ". Fix the commits and push again; do not skip the hook.\n")
                 continue
-            hits = self.diff_hits(head, cwd)
+            hits = self.diff_hits(head, cwd) if self.on else []
             act = self.choose_remote(url, hits, staging_ok or self.staging_push_ok)
             if act == "push":
                 continue
@@ -1196,31 +1039,26 @@ def pre_push(argv, stdin):
 
 
 def queue_command(pol, argv, stdin):
-    if argv in (["pickup"], ["pickup", "--dry"]):
-        out = pickup(pol, len(argv) == 2)
-        return out, 1 if out["errors"] else 0
     if argv[:1] == ["add"] and len(argv) >= 2:
         rest = [a for a in argv[2:] if a != "--preapproved"]
         prio = not rest or (len(rest) == 2 and rest[0] == "--priority" and re.fullmatch(r"-?\d+", rest[1]))
         if argv[2:].count("--preapproved") <= 1 and prio:
-            return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv), 0
+            return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv)
     if argv == ["next"]:
-        return next_up(pol), 0
+        return next_up(pol)
     if len(argv) == 4 and argv[0] == "claim":
-        return claim(pol, argv[1], argv[2], argv[3]), 0
+        return claim(pol, argv[1], argv[2], argv[3])
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
-        return verified(pol, argv[1], int(argv[2]), argv[3], argv[4]), 0
+        return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):
-        return gate(pol, int(argv[1]), argv[2]), 0
+        return gate(pol, int(argv[1]), argv[2])
     if argv == ["release", "--hook"]:
-        return release(pol, hook=True), 0
+        return release(pol, hook=True)
     if argv[:1] == ["release"] and len(argv) <= 2:
-        return release(pol, argv[1] if len(argv) == 2 else None), 0
+        return release(pol, argv[1] if len(argv) == 2 else None)
     if argv == ["list"]:
-        return locked(pol, lambda items, done: ({"items": items, "done": done}, False)), 0
-    if argv == ["holds"]:
-        return {k: sorted(v) if isinstance(v, set) else v for k, v in holds(pol).items()}, 0
-    return None, 2
+        return locked(pol, lambda q: (q, False))
+    return None
 
 
 def main(argv, stdin=sys.stdin):
@@ -1232,15 +1070,9 @@ def main(argv, stdin=sys.stdin):
         done = config_command(argv)
         if done is not None:
             return done
-        if argv[:1] == ["hold"]:
-            print(f"zstack {sha()}", file=sys.stderr)
-            said = hold_command(load(), argv[1:])
-            if said is not None:
-                return print(said) or 0
-        else:
-            out, code = queue_command(load(), argv, stdin)
-            if out is not None:
-                return print(json.dumps(out, indent=1)) or code
+        out = queue_command(load(), argv, stdin)
+        if out is not None:
+            return print(json.dumps(out, indent=1)) or 0
     except Unfinished as e:
         print(e, file=sys.stderr)
         return 3

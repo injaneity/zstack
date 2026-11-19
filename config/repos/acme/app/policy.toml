@@ -1,14 +1,18 @@
 # One repo: how this project wants to be worked on. The folder names it (repos/<owner>/<name>/), so no key repeats it.
-# An optional rules.toml beside this file adds sections to the stack's Hard rules. This one is an example.
+# invariants.toml beside this file holds this repo's own invariants, which name these keys. This one is an example.
 schema = 1
 
-# Who "we" are. `me` is the login the pickup works for: its assigned issues and its requested reviews. `owner` is the
-# person the rules and the services' messages name: the one whose calls the holds file relays.
+# Who "we" are. `me` is the login the queue works for: its assigned issues and its requested reviews. `owner` is the
+# person the invariants and the wake name. A PR by a `review_only` login gets a first review and nothing else, and an
+# issue or PR by a `skip` login is never picked up.
 [people]
 me = "octo"
 owner = "Robin"
+review_only = ["f-teammate"]
+skip = ["app/app-agents"]
 
-# The patent hold at publish time (queue.py pre-push, the clone's pre-push hook; Hard rules, Patent hold). A change
+# The patent hold at publish time (queue.py pre-push, the clone's pre-push hook; the repo invariant `patent`). Leave the
+# whole section out, and that invariant, for a repo with no private twin. A change
 # whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
 # no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines.
 [patent]
@@ -20,18 +24,19 @@ skip_lockfiles = [
 ]
 private_repo = "acme/app-private"
 
-# How a PR merges (queue.py; Hard rules, Merging). `gate_check` is the CI check that must be green on a head
+# How a PR merges (queue.py; the invariants `merge-verified` and `held`). `gate_check` is the CI check that must be green on a head
 # before its thread may merge it.
 # The verifier passes a PR as `auto` or `review`. The thread merges an `auto` PR once `gate_check` is green on the
 # verified head; a `review` PR waits for the owner. `review_label` on a PR forces `review`. A preapproved item may merge
-# on either pass: an issue carrying one of `preapproved_labels`, or a task added with `--preapproved`. A hold row stops
-# any of them.
+# on either pass: an issue carrying one of `preapproved_labels`, or a task added with `--preapproved`. An issue or PR labelled
+# `hold_label` is never started or merged, whatever else is true.
 [merge]
 gate_check = "ci-gate"
 review_label = "needs-review"
 preapproved_labels = ["preapproved"]
+hold_label = "hold"
 
-# The lines that link a salvage PR to what it replaces (Hard rules `salvage-fixes`): `salvaged_from` names the source
+# The lines that link a salvage PR to what it replaces (the repo guidance `salvage`): `salvaged_from` names the source
 # PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.
 [issues]
 fixes = "Fixes #{issue}"

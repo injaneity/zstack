@@ -13,9 +13,8 @@ const input = call.tool_input ?? {};
 const cwd = typeof call.cwd === "string" ? call.cwd : undefined;
 const tool = String(call.tool_name ?? "");
 const reason =
-	tool === "Bash" ? check("bash", String(input.command ?? ""), cwd) :
-	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input) :
-	check("write", String(input.file_path ?? input.notebook_path ?? ""), cwd);
+	tool === "Bash" ? check(String(input.command ?? ""), cwd) :
+	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input) : undefined;
 if (reason) {
 	console.error(reason);
 	process.exit(2);

@@ -25,7 +25,7 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("queue.py", "hooks/pre-push", *FILES, "config/rules.toml"):
+        for f in ("queue.py", "hooks/pre-push", *FILES, "config/invariants.toml", "config/repos/acme/app/invariants.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
         shutil.copytree(PKG / "vendor", self.pkg / "vendor")
@@ -53,10 +53,9 @@ class Policy(unittest.TestCase):
                          {k: project[k] for k in ("people", "patent", "issues", "review")})
         self.assertEqual(dump["merge"], {"repo": "acme/app", **project["merge"]})
         self.assertEqual(dump["repos"], ["acme/app"])
-        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "holds": "~/zstack/acme/app/hold-prs.txt",
-                                        "labels": [], "unlabelled": True, "all_labels": []})
+        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "labels": [], "unlabelled": True, "all_labels": []})
         self.env["ONIGIRI_ROOT"] = "/somewhere/else/"
-        self.assertEqual([self.run_("get", k).stdout for k in ("host.root", "host.holds")], ["/somewhere/else\n", "/somewhere/else/hold-prs.txt\n"])
+        self.assertEqual(self.run_("get", "host.root").stdout, "/somewhere/else\n")
 
     def second_repo(self):
         other = self.pkg / "config" / "repos" / "acme" / "tool"
@@ -111,12 +110,27 @@ class Policy(unittest.TestCase):
                 self.assertIn(why or "", r.stderr)
 
     def test_a_repos_own_rules_are_added_to_the_stacks(self):
-        (self.pkg / "config" / "repos" / "acme" / "app" / "rules.toml").write_text(
-            'schema = 1\n[[section]]\ntitle = "Project"\n[[section.rule]]\nid = "project-gate"\ntext = "Wait for {merge.gate_check}."\n')
-        out = self.run_("rules").stdout
-        self.assertTrue(out.rstrip().endswith("### Project\n\n- Wait for ci-gate."), out[-200:])
-        self.assertIn("### Work", out)
-        self.assertEqual(self.run_("rules", "project-gate").stdout, "- Wait for ci-gate.\n")
+        mine = self.pkg / "config" / "repos" / "acme" / "app" / "invariants.toml"
+        mine.write_text('schema = 1\n[[invariant]]\nid = "project-gate"\ntext = "Wait for {merge.gate_check}."\nenforced = "ci"\ntest = "x"\n'
+                        '[[guidance]]\nid = "project-tone"\ntext = "Be brief."\n')
+        out = self.run_("invariants").stdout
+        self.assertIn("### In this repo\n\n- Wait for ci-gate.\n", out)
+        self.assertTrue(out.rstrip().endswith("- Be brief."), out[-200:])
+        self.assertIn("### Always", out)
+        self.assertEqual(self.run_("invariants", "project-gate").stdout, "- Wait for ci-gate.\n")
+        mine.unlink()
+        self.assertNotIn("### In this repo", self.run_("invariants").stdout)
+
+    def test_a_repo_with_no_patent_hold_leaves_it_out_and_pushes_freely(self):
+        self.edit('[patent]\nheld_words = ["skyhook", "vaultkey", "sealing"]', '[nopatent]\nheld_words = ["skyhook", "vaultkey", "sealing"]')
+        self.assertIn("unknown key nopatent", self.run_("check").stderr)
+        text = SHIPPED[FILES[1]]
+        start, end = text.index("[patent]"), text.index("# How a PR merges")
+        (self.pkg / FILES[1]).write_text(text[:start] + text[end:])
+        self.assertIn("no key patent.held_words", self.run_("check").stderr)
+        (self.pkg / "config" / "repos" / "acme" / "app" / "invariants.toml").unlink()
+        self.assertEqual(self.run_("check").returncode, 0)
+        self.assertNotIn("patent", json.loads(self.run_("dump").stdout))
 
     def test_a_missing_key_is_named(self):
         r = self.run_("get", "ci.nope")
@@ -152,7 +166,11 @@ class Policy(unittest.TestCase):
             ("labels = []", 'labels = ["a", "a"]', 'repos."acme/app".labels must be a list of distinct label names'),
             ('review_label = "needs-review"', 'review_label = ""', "merge.review_label must be a label name"),
             ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["a", "a"]', "merge.preapproved_labels must be a list of distinct"),
-            ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["needs-review"]', "merge.review_label cannot also be"),
+            ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["needs-review"]', "merge.preapproved_labels must all differ"),
+            ('hold_label = "hold"', 'hold_label = "needs-review"', "merge.preapproved_labels must all differ"),
+            ('hold_label = "hold"', "", "missing merge.hold_label"),
+            ('review_only = ["f-teammate"]', 'review_only = "f-teammate"', "people.review_only must be a list of distinct logins"),
+            ('skip = ["app/app-agents"]', "", "missing people.skip"),
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
@@ -179,7 +197,7 @@ class Policy(unittest.TestCase):
 
     def test_every_reader_refuses_a_config_the_check_rejects(self):
         self.edit("threads = 3", "threads = -1")
-        for args in (["seat", "coding"], ["rules"], ["dump"]):
+        for args in (["seat", "coding"], ["invariants"], ["dump"]):
             with self.subTest(args=args):
                 r = self.run_(*args)
                 self.assertNotEqual(r.returncode, 0, r.stdout)

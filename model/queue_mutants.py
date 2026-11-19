@@ -15,7 +15,7 @@ M = [
     ),
     (
         "merge-a-held-item",
-        "a hold row added after a head passed does not close the gate",
+        "a hold added after a head passed does not close the gate",
         [(' /\\ ~NeedsPerson(i) /\\ i \\notin held\nMerge', ' /\\ ~NeedsPerson(i)\nMerge')],
         "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
@@ -40,8 +40,8 @@ M = [
     ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (
         "start-a-held-item",
-        "an item with a hold row added after it was queued is claimed",
-        [('Claim(m, i) == q[m][i] = "queued" /\\ i \\notin held /\\ First(m, i)', 'Claim(m, i) == q[m][i] = "queued" /\\ First(m, i)')],
+        "an item is claimed while it is held",
+        [('/\\ i \\in Accepts[m] /\\ i \\notin held /\\ First(m, i)', '/\\ i \\in Accepts[m] /\\ First(m, i)')],
         "HeldNeverStarted",
     ),
     ("oldest-first", "the queue ignores priority", [("/\\ i \\notin held /\\ First(m, i)\n", "/\\ i \\notin held\n")], "PriorityOrder"),
@@ -54,7 +54,7 @@ M = [
     (
         "a-late-verdict-is-refused",
         "the verdict of a verifier still running when its thread's turn ended is thrown away",
-        [('Takes(m, i) == q[m][i] \\in {"running", "review"}', 'Takes(m, i) == q[m][i] = "running"')],
+        [('Takes(m, i) == q[m][i] \\in {"running", "waiting"}', 'Takes(m, i) == q[m][i] = "running"')],
         "AVerdictAlwaysLands",
     ),
     (
@@ -66,7 +66,7 @@ M = [
     (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
-        [('Settle(m, i) == q[m][i] = "review" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "review" /\\ FALSE /\\ i \\in merged')],
+        [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],
         LIVE,
     ),
 ]

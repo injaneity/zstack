@@ -1,0 +1,49 @@
+# This repo's own invariants and guidance, added to the stack's (config/invariants.toml in the zstack package). The
+# shape is the same. A repo with no private twin leaves out `patent` here and [patent] in policy.toml.
+schema = 1
+
+[[invariant]]
+id = "patent"
+text = '''A change whose diff touches {patent.held_words:or} is never pushed to public `{merge.repo}`; it goes to the private repo `{patent.private_repo}`. The pre-push hook makes that choice: if it says "patent hold", follow its message and never retry or push elsewhere. This decides only where a change is pushed, so work on {patent.held_words:and} normally.'''
+enforced = "the clone's pre-push hook, `queue.py pre-push`; the guard refuses `--no-verify`"
+test = "tests/test_patent_push.py"
+
+[[invariant]]
+id = "commit-content"
+text = '''Commits add no build output such as `target/`, and a new file carries the SPDX/FSL header its neighbours do.'''
+enforced = "the clone's pre-push hook"
+test = "tests/test_patent_push.py"
+
+[[invariant]]
+id = "text"
+text = '''PR titles use Conventional Commit syntax. Commit messages, PR titles and PR bodies name no model, agent or tool, with no `Co-authored-by` trailer or "Generated with" line for one, and no local machine paths.'''
+enforced = "the guard, on `gh pr create` and `gh pr edit`; the pre-push hook, for trailers"
+test = "tests/rule-guard.test.ts"
+
+[[invariant]]
+id = "issue-close"
+text = '''A `{merge.repo}` issue is closed by hand only when one of our merged PRs fixed it, with a comment naming that PR: `gh issue close <n> -R {merge.repo} --comment "Fixed by #<pr>."`.'''
+enforced = "the guard"
+test = "tests/rule-guard.test.ts"
+
+[[invariant]]
+id = "teammates"
+text = '''A PR or issue by {people.review_only:or} gets a first review and nothing else: never pushed to, rebased, salvaged, rewritten, commented on or closed by us.'''
+enforced = "the guard refuses the close, and the queue's brief for such a review says so; the rest is on the thread"
+test = "tests/rule-guard.test.ts"
+
+[[guidance]]
+id = "text-titles"
+text = '''Use `fix(...)` or `feat(...)`, not `refactor(...)`, when a change touches release-tracked packages. Write the plan and proof as the PR body, and call the checks "the scoped repository checks".'''
+
+[[guidance]]
+id = "salvage"
+text = '''Never salvage or rewrite PRs by {people.me} or bots. A salvage keeps the contributor's commits as authored; if none survive, add `Co-authored-by: <name> <their GitHub noreply or commit email>` for the source PR's author. Its body says `{issues.salvaged_from}` and, on its own line, `{issues.fixes}` for each issue the source PR's own body says it fixes; one it names but does not fix gets `{issues.refs}`.'''
+
+[[guidance]]
+id = "merge-fork-runs"
+text = '''Approve fork workflow runs on `{merge.repo}` that await approval, so CI runs: `gh api -X POST repos/{merge.repo}/actions/runs/<id>/approve`. That is not a review or a merge.'''
+
+[[guidance]]
+id = "merge-reverts"
+text = '''Never revert a PR, except with a revert PR for one of our own that a release check found regressed. Close only one of our own PRs that main or another PR has replaced.'''

@@ -5,14 +5,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" rules --thread"
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" invariants"
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Agent|Task|mcp__.*__delegate_task",
+        "matcher": "Bash|Agent|Task|mcp__.*__delegate_task",
         "hooks": [
           {
             "type": "command",

@@ -210,7 +210,7 @@ async function runSingleAgent(
 	let rolePrompt: string;
 	try {
 		const ids = ruleIds(agent.systemPrompt);
-		const lines = ids.length ? execFileSync("python3", ["-I", QUEUE, "rules", ...ids], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }).split("\n") : [];
+		const lines = ids.length ? execFileSync("python3", ["-I", QUEUE, "invariants", ...ids], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }).split("\n") : [];
 		rolePrompt = expandRules(agent.systemPrompt, (id) => lines[ids.indexOf(id)]);
 	} catch (error) {
 		const why = String((error as { stderr?: unknown }).stderr ?? "").trim() || (error as Error).message;

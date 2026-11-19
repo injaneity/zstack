@@ -1,6 +1,6 @@
 ### Pull requests
 
-Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Hard rules decides who merges it. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR (a review), and is Land's verify step for them. A review launch runs as role `coding`, and the `verifier` does all of its verification.
+Three jobs: **Open** ends every change, and the invariant `merge-verified` decides who merges it. **Land** runs only when asked. **Verify** gives a verdict on someone else's PR (a review), and is Land's verify step for them. A review launch runs as role `coding`, and the `verifier` does all of its verification.
 
 ## Open
 
@@ -24,19 +24,19 @@ Three jobs: **Open** ends every change, and the merge rule in onigiri-mode's Har
 - `## Blast Radius`: who it touches and why that's safe or risky.
 - `## Verification`: one to three real runs and their outcomes. Perf gets one number, before and after.
 
-Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, unless the brief says to propose it first or not to merge yet: then open it as a draft and leave it one. Read `gh pr view` before describing its status. Post the URL. Then follow Hard rules' merge rule. **You own its CI.** When your PR is red at a head you pushed, the orchestrator sends the failing checks back to this thread (at most `fix_attempts` times per PR, `ci.fix_attempts`). Diagnose it as Land step 5 says, fix it, push, and have the verifier check the new head; rerun a cancelled or timed-out job yourself. Put under `questions:` only what needs the owner's call. Where Hard rules let you merge, wait for `gh pr checks` to be green and `gh pr view <pr> --json mergeable` to say `MERGEABLE`, then confirm `state` is `MERGED`.
+Run it through **unslop**. Screenshots go after the sections. Prefer several narrow PRs, each branched from trunk. Open it ready, unless the brief says to propose it first or not to merge yet: then open it as a draft and leave it one. Read `gh pr view` before describing its status. Post the URL. Then follow the invariant `merge-verified`. **You own its CI.** When your PR is red at a head you pushed, the orchestrator sends the failing checks back to this thread (at most `fix_attempts` times per PR, `ci.fix_attempts`). Diagnose it as Land step 5 says, fix it, push, and have the verifier check the new head; rerun a cancelled or timed-out job yourself. Put under `questions:` only what needs the owner's call. Where the invariant `merge-verified` lets you merge, wait for `gh pr checks` to be green and `gh pr view <pr> --json mergeable` to say `MERGEABLE`, then confirm `state` is `MERGED`.
 
 ## Land
 
 1. **Declare the mode.** `check` is one status pass, for "is it green". `threads-only` answers review comments and nothing else. `drive` runs to merge-ready, for "babysit this", and is the default. `land` is drive, then verify, then merge, for "ship it".
 2. **One run owns the PR.** Check no other run or auto-merge is on it.
-3. **Conflicts, then review threads, then CI.** Batch fixes into one push. For a conflict, update the branch the way Hard rules' Merging section says and have the verifier rerun the checks. Re-read the PR after every push.
+3. **Conflicts, then review threads, then CI.** Batch fixes into one push. For a conflict, update the branch by merging main and have the verifier rerun the checks. Re-read the PR after every push.
 4. **Trust the forge, not checkmarks.** `gh pr view <pr> --json mergeable,mergeStateStatus,statusCheckRollup` and `gh pr checks <pr>`. A license bot alone is not green. Poll, don't sleep-loop.
 5. **Classify CI before retrying.** Flake earns one fresh run. An identical second failure is real, so read the logs. A failure outside the diff usually means a stale base, so update from trunk. Only a failure in the diff's own code gets a commit.
 6. **Triage every review comment skeptically.** Check each claim against the code. Fix real ones with a failing test first, and dismiss noise with the disproof on the thread. Escalate security, auth, billing, data, or migrations. Never churn code to quiet a bot. Push before replying. Reply with `gh api --method POST "repos/<owner>/<repo>/pulls/<pr>/comments/<id>/replies" --input <payload.json>`, never by interpolating comment text into a shell command.
 7. **Stop at the human's line.** A maintainer's review is a wait. `drive` ends at mergeable with a clean rollup at the head.
 8. **Verify (`land` only).** Run Verify below, for your own PR or anyone else's, at the current head, and put its verdict in your run report. If the head moves, verify again.
-9. **Merge (`land` only).** In `merge.repo` you merge only the head the verifier passed as `auto`, with the command Hard rules' Merging section gives, and never arm `--auto`; a `review` pass waits for the owner. Anywhere else, `gh pr merge <pr> --squash`, or the repo's method, once checks are green. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge.
+9. **Merge (`land` only).** In `merge.repo` you merge only the head the verifier passed as `auto`, with the command the invariant `merge-verified` gives, and never arm `--auto`; a `review` pass waits for the owner. Anywhere else, `gh pr merge <pr> --squash`, or the repo's method, once checks are green. Confirm with `gh pr view <pr> --json state,mergedAt`, since a queued merge is not a merge.
 
 ## Verify
 
@@ -46,6 +46,6 @@ You own the verdict, not the patch. Don't fix, post, or merge unless asked.
 2. Spawn the `verifier` on the PR's diff at that head, with the behavior it claims as the test plan. It runs the checks and exercises the behavior on its real surface, and runs a failing check at the base before blaming the PR. Green CI and reading the source are not verification.
 3. Write the verdict with its evidence and limits, then cut claims the evidence doesn't support.
 
-`PASS`, `PASS+NOTES` (non-blocking caveats), `FAIL` (a demonstrated defect), or `BLOCKED` (the environment prevents a check). A required check that never ran is not a pass. Pin it to the full 40-character head sha and put it in your run report, naming what ran and what was skipped, as Hard rules' Checks section says.
+`PASS`, `PASS+NOTES` (non-blocking caveats), `FAIL` (a demonstrated defect), or `BLOCKED` (the environment prevents a check). A required check that never ran is not a pass. Pin it to the full 40-character head sha and put it in your run report, naming what ran and what was skipped, as the guidance `checks-owner` says.
 
 **Reply:** the job, the PR URL, the head SHA, what changed or the verdict with its evidence, and whether it merged.

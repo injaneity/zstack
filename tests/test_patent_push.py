@@ -209,9 +209,9 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotEqual(remote, "")
 
-    def test_a_push_that_commits_config_build_output_or_a_trailer_is_refused_with_each_reason(self):
-        for name, text, msg, why in ((".onigiri.json", "{}\n", "x", "scope-no-config"), ("crates/a/target/debug/x", "bin\n", "x", "checks-target"),
-                                     ("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: Claude <noreply@anthropic.com>", "text-no-trailers")):
+    def test_a_push_that_commits_build_output_or_a_trailer_is_refused_with_each_reason(self):
+        for name, text, msg, why in (("crates/a/target/debug/x", "bin\n", "x", "the repo invariant commit-content"),
+                                     ("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: Claude <noreply@anthropic.com>", "the repo invariant text")):
             with self.subTest(why=why), tempfile.TemporaryDirectory() as tmp:
                 g, pub, work, root = self.repo(tmp)
                 g("checkout", "-qb", "onigiri/z", cwd=work)
@@ -256,7 +256,7 @@ class PatentPush(unittest.TestCase):
                 return subprocess.run(["git", "push", "origin", branch], cwd=work, capture_output=True, text=True)
             bare = push("onigiri/a", "src/new.rs", "fn new() {}\n")
             self.assertNotEqual(bare.returncode, 0)
-            self.assertIn("text-spdx", bare.stderr)
+            self.assertIn("lacks the SPDX header", bare.stderr)
             self.assertEqual(push("onigiri/b", "src/ok.rs", "// SPDX-License-Identifier: FSL-1.1-MIT\nfn ok() {}\n").returncode, 0)
             self.assertEqual(push("onigiri/c", "docs/new.md", "# new\n").returncode, 0)
             self.assertEqual(push("onigiri/d", "src/notes.txt", "x\n").returncode, 0)

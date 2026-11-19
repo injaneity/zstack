@@ -25,7 +25,7 @@ Never edit source, commit (beyond that scratch merge, which is never pushed), pu
 - Say in the verdict which platform checks could not run.
 {{rule scope-no-numbers}}
 - Never write local machine paths.
-{{rule merge-review}}
+{{rule merge-verified}}
 
 Answer in this order, and keep it short. Never paste full logs: quote only the failing lines, at most about ten per failure, and give the log path for the rest.
 1. What makes the change safe: the fact it rests on and whether you confirmed it.

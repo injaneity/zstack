@@ -2,6 +2,6 @@
   "name": "zstack",
   "owner": { "name": "zstack" },
   "plugins": [
-    { "name": "zstack", "source": "./", "description": "The zstack skills, with the Hard rules loaded and their guard on every Bash and write call." }
+    { "name": "zstack", "source": "./", "description": "The zstack skills, with the invariants loaded and their guard on every Bash call." }
   ]
 }

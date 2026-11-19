@@ -21,7 +21,7 @@ jobs:
       - name: queue.py parses under 3.9
         run: python3 -m py_compile queue.py
       - name: queue.py reads the config under 3.9 (vendor/tomli)
-        run: ./queue.py check && ./queue.py get merge.gate_check && ./queue.py dump > /dev/null && ./queue.py rules > /dev/null
+        run: ./queue.py check && ./queue.py get merge.gate_check && ./queue.py dump > /dev/null && ./queue.py invariants > /dev/null
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
@@ -46,8 +46,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: scripts parse
         run: python3 -m py_compile queue.py && bash -n bin/everystate && bash -n bin/everystate-java && sh -n hooks/pre-push
-      - name: the config and rules.toml are valid (queue.py check, the one parser)
-        run: ./queue.py check && ./queue.py rules > /dev/null
+      - name: the config and the invariants are valid (queue.py check, the one parser)
+        run: ./queue.py check && ./queue.py invariants > /dev/null
       - name: queue, holds, patent hook, wake, config, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass (no VM starts)

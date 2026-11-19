@@ -29,15 +29,15 @@ test("a verifier whose seat fails refuses; other agents fall back to the parent'
 });
 
 for (const name of ["verifier", "explorer", "designer"]) {
-	test(`${name} gets its own role prompt and not the session's Hard rules`, () => {
+	test(`${name} gets its own role prompt and not the session's invariants`, () => {
 		const prompt = buildChildPrompt(body(name));
 		assert.ok(prompt.startsWith(body(name).trim()));
-		assert.doesNotMatch(prompt, /^##+ (Hard rules|Merging|Patent hold|Scope)$/m);
+		assert.doesNotMatch(prompt, /^##+ (Invariants|Always|In this repo)$/m);
 	});
 }
 
 test("an agent's {{rule <id>}} lines become queue.py's rendering of those rules, and nothing else changes", () => {
-	const render = (id: string) => execFileSync("python3", ["-I", `${root}queue.py`, "rules", id], { encoding: "utf8" });
+	const render = (id: string) => execFileSync("python3", ["-I", `${root}queue.py`, "invariants", id], { encoding: "utf8" });
 	for (const name of ["verifier", "designer"]) {
 		const ids = ruleIds(body(name));
 		assert.ok(ids.length > 0, `${name} quotes a rule`);
@@ -47,5 +47,5 @@ test("an agent's {{rule <id>}} lines become queue.py's rendering of those rules,
 	}
 	assert.equal(expandRules("a\n{{rule x-y}}\nb {{rule z}}\n", () => "- X\n"), "a\n- X\nb {{rule z}}\n");
 	assert.deepEqual(ruleIds("{{rule a-b}}\n {{rule c}}\n{{rule d}}"), ["a-b", "d"]);
-	assert.match(expandRules(body("designer"), render), /^- The patent hold decides only which repo a change is pushed to\. Work on skyhook, vaultkey and sealing normally\.$/m);
+	assert.match(expandRules(body("designer"), render), /^- No invented limits: a restriction must trace to Robin's words or these invariants\./m);
 });

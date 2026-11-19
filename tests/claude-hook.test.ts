@@ -22,11 +22,9 @@ test("the Claude Code hook refuses what the pi extension refuses, with exit 2 an
 	assert.equal(merge.status, 2);
 	assert.match(merge.stderr, /^blocked: `gh pr merge`/);
 	assert.equal(merge.stderr.trim().split("\n").length, 1);
-	for (const tool of ["Write", "Edit", "MultiEdit"]) {
-		const holds = guard({ tool_name: tool, tool_input: { file_path: "~/zstack/hold-prs.txt" }, cwd: "/tmp" });
-		assert.equal(holds.status, 2, tool);
-		assert.match(holds.stderr, /holds file/);
-	}
+	const label = guard({ tool_name: "Bash", tool_input: { command: `gh pr edit 12 --repo ${repo} --remove-label hold` }, cwd: "/tmp" });
+	assert.equal(label.status, 2);
+	assert.match(label.stderr, /only the owner sets/);
 });
 
 test("an allowed call passes in silence", () => {
@@ -47,11 +45,11 @@ test("input the hook cannot read is refused, not waved through", () => {
 	assert.equal(guard("not json").status, 2);
 });
 
-test("the hook covers every tool that runs a command or writes a file, and session start prints the Hard rules", () => {
-	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Agent", "Bash", "Edit", "MultiEdit", "NotebookEdit", "Task", "Write", "mcp__.*__delegate_task"]);
+test("the hook covers every tool that runs a command or starts a helper, and session start prints the invariants", () => {
+	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Agent", "Bash", "Task", "mcp__.*__delegate_task"]);
 	const rules = spawnSync("sh", ["-c", command("SessionStart")], { encoding: "utf8" });
 	assert.equal(rules.status, 0);
-	assert.match(rules.stdout, /^## Hard rules/m);
+	assert.match(rules.stdout, /^## Invariants/m);
 });
 
 test("the plugin and the pi package are one version", () => {

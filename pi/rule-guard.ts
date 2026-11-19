@@ -3,10 +3,7 @@ import { check, release } from "../hooks/host.ts";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", (event, ctx) => {
-		const input = event.input as { command?: unknown; path?: unknown };
-		const reason =
-			event.toolName === "bash" ? check("bash", String(input.command ?? ""), ctx.cwd) :
-			event.toolName === "write" || event.toolName === "edit" ? check("write", String(input.path ?? ""), ctx.cwd) : undefined;
+		const reason = event.toolName === "bash" ? check(String((event.input as { command?: unknown }).command ?? ""), ctx.cwd) : undefined;
 		return reason ? { block: true, reason } : undefined;
 	});
 	pi.on("agent_end", () => release());

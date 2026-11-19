@@ -32,7 +32,7 @@ url = "https://example.invalid/wake"
 key_file = "~/.config/zstack/wake-key"
 
 # The repos this machine works on. `clone` is the checkout a thread works from, and `root` is where this machine keeps
-# that repo's state: the holds file (`<root>/hold-prs.txt`) and the queue. The pickup takes an issue or PR only when it
+# that repo's state: `queue.json` and `events.log`. The queue takes an issue or PR only when it
 # carries one of `labels` (an empty list takes any label), and one that carries none of any machine's labels only
 # when `unlabelled` is true. Give each machine labels that do not overlap, and set `unlabelled` on one machine.
 [repos."acme/app"]

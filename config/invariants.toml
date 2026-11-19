@@ -1,0 +1,76 @@
+# zstack's invariants: what always holds, whatever repo a thread works on. Each [[invariant]] names where it is
+# enforced and the test that breaks it, so none is prose alone. A [[guidance]] entry is judgment that nothing enforces.
+# A repo adds its own in repos/<owner>/<name>/invariants.toml, with the same two kinds of entry.
+# queue.py is the one reader: `queue.py invariants` renders them as a thread reads them, and
+# `queue.py invariants <id>...` only the named ones, which the subagent tool puts where an agents/<name>.md says
+# {{rule <id>}}.
+# An entry never writes a config value out. It names the key in braces and queue.py fills it in: `{merge.repo}` for one
+# value, `{patent.held_words:or}` or `:and` for a list read as a phrase. `queue.py check` refuses an unknown key, a
+# duplicate id and a brace that names no key. Strings are TOML literal strings.
+# Never reword an invariant without the owner's explicit ok.
+schema = 1
+intro = '''These always hold. The guard, the pre-push hook and the queue refuse whatever would break one and say why: follow the message, and never try another way. Where a skill or brief words one differently, this wins.'''
+
+[[invariant]]
+id = "merge-verified"
+text = '''In `{merge.repo}` only the head the verifier passed merges, with `gh pr merge <pr> --squash --match-head-commit <head>`, once `{merge.gate_check}` is green and every check has finished. The verifier passes a head as `auto`, which merges, or `review`, which waits for {people.owner}, as does any PR labelled `{merge.review_label}`. A preapproved item merges on either pass: an issue labelled {merge.preapproved_labels:or}, or a task the orchestrator added as preapproved. A push after a pass needs a new verdict. If you think the change needs a person anyway, do not merge it, and say why.'''
+enforced = "the guard asks `queue.py gate` before it lets the merge command run, and refuses every other merge"
+test = "tests/test_queue.py::Gate"
+
+[[invariant]]
+id = "held"
+text = '''Nothing labelled `{merge.hold_label}` is started or merged, and a draft never merges. Only {people.owner} lifts a hold or readies a draft. To keep your own work from merging, open its PR as a draft.'''
+enforced = "the queue skips a held item and the gate refuses a held or draft PR; the guard refuses `gh pr ready` and any edit of the hold label"
+test = "tests/test_queue.py::Gate"
+
+[[invariant]]
+id = "turn-ends-verified"
+text = '''Your turn does not end while your open PR's head has no verdict. Have the verifier check the head and wait for its answer inside the turn; fix what it finds, push, and have the new head checked. The verifier records its verdict itself with `queue.py verified`, and you never do. Only an answer with no diff skips this.'''
+enforced = "the turn-end hook runs `queue.py release --hook`, which sends the turn back; the queue refuses a verdict from the item's own thread"
+test = "tests/test_queue.py::Release"
+
+[[invariant]]
+id = "one-thread"
+text = '''One item has one thread on one machine. When its turn ends its slot is freed; its worktree stays while its PR is open, and is removed once nothing in it is unpushed.'''
+enforced = "`queue.py claim` and `queue.py release`, model-checked in model/Queue.tla"
+test = "tests/queue-model.sh"
+
+[[invariant]]
+id = "own-controls"
+text = '''A thread never changes its own controls: no force-push or rewrite of a pushed branch, no skipped hook, no moving the queue, no recording a verdict, and no adding or removing the labels `{merge.hold_label}`, `{merge.review_label}` or {merge.preapproved_labels:or}.'''
+enforced = "the guard, on every shell command"
+test = "tests/rule-guard.test.ts"
+
+[[invariant]]
+id = "publish"
+text = '''Nothing is pushed, and no PR is opened or edited, that breaks one of this repo's invariants below.'''
+enforced = "the clone's pre-push hook (`queue.py pre-push`) and the guard's check of `gh pr create` and `gh pr edit`"
+test = "tests/test_patent_push.py"
+
+[[guidance]]
+id = "work-path"
+text = '''Work in `{host.clone}` unless the task names another path.'''
+
+[[guidance]]
+id = "checks-owner"
+text = '''You write the code and a short test plan; verification is the `verifier`'s alone. Your report says only what actually ran, what was skipped, and which platform checks this machine could not run.'''
+
+[[guidance]]
+id = "merge-reruns"
+text = '''Rerun a job that failed for a reason outside the diff, such as a runner network failure, without asking; fix one the diff caused. Only real failures go to {people.owner}.'''
+
+[[guidance]]
+id = "merge-existing"
+text = '''For an existing PR, start from its live head and update by merging main. Commits that came from main are not yours to rewrite.'''
+
+[[guidance]]
+id = "scope-no-numbers"
+text = '''Bench numbers and timings stay out of commits and PR text.'''
+
+[[guidance]]
+id = "change-invariants"
+text = '''Never reword an invariant without {people.owner}'s explicit ok.'''
+
+[[guidance]]
+id = "no-invented-limits"
+text = '''No invented limits: a restriction must trace to {people.owner}'s words or these invariants. If you think one is needed, put it under questions: instead of applying it.'''

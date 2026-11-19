@@ -31,7 +31,7 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 **The T3 move, 16 Nov 2026.** The pi launcher (`bin/pi-run`), the hourly pass, the pickup, their TLA+ models, the host files and the release bench were removed. A scheduled orchestrator thread (`orchestrator/playbook.md`) plans and launches coding threads, and the harness caps how many run. The merge job, the patent hook and the wake moved to `services/`. The shipped config became an example deployment, so the package names no repo.
 
-**One file, 18 Nov 2026.** `bin/queue`, `bin/policy`, `bin/hold-row` and `services/` became `queue.py`. The guard moved to `hooks/` and the pi extensions to `pi/`. The dispatcher's playbook became the `dispatch` skill.
+**One file, 18 Nov 2026.** `bin/queue`, `bin/policy`, `bin/hold-row` and `services/` became `queue.py`. The guard moved to `hooks/` and the pi extensions to `pi/`. The dispatcher's playbook became the `dispatch` skill. The Hard rules became invariants, the stack's in `config/invariants.toml` and each repo's beside its `policy.toml`, and the holds file became a label.
 
 ## Vendored verbatim
 

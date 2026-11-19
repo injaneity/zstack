@@ -14,7 +14,7 @@ PKG = Path(__file__).resolve().parent.parent
 _l = importlib.machinery.SourceFileLoader("policy_under_test", str(PKG / "queue.py"))
 policy = importlib.util.module_from_spec(importlib.util.spec_from_loader(_l.name, _l))
 _l.exec_module(policy)
-POLICY, RULES = policy.load(), policy.rules()
+POLICY, INV = policy.load(), policy.invariants()
 
 VERBATIM = ("skills/statechart/", "skills/create-formal-verification-skill/", "skills/maintain-formal-verification-skill/")
 
@@ -55,88 +55,74 @@ def restated(text, pol, repo=False):
     return hits
 
 
-class Rules(unittest.TestCase):
-    def test_the_rules_have_one_home_and_render_under_one_heading(self):
-        self.assertFalse((PKG / "skills" / "onigiri-mode" / "hard-rules.md").exists())
-        md = policy.render(RULES)
-        self.assertTrue(md.startswith("## Hard rules\n\n"))
-        self.assertEqual([x for x in md.splitlines() if x.startswith("## ")], ["## Hard rules"])
-        self.assertEqual([x for x in md.splitlines() if x.startswith("### ")],
-                         ["### Work", "### Patent hold", "### Commits and PR text", "### Checks", "### Scope", "### Merging",
-                          "### Changing these rules"])
-        self.assertIn("`config/rules.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
+class Invariants(unittest.TestCase):
+    def test_they_have_one_home_per_level_and_render_under_one_heading(self):
+        md = policy.render(INV)
+        self.assertTrue(md.startswith("## Invariants\n\n"))
+        self.assertEqual([x for x in md.splitlines() if x.startswith("#")],
+                         ["## Invariants", "### Always", "### In this repo", "### Judgment, which nothing enforces"])
+        self.assertEqual([r["id"] for r in INV["stack"]], ["merge-verified", "held", "turn-ends-verified", "one-thread", "own-controls", "publish"])
+        self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "commit-content", "text", "issue-close", "teammates"])
+        self.assertIn("`config/invariants.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 
-    def test_no_prose_carries_a_second_copy_of_a_rule(self):
-        texts = [r["text"] for s in RULES["section"] for r in s["rule"]]
+    def test_every_invariant_names_where_it_is_enforced_and_a_test_that_exists(self):
+        for r in INV["stack"] + INV["repo"]:
+            path, _, name = r["test"].partition("::")
+            self.assertTrue((PKG / path).is_file(), r["id"])
+            self.assertIn(name, (PKG / path).read_text(), r["id"])
+            self.assertTrue(r["enforced"].strip(), r["id"])
+        for miss in ("enforced", "test"):
+            row = {"id": "a", "text": "t", "enforced": "e", "test": "x"}
+            del row[miss]
+            with self.assertRaisesRegex(policy.Refused, f"missing the stack's invariant.{miss}"):
+                policy.entries("the stack's", {"invariant": [row]}, POLICY, set())
+
+    def test_no_prose_carries_a_second_copy_of_one(self):
+        texts = [r["text"] for part in INV.values() if isinstance(part, list) for r in part]
         copies = [(f, t[:60]) for f in prose() for t in texts if len(t) > 50 and t in (PKG / f).read_text()]
         self.assertEqual(copies, [])
 
-    def test_an_agent_quotes_rules_that_exist(self):
-        ids = {r["id"] for s in RULES["section"] for r in s["rule"]}
+    def test_an_agent_quotes_only_what_the_stack_has(self):
+        ids = {r["id"] for r in policy.entries("the stack's", policy.read_toml(policy.INVARIANTS), POLICY, set())["invariant"]}
+        ids |= {r["id"] for r in policy.entries("the stack's", policy.read_toml(policy.INVARIANTS), POLICY, set())["guidance"]}
         for f in tracked("agents/*.md"):
             for rid in re.findall(r"^\{\{rule ([a-z-]+)\}\}$", (PKG / f).read_text(), re.M):
-                self.assertIn(rid, ids, f)
+                self.assertIn(rid, ids, f"{f} quotes {rid}, which a repo with no such entry could not render")
 
-    def test_a_coding_session_gets_every_rule_but_the_orchestrators_and_no_one_reads_who_said_it(self):
-        full, thread = policy.render(RULES), policy.render(RULES, thread=True)
-        marked = [r for s in RULES["section"] for r in s["rule"] if r.get("for")]
-        self.assertTrue(marked)
-        for r in marked:
-            self.assertIn(r["text"], full)
-            self.assertNotIn(r["text"], thread)
-        self.assertEqual(len(full.splitlines()) - len(thread.splitlines()), len(marked))
-        for r in (r for s in RULES["section"] for r in s["rule"] if r.get("source")):
-            self.assertNotIn(r["source"], full)
-        self.assertIsNone(re.search(r"\(Robin, \d", full))
-        bad = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": "t", "for": "everyone"}]}]}
-        with self.assertRaisesRegex(policy.Refused, "for is"):
-            policy.validate_rules(bad, POLICY)
-
-    def test_render_of_named_rules_is_one_bullet_each_in_order(self):
-        self.assertEqual(policy.render(RULES, ["scope-no-numbers", "patent-scope"]).splitlines(),
+    def test_named_entries_render_one_bullet_each_in_order(self):
+        self.assertEqual(policy.render(INV, ["scope-no-numbers", "issue-close"]).splitlines(),
                          ["- Bench numbers and timings stay out of commits and PR text.",
-                          "- The patent hold decides only which repo a change is pushed to. Work on skyhook, vaultkey and sealing normally."])
-        with self.assertRaisesRegex(policy.Refused, "no rule nope"):
-            policy.render(RULES, ["nope"])
+                          "- A `acme/app` issue is closed by hand only when one of our merged PRs fixed it, with a comment naming that PR: "
+                          '`gh issue close <n> -R acme/app --comment "Fixed by #<pr>."`.'])
+        with self.assertRaisesRegex(policy.Refused, "no invariant or guidance nope"):
+            policy.render(INV, ["nope"])
 
-    def test_a_rule_names_config_keys_and_the_reader_fills_them_in(self):
-        raw = (PKG / "config" / "rules.toml").read_text()
-        body = "\n".join(x for x in raw.splitlines() if not x.startswith("#"))
-        self.assertEqual([f"{t!r} restates {k}" for k, t in restated(body, POLICY, repo=True)], [])
-        for value in (POLICY["host"]["clone"], POLICY["host"]["holds"]):
-            self.assertNotIn(value, body)
-            self.assertIn(value, policy.render(RULES))
-        full = policy.render(RULES)
+    def test_an_entry_names_config_keys_and_the_reader_fills_them_in(self):
+        for f in ("config/invariants.toml", "config/repos/acme/app/invariants.toml"):
+            body = "\n".join(x for x in (PKG / f).read_text().splitlines() if not x.startswith("#"))
+            self.assertEqual([f"{t!r} restates {k}" for k, t in restated(body, POLICY, repo=True)], [], f)
+        full = policy.render(INV)
         self.assertNotIn("{", full)
-        for want in ("labelled `needs-review`, waits for Robin", "an issue labelled preapproved, or a task", "`Salvaged from #<pr>`",
-                     "`Fixes #<issue>`",
-                     "touches skyhook, vaultkey or sealing is", "(only real failures go to Robin)"):
+        for want in ("waits for Robin, as does any PR labelled `needs-review`", "an issue labelled preapproved, or a task", "`Salvaged from #<pr>`",
+                     "`Fixes #<issue>`", "Nothing labelled `hold` is started or merged", "by f-teammate gets a first review",
+                     "touches skyhook, vaultkey or sealing is", "Only real failures go to Robin."):
             self.assertIn(want, full)
         pol = json.loads(json.dumps(POLICY))
         pol["merge"].update(review_label="stop", preapproved_labels=["go", "ship"])
-        pol["people"]["owner"], pol["patent"]["held_words"] = "Sam", ["vault"]
-        got = policy.render(policy.validate_rules(policy.read_toml(policy.RULES), pol))
-        for want in ("labelled `stop`", "labelled go or ship,", "without Sam's explicit ok", "Work on vault normally."):
-            self.assertIn(want, got)
+        pol["people"].update(owner="Sam", review_only=[])
+        got = policy.render({"intro": "x", "guidance": [], "repo": [], "stack": policy.entries(
+            "x", {"invariant": [{"id": "a", "text": "{merge.review_label} {merge.preapproved_labels:or} {people.owner} {people.review_only:or}",
+                                 "enforced": "e", "test": "t"}]}, pol, set())["invariant"]})
+        self.assertIn("- stop go or ship Sam no one\n", got)
 
-    def test_a_brace_that_names_no_key_is_refused(self):
-        for text, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.preapproved_labels}", "needs a joiner"),
-                          ("see {merge.repo:or}", "not one value"), ("see {merge}", "names no config"),
-                          ("a } b", "names no config")):
-            data = {"schema": 1, "intro": "x", "section": [{"title": "T", "rule": [{"id": "a", "text": text}]}]}
-            with self.subTest(text=text), self.assertRaisesRegex(policy.Refused, why):
-                policy.validate_rules(data, POLICY)
-
-    def test_merging_is_one_rule_per_job(self):
-        ids = [r["id"] for s in RULES["section"] if s["title"] == "Merging" for r in s["rule"]]
-        self.assertEqual(ids[:5], ["merge-tick", "merge-reruns", "merge-fork-runs", "merge-reverts", "merge-closes"])
-        self.assertEqual(policy.render(RULES, ["merge-closes"]), "- Close only one of our own PRs that main or another PR has replaced.\n")
-
-    def test_a_duplicate_id_is_refused(self):
-        dup = json.loads(json.dumps(RULES))
-        dup["section"][0]["rule"].append(dict(dup["section"][0]["rule"][0]))
-        with self.assertRaisesRegex(policy.Refused, "two rules have the id work-path"):
-            policy.validate_rules(dup, POLICY)
+    def test_a_brace_that_names_no_key_and_a_duplicate_id_are_refused(self):
+        row = {"id": "a", "enforced": "e", "test": "t"}
+        for said, why in (("see {merge.nope}", "no key merge.nope"), ("see {merge.preapproved_labels}", "needs a joiner"),
+                          ("see {merge.repo:or}", "not one value"), ("see {merge}", "names no config"), ("a } b", "names no config")):
+            with self.subTest(text=said), self.assertRaisesRegex(policy.Refused, why):
+                policy.entries("x", {"invariant": [{**row, "text": said}]}, POLICY, set())
+        with self.assertRaisesRegex(policy.Refused, "two entries have the id a"):
+            policy.entries("x", {"invariant": [{**row, "text": "t"}], "guidance": [{"id": "a", "text": "t"}]}, POLICY, set())
 
 
 class NoRestatedValues(unittest.TestCase):
@@ -213,18 +199,18 @@ class Parts(unittest.TestCase):
     def test_the_check_catches_a_file_that_names_one(self):
         for gone in ('path.join(PKG, "bin/queue")', "services/wake.py", "bin/policy dump", "extensions/rule-guard/host.ts"):
             self.assertTrue(self.OTHERS.search(gone), gone)
-        self.assertFalse(self.OTHERS.search("#!/bin/sh\npython3 queue.py rules; queue.py hold add; bin/everystate; /opt/homebrew/bin/gh"))
+        self.assertFalse(self.OTHERS.search("#!/bin/sh\npython3 queue.py invariants; queue.py list; bin/everystate; /opt/homebrew/bin/gh"))
 
 
 class NoVerifiedComment(unittest.TestCase):
     def test_nothing_asks_for_the_verified_pr_comment(self):
         rx = re.compile(r"(?<!queue\.py )verified <|verified comment|verified-comment|`verified <sha>`|post (the|its) verdict on the PR", re.I)
-        rendered = policy.render(RULES)
-        hits = [f"config/rules.toml: {m.group(0)}" for m in rx.finditer(rendered)]
+        rendered = policy.render(INV)
+        hits = [f"config/invariants.toml: {m.group(0)}" for m in rx.finditer(rendered)]
         for f in [*prose(), "README.md", "pi/README.md", "hooks/README.md"]:
             hits += [f"{f}: {m.group(0)}" for m in rx.finditer((PKG / f).read_text())]
         self.assertEqual(hits, [])
-        self.assertIn("queue.py verified", next(r["text"] for s in RULES["section"] for r in s["rule"] if r["id"] == "checks-verifier"))
+        self.assertIn("queue.py verified", next(r["text"] for r in INV["stack"] if r["id"] == "turn-ends-verified"))
 
 
 if __name__ == "__main__":
