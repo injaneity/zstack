@@ -44,10 +44,10 @@ Attach(m, i) == Unattached(m, i) /\ threads[i] > 0
   /\ known' = known \cup {i} /\ UNCHANGED <<q, tree, threads, held, work, history>>
 
 Takes(m, i) == q[m][i] \in {"running", "waiting"}
-Push(m, i) == Takes(m, i) /\ threads[i] > 0 /\ i \notin NoTree /\ i \notin merged
+Push(m, i) == Takes(m, i) /\ i \in known /\ i \notin NoTree /\ i \notin merged
   /\ pr' = pr \cup {i} /\ status' = [status EXCEPT ![i] = "none"] /\ stale' = stale \cup {i}
   /\ UNCHANGED <<q, launch, held, up, merged, by, okAtMerge, history>>
-Verdict(m, i, v) == Takes(m, i) /\ i \in known /\ i \in pr /\ i \notin merged
+Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
   /\ status' = [status EXCEPT ![i] = v] /\ stale' = stale \ {i}
   /\ UNCHANGED <<q, launch, held, up, pr, merged, by, okAtMerge, history>>
 
@@ -67,7 +67,7 @@ Leave(m, i) ==
   /\ UNCHANGED <<launch, held, work, startedHeld, jumped, crowded>>
 TurnEnd(m, i) == q[m][i] = "running" /\ i \in known /\ (up \/ i \in NoTree) /\ ~Unverified(i)
   /\ endedUnverified' = (endedUnverified \/ Unverified(i)) /\ Leave(m, i)
-Freed(m, i) == q[m][i] = "running" /\ i \in known /\ UNCHANGED endedUnverified /\ Leave(m, i)
+Freed(m, i) == q[m][i] = "running" /\ threads[i] > 0 /\ UNCHANGED endedUnverified /\ Leave(m, i)
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<launch, held, work, history>>
 
 Flip == up' = ~up /\ UNCHANGED <<q, launch, held, pr, status, stale, merged, by, okAtMerge, history>>
@@ -81,14 +81,14 @@ Next ==
   \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i)
   \/ Flip
 
-Fair == \A m \in Machines, i \in Items : WF_vars(Launch(m, i)) /\ WF_vars(Attach(m, i)) /\ WF_vars(Freed(m, i)) /\ WF_vars(Settle(m, i))
+Fair == \A m \in Machines, i \in Items : WF_vars(Launch(m, i)) /\ WF_vars(Freed(m, i)) /\ WF_vars(Settle(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
 OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "none"}) <= 1
 CapHolds == ~crowded
 OneThreadPerItem == \A i \in Items : threads[i] <= 1
 AThreadWorksInTheQueuesTree == \A i \in Items : threads[i] > 0 => i \in tree
-AVerdictNeedsARecordedThread == \A i \in Items : status[i] # "none" => i \in known
+AnUnrecordedThreadPublishesNothing == \A i \in Items : i \in pr => i \in known
 HeldNeverStarted == ~startedHeld
 PriorityOrder == ~jumped
 ThreadMergesOnlyAVerifiedAllowedHead == \A i \in Items : by[i] = "thread" => okAtMerge[i]

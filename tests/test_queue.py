@@ -249,29 +249,28 @@ class Launch(Case):
         git("commit", "-q", "--allow-empty", "-m", "local only", cwd=clone)
         path = PLANT(self.pol, "a")
         self.assertEqual(path, os.path.realpath(self.root / "trees" / "a"))
-        self.assertEqual(git("log", "-1", "--format=%s %D", cwd=path).strip(), "two HEAD -> zstack/a, origin/trunk, origin/HEAD")
+        self.assertEqual(git("log", "-1", "--format=%s %D", cwd=path).strip(), "two HEAD -> zstack-a, origin/trunk, origin/HEAD")
         with self.assertRaisesRegex(queue.Refused, "trees/a is already there, and may hold someone's work: move it aside"):
             PLANT(self.pol, "a")
         self.trees["a"] = path
         self.add("a")
         queue.claim(self.pol, "a")
         self.assertEqual((queue.release(self.pol, "a")["state"], os.path.exists(path)), ("done", False))
-        self.assertEqual(git("branch", "--list", "zstack/*", cwd=clone), "")
-        git("branch", "zstack/b", cwd=clone)
-        with self.assertRaisesRegex(queue.Refused, "on a new branch zstack/b from origin/trunk: if that branch is there, it may hold work"):
+        self.assertEqual(git("branch", "--list", "zstack-*", cwd=clone), "")
+        git("branch", "zstack-b", cwd=clone)
+        with self.assertRaisesRegex(queue.Refused, "on a new branch zstack-b from origin/trunk: if that branch is there, it may hold work"):
             PLANT(self.pol, "b")
-        self.assertEqual(git("log", "-1", "--format=%s", "zstack/b", cwd=clone).strip(), "local only")
+        self.assertEqual(git("log", "-1", "--format=%s", "zstack-b", cwd=clone).strip(), "local only")
         git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone", cwd=clone)
-        self.assertEqual(git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")).strip(), "HEAD -> zstack/c, origin/trunk, origin/HEAD")
+        self.assertEqual(git("log", "-1", "--format=%D", cwd=PLANT(self.pol, "c")).strip(), "HEAD -> zstack-c, origin/trunk, origin/HEAD")
         with patch.object(queue, "git", lambda *a, **k: (0, "origin/trunk\n") if "rev-parse" in a or "set-head" in a else (1, "")):
             with self.assertRaisesRegex(queue.Refused, "git fetch origin failed in .*, so the worktree would start from an old origin/trunk"):
                 PLANT(self.pol, "d")
         with patch.object(queue, "git", lambda *a, **k: (1, "")):
             with self.assertRaisesRegex(queue.Refused, "cannot read the default branch of origin"):
                 PLANT(self.pol, "d")
-        for bad in ("a..b", "a.", "a.lock", ".a"):
-            with self.assertRaisesRegex(queue.Refused, "that can name a branch"):
-                self.add(bad)
+        for odd in (".app-1", "a..b", "a.lock"):
+            self.assertIn(f"HEAD -> zstack-{odd.replace('.', '-')},", git("log", "-1", "--format=%D", cwd=PLANT(self.pol, odd)))
 
     def test_the_brief_tells_the_thread_how_to_report(self):
         self.add("a", "Fix the parser")

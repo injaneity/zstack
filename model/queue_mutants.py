@@ -51,16 +51,16 @@ M = [
         "AThreadWorksInTheQueuesTree",
     ),
     (
-        "a-launched-thread-is-never-recorded",
-        "an item whose thread never records itself at its session start holds its slot for good",
-        [("Attach(m, i) == Unattached(m, i) /\\ threads[i] > 0", "Attach(m, i) == Unattached(m, i) /\\ FALSE /\\ threads[i] > 0")],
+        "an-unrecorded-thread-is-never-freed",
+        "an item whose thread never recorded itself holds its slot for good, because only a recorded thread is freed",
+        [('Freed(m, i) == q[m][i] = "running" /\\ threads[i] > 0', 'Freed(m, i) == q[m][i] = "running" /\\ i \\in known')],
         LIVE,
     ),
     (
-        "a-verdict-before-the-thread-is-recorded",
-        "a verdict is recorded while the queue cannot tell the item's thread from its verifier",
-        [("Verdict(m, i, v) == Takes(m, i) /\\ i \\in known /\\ i \\in pr", "Verdict(m, i, v) == Takes(m, i) /\\ i \\in pr")],
-        "AVerdictNeedsARecordedThread",
+        "an-unrecorded-thread-pushes",
+        "a thread the queue has not recorded pushes, so nothing tells it from its verifier or knows it is read-only",
+        [("Push(m, i) == Takes(m, i) /\\ i \\in known", "Push(m, i) == Takes(m, i) /\\ threads[i] > 0")],
+        "AnUnrecordedThreadPublishesNothing",
     ),
     ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (
@@ -73,7 +73,7 @@ M = [
     (
         "no-release",
         "an item whose thread's turn ended holds its slot for good",
-        [('Freed(m, i) == q[m][i] = "running" /\\ i', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ i'),
+        [('Freed(m, i) == q[m][i] = "running" /\\ threads', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ threads'),
          ('TurnEnd(m, i) == q[m][i] = "running" /\\ i', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ i')],
         LIVE,
     ),

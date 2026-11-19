@@ -50,8 +50,9 @@ except ModuleNotFoundError:
 CONFIG = os.path.abspath(os.environ.get("ZSTACK_CONFIG") or os.path.join(PKG, "config"))
 INVARIANTS = os.path.join(PKG, "config", "invariants.toml")
 THREAD_VAR = "T3CODE_THREAD_ID"
-ID = r"(?!.*\.\.)(?!.*\.(lock)?$)[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
+ID = r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
 SHA = r"[0-9a-f]{40}"
+OURS = "zstack-"
 ENV = {**{k: v for k, v in os.environ.items() if k != "GIT_NO_LAZY_FETCH"},
        "GH_CONFIG_DIR": os.environ.get("GH_CONFIG_DIR") or os.path.expanduser("~/.config/gh"),
        "PATH": os.pathsep.join([os.path.expanduser("~/.local/bin"), "/usr/local/bin", "/opt/homebrew/bin",
@@ -585,7 +586,7 @@ def first(pol, q):
 
 def add(pol, ident, said, priority, preapproved=False):
     if not re.fullmatch(ID, ident) or not said.strip():
-        raise Refused("an id of letters, digits, . _ - that can name a branch, and a task on stdin")
+        raise Refused("an id of letters, digits, . _ - and a task on stdin")
 
     def go(q):
         for part in ("tasks", "running", "waiting"):
@@ -643,8 +644,9 @@ def plant(pol, ident):
     base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")[1].strip()
     if git("-C", clone, "fetch", "--quiet", "origin", base.split("/", 1)[1])[0]:
         raise Refused(f"git fetch origin failed in {clone}, so the worktree would start from an old {base}")
-    if git("-C", clone, "worktree", "add", "--quiet", "-b", f"zstack/{ident}", path, base)[0]:
-        raise Refused(f"cannot make the worktree {path} on a new branch zstack/{ident} from {base}: if that branch is there, it may hold work")
+    branch = OURS + re.sub(r"[^A-Za-z0-9_-]", "-", ident)
+    if git("-C", clone, "worktree", "add", "--quiet", "-b", branch, path, base)[0]:
+        raise Refused(f"cannot make the worktree {path} on a new branch {branch} from {base}: if that branch is there, it may hold work")
     return os.path.realpath(path)
 
 
@@ -804,7 +806,7 @@ def tidy(pol, it, whole):
     ours = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")[1].strip()
     if git("-C", clone, "worktree", "remove", path)[0]:
         return False
-    if ours.startswith("zstack/"):
+    if ours.startswith(OURS):
         git("-C", clone, "branch", "-D", ours)
     return True
 

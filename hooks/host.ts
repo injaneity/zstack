@@ -29,19 +29,32 @@ function config(): { merge: { hold_label: string; review_label: string; preappro
 }
 const owned = mergeOwned(dump);
 const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labels] : null))(config()?.merge);
-function readonly(): boolean | undefined {
-	const thread = process.env[THREAD_VAR];
-	if (!thread) return false;
+type Item = { thread: string | null; readonly: boolean; worktree: string | null };
+function running(): Item[] | undefined {
 	const here = config()?.host.repos;
 	if (!here) return undefined;
 	try {
-		return here.some((repo) => {
+		return here.flatMap((repo) => {
 			const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } }));
-			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => v.thread === thread && v.readonly));
+			return [...Object.values(q.running), ...Object.values(q.waiting)] as Item[];
 		});
 	} catch {
 		return undefined;
 	}
+}
+function unrecorded(items: Item[]): boolean {
+	const cwd = fs.realpathSync(process.cwd()) + path.sep;
+	return items.some((v) => v.thread === null && v.worktree !== null && cwd.startsWith(v.worktree + path.sep));
+}
+function readonly(): boolean | undefined {
+	const thread = process.env[THREAD_VAR];
+	if (!thread) return false;
+	let items = running();
+	if (items && unrecorded(items)) {
+		attach();
+		items = running();
+	}
+	return !items || unrecorded(items) ? undefined : items.some((v) => v.thread === thread && v.readonly);
 }
 function readText(file: string, dir: string | undefined): string | undefined {
 	try {
@@ -82,6 +95,8 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 	}
 	const agent = ROLES[String(input.role ?? "")];
 	if (!agent) return undefined;
+	if (readonly() === undefined)
+		return `blocked: the queue could not say whether this thread is recorded for its item, so the ${agent} does not start: its session would be taken for the item's thread.`;
 	let seats: { model: string }[];
 	try {
 		const entry = JSON.parse(dump()).models[agent];

@@ -87,6 +87,35 @@ test("a machine with its own config directory gets its own rules and its own gua
 	}
 });
 
+test("a thread the queue has not recorded is recorded by its first guarded call, and nothing is published or delegated while it cannot be", () => {
+	const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "zstack-attach-")));
+	try {
+		const [base, tree] = [path.join(dir, "root"), path.join(dir, "root", "trees", "a")];
+		fs.mkdirSync(path.join(dir, "machines"));
+		fs.mkdirSync(tree, { recursive: true });
+		fs.cpSync(`${root}config/repos`, path.join(dir, "repos"), { recursive: true });
+		const machine = fs.readFileSync(`${root}config/machines/default.toml`, "utf8").replace(/^root = .*$/m, `root = "${base}"`);
+		assert.match(machine, new RegExp(`root = "${base}"`));
+		fs.writeFileSync(path.join(dir, "machines", "default.toml"), machine);
+		const item = { kind: "task", n: null, preapproved: false, readonly: false, task: "x", title: "x", thread: null, worktree: tree, pr: null, at: "2026-01-01T00:00:00Z" };
+		const file = path.join(base, "queue.json");
+		fs.writeFileSync(file, JSON.stringify({ running: { a: item }, waiting: {}, tasks: {}, verdicts: {}, done: [] }));
+		const run = (call: unknown, thread: string) =>
+			spawnSync("sh", ["-c", command("PreToolUse")], { input: JSON.stringify(call), encoding: "utf8", cwd: tree, env: { ...process.env, ZSTACK_CONFIG: dir, T3CODE_THREAD_ID: thread } });
+		const push = { tool_name: "Bash", tool_input: { command: "git push origin x" }, cwd: tree };
+		const model = spawnSync("python3", ["-I", `${root}queue.py`, "seat", "verifier"], { encoding: "utf8" }).stdout.trim().split(" ")[1];
+		const helper = { tool_name: "mcp__t3-code__delegate_task", tool_input: { role: "review", mode: "wait", target: { model } }, cwd: tree };
+		assert.equal(run(push, "t-1").status, 0);
+		assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).running.a.thread, "t-1");
+		assert.equal(run(helper, "t-1").status, 0);
+		fs.writeFileSync(file, "not json");
+		assert.match(run(push, "t-1").stderr, /or the queue could not be read/);
+		assert.match(run(helper, "t-1").stderr, /could not say whether this thread is recorded for its item, so the verifier does not start/);
+	} finally {
+		fs.rmSync(dir, { recursive: true });
+	}
+});
+
 test("a config directory that is not there refuses every guarded call instead of falling back to the package's", () => {
 	const env = { ZSTACK_CONFIG: "/nonexistent/zstack-config" };
 	assert.equal(guard({ tool_name: "Bash", tool_input: { command: `gh pr merge 12 --repo ${repo}` }, cwd: "/tmp" }, env).status, 2);
