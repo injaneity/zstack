@@ -642,11 +642,9 @@ def plant(pol, ident):
     clone, path = os.path.realpath(os.path.expanduser(pol["host"]["clone"])), os.path.join(root(pol), "trees", ident)
     if os.path.lexists(path):
         raise Refused(f"{path} is already there, and may hold someone's work: move it aside")
-    if git("-C", clone, "remote", "set-head", "origin", "--auto")[0]:
-        raise Refused(f"cannot read the default branch of origin from {clone} (network or remote?)")
+    if git("-C", clone, "fetch", "--quiet", "origin")[0] or git("-C", clone, "remote", "set-head", "origin", "--auto")[0]:
+        raise Refused(f"cannot fetch origin and read its default branch from {clone} (network or remote?), so the worktree would start stale")
     base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")[1].strip()
-    if git("-C", clone, "fetch", "--quiet", "origin", base.split("/", 1)[1])[0]:
-        raise Refused(f"git fetch origin failed in {clone}, so the worktree would start from an old {base}")
     if git("-C", clone, "worktree", "add", "--quiet", "-b", branch(ident), path, base)[0]:
         raise Refused(f"cannot make the worktree {path} on a new branch {branch(ident)} from {base}: if that branch is there, it may hold work")
     return os.path.realpath(path)
