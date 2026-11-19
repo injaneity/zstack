@@ -130,16 +130,19 @@ class Policy(unittest.TestCase):
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
         self.assertIn("has no git user.email", self.run_("check").stderr)
         subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
-        self.assertEqual(self.run_("check").returncode, 0)
+        self.assertEqual(self.run_("check").returncode, 0 if self.clones(clone) else 1)
+
+    def clones(self, where):
+        (where / "a").write_text("x")
+        cmd = ["cp", "-c", "a", "b"] if sys.platform == "darwin" else ["cp", "--reflink=always", "a", "b"]
+        return subprocess.run(cmd, cwd=where, capture_output=True).returncode == 0
 
     def test_check_refuses_a_warm_list_where_the_clone_cannot_clone_by_reference(self):
         clone = self.pkg.parent / "app"
         subprocess.run(["git", "init", "-q", str(clone)], check=True)
         subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
         self.edit('clone = "~/work/app"', f'clone = "{clone}"')
-        (clone / "a").write_text("x")
-        can = subprocess.run(["cp", "-c", "a", "b"] if sys.platform == "darwin" else ["cp", "--reflink=always", "a", "b"], cwd=clone,
-                             capture_output=True).returncode == 0
+        can = self.clones(clone)
         r = self.run_("check")
         self.assertEqual(r.returncode, 0 if can else 1, r.stderr)
         if not can:
