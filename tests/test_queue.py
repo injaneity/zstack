@@ -274,6 +274,20 @@ class Gate(Case):
         queue.verified(self.pol, "b", 40, H1, "review")
         self.assertEqual((self.shut(), len(self.file()["verdicts"])), ("PR 40 does not merge: it needs a person's review", 1))
 
+    def test_a_verdict_goes_when_its_pr_has_no_item_and_a_pr_no_item_owns_never_merges(self):
+        self.passed()
+        self.pr_open(41)
+        queue.verified(self.pol, "a", 41, H1, "auto")
+        self.assertEqual((sorted(self.file()["verdicts"]), self.shut(), self.shut(41)),
+                         (["41"], f"PR 40 does not merge: the verifier has not passed head {H1}", None))
+        stale = {**self.file(), "verdicts": {"40": {"head": H1, "result": "auto"}, "41": {"head": H1, "result": "auto"}}}
+        (self.root / "queue.json").write_text(json.dumps(stale))
+        self.assertEqual(self.shut(), f"PR 40 does not merge: the verifier has not passed head {H1}")
+        self.forge.prs[41]["state"] = "MERGED"
+        with patch.object(queue, "branch_pr", return_value=41):
+            self.assertEqual(queue.release(self.pol, "a")["state"], "done")
+        self.assertEqual(self.file()["verdicts"], {})
+
     def test_a_preapproved_item_merges_on_a_review_pass_or_the_review_label_but_never_on_a_fail(self):
         self.passed(said="review", preapproved=True)
         self.assertIsNone(self.shut())

@@ -215,7 +215,8 @@ function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
 		const m = w[i].match(/^(--label|--add-label|--remove-label)(?:=(.*))?$/s) ?? w[i].match(/^(-l)(.+)?$/s);
 		if (m) named.push(...(m[2] ?? w[++i] ?? "").split(","));
 	}
-	const api = w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/labels(\/|$|\?)/.test(a));
+	const api = w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/labels(\/|$|\?)/.test(a) || /(^|[^a-z])labels(\[[^\]]*\])?\s*=/i.test(a) || /"labels"\s*:/i.test(a)
+		|| /\b(addLabelsToLabelable|removeLabelsFromLabelable|clearLabelsFromLabelable|labelIds|createLabel|updateLabel|deleteLabel)\b/.test(a));
 	const whole = g1 === "label" && ["delete", "edit", "create", "clone"].includes(g2 ?? "");
 	if (whole) named.push(...operands(w.slice(3), GH_VALUE_OPTS));
 	if (!named.length && !api) return undefined;

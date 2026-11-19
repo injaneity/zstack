@@ -696,6 +696,7 @@ def verified(pol, ident, pr, head, result):
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
         it["pr"] = pr
+        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
         q["verdicts"][str(pr)] = {"head": head, "result": result}
         if result == "fail":
             return {"id": ident, "pr": pr, "say": "its thread fixes the findings and has the new head checked"}, True
@@ -710,7 +711,8 @@ def gate(pol, pr, head):
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}")
-        why = blocked(pol, owner_of(q, pr), q["verdicts"].get(str(pr)), live)
+        it = owner_of(q, pr)
+        why = blocked(pol, it, q["verdicts"].get(str(pr)), live) if it else f"the verifier has not passed head {head}"
         if why:
             raise Refused(f"PR {pr} does not merge: {why}")
         return {"merge": pr, "head": head}, False
@@ -776,6 +778,7 @@ def outcome(pol, q, key):
         live = pr_view(pol, it["pr"]) if it["pr"] else None
         other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
         if other and other != it["pr"]:
+            q["verdicts"].pop(str(it["pr"]), None)
             it["pr"], live = other, pr_view(pol, other)
         if live and live["state"] == "OPEN":
             why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
@@ -786,8 +789,8 @@ def outcome(pol, q, key):
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
-    q["verdicts"].pop(str(it["pr"]), None)
     q["done"].append(key)
+    q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
     return "done", why
 
 

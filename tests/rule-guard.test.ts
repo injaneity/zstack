@@ -196,10 +196,17 @@ test("the labels the queue reads are the owner's: a thread never adds, removes o
 		"gh pr create -R acme/app --title 'fix: x' --body y -l needs-review", "gh issue create -R acme/app --title x --label preapproved", "gh pr edit 3 --add-label $L",
 		"gh label delete hold -R acme/app --yes", "gh label edit hold --name later", "gh label create preapproved", "gh pr -R acme/app edit 3 --remove-label hold",
 		"gh api -X DELETE repos/acme/app/issues/3/labels/hold", "gh api repos/acme/app/issues/3/labels -f 'labels[]=preapproved'",
-		"gh api -X PUT repos/acme/app/issues/3/labels --input l.json", "bash -c 'gh issue edit 3 --remove-label hold'"])
+		"gh api -X PUT repos/acme/app/issues/3/labels --input l.json", "bash -c 'gh issue edit 3 --remove-label hold'",
+		"gh api -X PATCH repos/acme/app/issues/12 -f labels[]=preapproved", "gh api -X PATCH repos/acme/app/issues/12 -F 'labels[0]=bug'",
+		`gh api -X PATCH repos/acme/app/issues/12 --raw-field '{"labels": []}'`,
+		`gh api graphql -f query='mutation { addLabelsToLabelable(input: {labelableId: "I", labelIds: ["L"]}) { clientMutationId } }'`,
+		`gh api graphql -f query='mutation { removeLabelsFromLabelable(input: {labelableId: "I", labelIds: ["L"]}) { clientMutationId } }'`,
+		`gh api graphql -f query='mutation { updateIssue(input: {id: "I", labelIds: []}) { clientMutationId } }'`])
 		blocked(c, inApp);
 	assert.match(checkBash("gh pr edit 3 --remove-label hold", OWNED, host, inApp) ?? "", /the label `hold`, which only the owner sets \(the invariant own-controls\)/);
 	for (const c of ["gh pr edit 3 --add-label bug", "gh issue list --label hold", "gh pr list -l needs-review", "gh label list", "gh api repos/acme/app/issues/3/labels",
+		"gh api -X PATCH repos/acme/app/issues/12 -f title=labels", "gh api -X PATCH repos/injaneity/zstack/issues/12 -f labels[]=preapproved",
+		`gh api graphql -f query='{ repository(owner:"acme",name:"app"){ labels(first:5){ nodes { name } } } }'`,
 		"gh pr edit 3 -R injaneity/zstack --remove-label hold", "gh pr edit 3 --title 'fix: hold the lock'"])
 		allowed(c, inApp);
 	assert.match(checkBash("gh pr edit 3 --add-label bug", OWNED, { ...host, labels: null }, inApp) ?? "", /the labels the queue reads are unknown/);
