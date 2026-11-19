@@ -130,34 +130,7 @@ class Policy(unittest.TestCase):
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
         self.assertIn("has no git user.email", self.run_("check").stderr)
         subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
-        self.assertEqual(self.run_("check").returncode, 0 if self.clones(clone) else 1)
-
-    def clones(self, where):
-        (where / "a").write_text("x")
-        cmd = ["cp", "-c", "a", "b"] if sys.platform == "darwin" else ["cp", "--reflink=always", "a", "b"]
-        return subprocess.run(cmd, cwd=where, capture_output=True).returncode == 0
-
-    def test_check_refuses_a_warm_list_where_the_clone_cannot_clone_by_reference(self):
-        clone = self.pkg.parent / "app"
-        subprocess.run(["git", "init", "-q", str(clone)], check=True)
-        subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
-        self.edit('clone = "~/work/app"', f'clone = "{clone}"')
-        can = self.clones(clone)
-        r = self.run_("check")
-        self.assertEqual(r.returncode, 0 if can else 1, r.stderr)
-        if not can:
-            self.assertIn("is on a filesystem that cannot clone by reference", r.stderr)
-            self.assertIn("so worktree.warm would copy", r.stderr)
-        self.assertEqual([x for x in os.listdir(clone / ".git") if x.startswith("tmp")], [])
-        text = SHIPPED[FILES[1]]
-        start, end = text.index("# What a new worktree starts with"), text.index("# What a review of an outside")
-        (self.pkg / FILES[1]).write_text(text[:start] + text[end:])
-        self.assertIn("no key worktree.warm", self.run_("check").stderr)
-        mine = self.pkg / "config" / "repos" / "acme" / "app" / "invariants.toml"
-        said = mine.read_text()
-        mine.write_text(said[:said.index('[[invariant]]\nid = "warm"')] + said[said.index('[[invariant]]\nid = "text"'):])
         self.assertEqual(self.run_("check").returncode, 0)
-        self.assertNotIn("worktree", json.loads(self.run_("dump").stdout))
 
     def test_a_repo_with_no_patent_hold_leaves_it_out_and_pushes_freely(self):
         self.edit('[patent]\nheld_words = ["skyhook", "vaultkey", "sealing"]', '[nopatent]\nheld_words = ["skyhook", "vaultkey", "sealing"]')
@@ -203,12 +176,6 @@ class Policy(unittest.TestCase):
             ("[people]", "[people", "is not TOML"),
             ('me = "octo"', 'me = ""', "people.me must be a login"),
             ('held_words = ["skyhook", "vaultkey", "sealing"]', "held_words = []", "patent.held_words must be a non-empty list"),
-            ('warm = ["node_modules"]', "warm = []", "worktree.warm must be a non-empty list of distinct paths inside the repo"),
-            ('warm = ["node_modules"]', 'warm = ["/abs/node_modules"]', "worktree.warm must be"),
-            ('warm = ["node_modules"]', 'warm = ["web/../../out"]', "worktree.warm must be"),
-            ('warm = ["node_modules"]', 'warm = [".git/hooks"]', "worktree.warm must be"),
-            ('warm = ["node_modules"]', 'warm = ["a", "a"]', "worktree.warm must be"),
-            ('warm = ["node_modules"]', 'warm = "node_modules"', "worktree.warm must be"),
             ('held_words = ["skyhook", "vaultkey", "sealing"]', 'held_words = ["tele.port"]', "patent.held_words must be"),
             ('"Cargo.lock", "package-lock.json"', '"a/Cargo.lock", "package-lock.json"', "patent.skip_lockfiles must be"),
             ('private_repo = "acme/app-private"', 'private_repo = "acme/app"', "patent.private_repo must differ"),

@@ -43,6 +43,12 @@ enforced = "`queue.py pass` records an item as running before it starts its thre
 test = "model/Queue.tla::OneThreadPerItem"
 
 [[invariant]]
+id = "warm"
+text = '''A new worktree starts with what git ignores in the clone, such as installed packages and build output, shared copy-on-write: cloned by reference, never copied. Your session start says what was shared and what was not.'''
+enforced = "the session-start hook runs `queue.py warm`, which clones by reference or says why not, and never copies"
+test = "tests/test_warm.py"
+
+[[invariant]]
 id = "own-controls"
 text = '''A thread never changes its own controls: no force-push or rewrite of a pushed branch, no skipped hook, no moving the queue or touching its file, no recording a verdict, and no adding or removing the labels `{merge.hold_label}`, `{merge.review_label}` or {merge.preapproved_labels:or}.'''
 enforced = "the guard, on every shell command"

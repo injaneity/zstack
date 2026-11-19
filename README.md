@@ -39,7 +39,7 @@ Config has three layers, and `queue.py` is the one reader of all of them (`check
 
 - **The stack** ships in this package: `config/invariants.toml`.
 - **A machine** is `machines/<hostname>.toml`: the models its roles run on, its thread cap, where it sends a wake, and each repo it works on with its clone, its state folder and the labels this machine picks up. `ZSTACK_MACHINE` names another file; `machines/default.toml` is the fallback.
-- **A repo** is `repos/<owner>/<name>/`. `policy.toml` holds its values: the gate check, the labels that hold, force a review or preapprove, who "we" are, whose PRs are review-only or skipped, the patent hold's words if it has one, the paths a new worktree shares from the clone copy-on-write if it has any, and whether an outside PR is salvaged or sent back. `invariants.toml` holds its own invariants and judgment, which name those values by key.
+- **A repo** is `repos/<owner>/<name>/`. `policy.toml` holds its values: the gate check, the labels that hold, force a review or preapprove, who "we" are, whose PRs are review-only or skipped, the patent hold's words if it has one, and whether an outside PR is salvaged or sent back. `invariants.toml` holds its own invariants and judgment, which name those values by key.
 
 `config/` ships an example of the last two: a machine working on `acme/app`. Keep your own in a private repo with the same `machines/` and `repos/` folders, clone it on each machine, and point `ZSTACK_CONFIG` at it. A missing or invalid one stops every reader. The repo in play is `ZSTACK_REPO`, else the `origin` of the directory a command runs in, else the machine's only repo. `queue.py` reads and gates PRs only in `merge.repo`; a PR to this package never goes through it, and the owner merges it.
 

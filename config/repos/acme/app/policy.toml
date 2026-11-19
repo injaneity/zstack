@@ -43,13 +43,6 @@ fixes = "Fixes #{issue}"
 refs = "Refs #{issue}"
 salvaged_from = "Salvaged from #{pr}"
 
-# What a new worktree starts with (queue.py warm, from the session-start hook; the repo invariant `warm`). Each path
-# in `warm` is shared from the clone copy-on-write: cloned by reference, so it costs no disk until one side writes, and
-# never copied. Only a path git ignores is shared. List only what is safe to share: a folder of installed packages, not one whose files point back at
-# the clone, as a Python virtualenv does. Leave the whole section out, and that invariant, to start every worktree bare.
-[worktree]
-warm = ["node_modules"]
-
 # What a review of an outside contributor's PR does with a fixable one: `salvage` it as a new PR of ours that credits
 # them, or `request-changes` on theirs.
 [review]

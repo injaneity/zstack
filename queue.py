@@ -9,7 +9,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -38,8 +37,8 @@ USAGE = (
     "  queue.py get <key>               one config value by dotted key (`merge.repo`): a string or number as is, else JSON\n"
     "  queue.py dump                    the merged config as JSON\n"
     "  queue.py invariants [<id>...]    the invariants as markdown, as a thread reads them; ids name single ones\n"
-    "  queue.py warm                    in a new worktree of the clone: share the paths `worktree.warm` names from the\n"
-    "                                   clone copy-on-write, and say which\n"
+    "  queue.py warm                    in a new worktree of the clone: share what git ignores in the clone, copy-on-write,\n"
+    "                                   and say what\n"
     "The machine:\n"
     "  queue.py update                  bring this checkout to origin/main, and the installed plugin with it\n"
     "  queue.py pre-push <remote> <url> the clone's pre-push hook: the repo's publishing invariants"
@@ -89,10 +88,6 @@ def words(v):
     return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
 
 
-def inside(v):
-    return bool(v) and not v.startswith(("/", "~")) and not any(part in ("", ".", "..", ".git") for part in v.split("/"))
-
-
 def repo(v):
     return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
 
@@ -137,7 +132,6 @@ REPO = {
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5], "one line ending in ` #{pr}`, with no other placeholder"),
     },
     "review": {"outside": (lambda v: v in ("salvage", "request-changes"), "salvage or request-changes")},
-    "worktree": {"warm": (lambda v: names(v) and bool(v) and all(inside(x) for x in v), "a non-empty list of distinct paths inside the repo")},
 }
 
 
@@ -179,7 +173,7 @@ def validate_machine(data):
 
 
 def validate_repo(name, data):
-    sections(name, data, REPO, optional=("patent", "worktree"))
+    sections(name, data, REPO, optional=("patent",))
     if "patent" in data and name.lower() == data["patent"]["private_repo"].lower():
         raise Refused("patent.private_repo must differ from merge.repo")
     m = data["merge"]
@@ -382,13 +376,6 @@ def config_command(argv):
             who = subprocess.run(["git", "-C", clone, "config", "--get", "user.email"], capture_output=True, text=True).stdout
             if os.path.isdir(clone) and not who.strip():
                 raise Refused(f"{clone} has no git user.email, so a commit there carries this machine's address: set one the forge knows")
-            if "worktree" in load(name) and git_dirs(clone)[1]:
-                with tempfile.TemporaryDirectory(dir=git_dirs(clone)[1]) as d:
-                    open(os.path.join(d, "a"), "w").close()
-                    try:
-                        share(os.path.join(d, "a"), os.path.join(d, "b"))
-                    except OSError as e:
-                        raise Refused(f"{clone} is on a filesystem that cannot clone by reference ({e}), so worktree.warm would copy") from None
         return print(f"queue: {CONFIG} is valid for {', '.join(every)} on {os.path.basename(machine_file())[:-5]}") or 0
     if argv[:1] == ["invariants"]:
         return print(render(invariants(), argv[1:]), end="") or 0
@@ -427,25 +414,29 @@ def git_dirs(where):
 
 def warm(pol):
     (top, common), (clone, its) = git_dirs("."), git_dirs(os.path.expanduser(pol["host"]["clone"]))
-    if "worktree" not in pol or not top or top == clone or common != its:
+    if not top or top == clone or common != its:
         return []
-    said = []
-    for path in pol["worktree"]["warm"]:
+    rc, out = git("-C", clone, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    shared, said = [], []
+    for path in sorted(x.rstrip("/") for x in out.split("\0") if x) if not rc else []:
         src, dst = os.path.join(clone, path), os.path.join(top, path)
-        if not os.path.lexists(src) or os.path.lexists(dst):
+        if os.path.lexists(dst):
             continue
         try:
             if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
                 raise OSError("a link on the way to it leads elsewhere")
+            if any(os.path.lexists(os.path.join(src, x)) for x in ("pyvenv.cfg", ".git")):
+                raise OSError("it is a Python virtualenv or a checkout, whose files point back at where they are")
             folder = os.path.isdir(src) and not os.path.islink(src)
             if subprocess.run(["git", "-C", top, "check-ignore", "-q", "--", path + "/" * folder], capture_output=True).returncode:
                 raise OSError("git does not ignore it here")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             share(src, dst)
-            said.append(f"{path} is shared from the clone copy-on-write, as it was there")
+            shared.append(path)
         except OSError as e:
-            said.append(f"{path} could not be shared from the clone ({e}), so this worktree starts without it")
-    return said
+            said.append(f"{path} is not shared from the clone: {e}")
+    more = f" and {len(shared) - 20} more" if len(shared) > 20 else ""
+    return [f"shared from the clone copy-on-write, as they were there: {', '.join(shared[:20])}{more}"] * bool(shared) + said
 
 
 def sha():
