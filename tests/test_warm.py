@@ -120,7 +120,7 @@ class Warm(unittest.TestCase):
         calls, real = [], subprocess.run
         with patch.object(subprocess, "run", lambda cmd, **k: calls.append(cmd[:4]) or real(cmd, **k)):
             said = self.warm(self.tree)
-        self.assertTrue(said[0].endswith("-cache19 and 7 more, which `git status --short --ignored` lists"))
+        self.assertTrue(said[0].endswith("-cache19 and 7 more, which `git ls-files -oi --exclude-standard --directory` lists"))
         self.assertEqual((len(said), len(self.copied)), (1, 27))
         self.assertEqual([c[3] for c in calls if c[0] == "git" and c[3] in ("ls-files", "check-ignore")], ["ls-files", "check-ignore"])
         self.assertEqual(len([c for c in calls if c[0] == "git"]), 4)
