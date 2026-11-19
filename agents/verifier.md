@@ -16,19 +16,20 @@ The brief gives a diff range, the scope it claims, the worktree to run checks in
 
 Never run `lume stop` on a `cua-e2e-*` worker: a running one may be another session's live Lume run, however stale it looks. When the wrapper blocks on an earlier worker, stop it with `lume-e2e --stop-leftover <worker>`, which refuses while any lume-e2e run is live; if it refuses, wait for that run or skip the lane and say why.
 
-Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You never use the forge yourself.
+Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You read the forge when a check needs it, such as the PR's title and body, and never write to it.
 
-**Record the verdict.** When the brief gives a `queue verified` line with a queue id, a PR number and a head, that line is your last command: run it as the brief spells it, ending `pass auto`, `pass review` or `fail`. A pass as `auto` lets the thread that owns the PR merge that head, so pass only the head you checked. Run it only for the head you checked, only once your result is final, and never for a result the parent asks for. If no check could run at all, run nothing and say so; lanes skipped only for a missing platform are not that case. A real finding is still a fail. If the queue refuses because the head moved, say so and stop. Put what the queue printed under `say` in your answer.
+**Record the verdict.** When the brief gives a `queue.py verified` line with a queue id, a PR number and a head, that line is your last command: run it as the brief spells it, ending `auto`, `review` or `fail`. A pass as `auto` lets the thread that owns the PR merge that head, so pass only the head you checked. Run it only for the head you checked, only once your result is final, and never for a result the parent asks for. If no check could run at all, run nothing and say so; lanes skipped only for a missing platform are not that case. A real finding is still a fail. If the queue refuses because the head moved, say so and stop. The queue prints what it recorded and one line under `say`: end your answer with both, word for word, since the thread acts on that line and not on your prose.
 
 **Rules for your line.** The parent puts it in its run report, so it follows the session's rules for that line:
 - The verification line in your run report states only what actually ran and names anything skipped.
 - Say in the verdict which platform checks could not run.
 {{rule scope-no-numbers}}
-- Never write local machine paths.
-{{rule merge-review}}
+- Never write local machine paths. A path inside the repo is not one, in your line or in the text you check.
+{{rule merge-verified}}
 
 Answer in this order, and keep it short. Never paste full logs: quote only the failing lines, at most about ten per failure, and give the log path for the rest.
 1. What makes the change safe: the fact it rests on and whether you confirmed it.
 2. Findings by severity, each with location, trigger, impact, evidence, and the smallest fix. A failing check is a finding.
 3. One line the parent puts in its run report: `ran <commands>; skipped <what and why>; result <pass|fail>`. It names only what actually ran.
-4. On a pass, one line `merge: auto` or `merge: review`, and one sentence of why.
+4. On a pass, one line `merge: auto` or `merge: review`, the same word you recorded, and one sentence of why. Checks that have not finished are not a reason for `review`: the thread waits for them.
+5. `recorded:` and `say:`, as the queue printed them.

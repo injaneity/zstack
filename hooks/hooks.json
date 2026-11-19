@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/bin/policy\" rules --thread"
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" invariants"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release --hook > /dev/null; [ \"$?\" = 3 ] && exit 2; exit 0"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" release --hook > /dev/null; [ \"$?\" = 3 ] && exit 2; exit 0"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release > /dev/null 2>&1; exit 0",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" release > /dev/null 2>&1; exit 0",
             "timeout": 60
           }
         ]
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/queue\" release > /dev/null 2>&1; exit 0",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" release > /dev/null 2>&1; exit 0",
             "timeout": 60
           }
         ]

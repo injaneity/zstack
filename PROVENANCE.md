@@ -11,7 +11,7 @@ Forked from pstack 0.15.36 at commit `23ab063af02bb9b9c97936b0563879dd6bf21a05`.
 
 ## Subagents
 
-The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `docs/SUBAGENT.md` has its source, what was cut, and its changes.
+The `subagent` tool is vendored from pi 1.4.0's example extension and replaced pi-subagent-manager. `pi/README.md` has its source, what was cut, and its changes.
 
 The explorer, designer and verifier agents were dropped in 0.2.0, when no session ever spawned them and a cold reviewer was the only agent. They came back, cheaper and with simple gates, when Zane chose a split by role: the main session builds, an optional `explorer` reads, two `designer`s compete on deep or new work only, and a `verifier` replaces that reviewer, reviewing the diff and running the matching verify skill. Explorer and verifier run on a cheaper model than the builder. pstack's other subagents (implementer, arena, swarm, per-principle readers) stay out because they cost more tokens than they save.
 
@@ -31,6 +31,8 @@ In 0.3.0 `onigiri-mode` became the one copy for a pi session and the chat orches
 
 **The T3 move, 16 Nov 2026.** The pi launcher (`bin/pi-run`), the hourly pass, the pickup, their TLA+ models, the host files and the release bench were removed. A scheduled orchestrator thread (`orchestrator/playbook.md`) plans and launches coding threads, and the harness caps how many run. The merge job, the patent hook and the wake moved to `services/`. The shipped config became an example deployment, so the package names no repo.
 
+**One file, 18 Nov 2026.** `bin/queue`, `bin/policy`, `bin/hold-row` and `services/` became `queue.py`. The guard moved to `hooks/` and the pi extensions to `pi/`. The dispatcher's playbook became the `dispatch` skill. The Hard rules became invariants, the stack's in `config/invariants.toml` and each repo's beside its `policy.toml`, and the holds file became a label. The header and build-output checks at push went to the target repo's own CI, and the author lookup on closes became read-only review items.
+
 ## Vendored verbatim
 
 `statechart`, `create-formal-verification-skill` and `maintain-formal-verification-skill` were added after 0.3.0 on request. They come from pstack 0.15.36 in cursor/plugins at commit `ae5650febf4320793844c12c4adaa937f417f8da`, not the `PINNED_COMMIT` fork base, and are copied with `statechart/scripts/`. The statechart's own test suite and corpus (`scripts/test/`, and the `fast-check` dev dependency in its `package.json`) are left upstream at that commit: no zstack CI step or session ran them. Same MIT license and copyright as the rest of pstack.
@@ -39,7 +41,7 @@ They differ from that commit in three places, all for the bundled checker (`bin/
 
 ## Vendored Python
 
-`vendor/tomli` is tomli 2.2.1, the TOML parser CPython 3.11 adopted as `tomllib`. The `.py` files and `LICENSE` are copied byte for byte from the PyPI sdist `tomli-2.2.1.tar.gz` (sha256 `cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff`), and `py.typed` is left out. MIT, Taneli Hukkinen. `bin/policy` imports `tomllib` and falls back to it on python3 3.9 and 3.10, which the mini's `/usr/bin/python3` is. It is vendored, not pip-installed, so a host needs no install step and every host parses the config with the same code. To update it, copy `src/tomli/*.py` and `LICENSE` from a newer sdist and change the version and sha here.
+`vendor/tomli` is tomli 2.2.1, the TOML parser CPython 3.11 adopted as `tomllib`. The `.py` files and `LICENSE` are copied byte for byte from the PyPI sdist `tomli-2.2.1.tar.gz` (sha256 `cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff`), and `py.typed` is left out. MIT, Taneli Hukkinen. `queue.py` imports `tomllib` and falls back to it on python3 3.9 and 3.10, which the mini's `/usr/bin/python3` is. It is vendored, not pip-installed, so a host needs no install step and every host parses the config with the same code. To update it, copy `src/tomli/*.py` and `LICENSE` from a newer sdist and change the version and sha here.
 
 ## Dropped
 

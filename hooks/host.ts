@@ -3,8 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { holdsPaths, isHoldsPath } from "./holds.ts";
-import { checkBash, checkWrite, type Host, mergeOwned, reviewOnlyLogins, THREAD_VAR } from "./rules.ts";
+import { checkBash, checkWrite, type Host, mergeOwned, THREAD_VAR } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -19,27 +18,31 @@ function originRepo(dir: string): string | null | undefined {
 	}
 }
 
-const POLICY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/policy");
-const dump = () => execFileSync("python3", ["-I", POLICY, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
-function configuredHolds(): string | undefined {
+const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../queue.py");
+const dump = () => execFileSync("python3", ["-I", QUEUE, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+function config(): { merge: { hold_label: string; review_label: string; preapproved_labels: string[] }; host: { repos: string[] } } | null {
 	try {
-		return JSON.parse(dump()).host.holds;
+		return JSON.parse(dump());
 	} catch {
-		return undefined;
+		return null;
 	}
 }
-const holds = holdsPaths(process.env, configuredHolds());
 const owned = mergeOwned(dump);
-function authorOf(repo: string, n: number): string | undefined {
+const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labels] : null))(config()?.merge);
+function readonly(): boolean | undefined {
+	const thread = process.env[THREAD_VAR];
+	if (!thread) return false;
+	const here = config()?.host.repos;
+	if (!here) return undefined;
 	try {
-		const login = execFileSync("gh", ["api", `repos/${repo}/issues/${n}`, "--jq", ".user.login"], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-		return /^[\w.\[\]/-]+$/.test(login) ? login : undefined;
+		return here.some((repo) => {
+			const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } }));
+			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => v.thread === thread && v.readonly));
+		});
 	} catch {
 		return undefined;
 	}
 }
-
-const reviewOnly = () => reviewOnlyLogins(holds.map((p) => { try { return fs.readFileSync(home(p), "utf8"); } catch { return undefined; } }));
 function readText(file: string, dir: string | undefined): string | undefined {
 	try {
 		return fs.readFileSync(path.resolve(dir ?? ".", home(file)), "utf8");
@@ -48,7 +51,6 @@ function readText(file: string, dir: string | undefined): string | undefined {
 	}
 }
 
-const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/queue");
 function gate(repo: string, pr: number, head: string): string | undefined {
 	try {
 		execFileSync("python3", [QUEUE, "gate", String(pr), head], { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } });
@@ -64,7 +66,7 @@ export function release(): void {
 	} catch {}
 }
 
-const host: Host = { gate, repoAt: originRepo, isHolds: (p) => isHoldsPath(p, holds), authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
+const host: Host = { gate, labels, readonly, repoAt: originRepo, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 
@@ -73,7 +75,7 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 		const type = String(input.subagent_type ?? "");
 		const role = type.replace(/^zstack:/, "");
 		return type.startsWith("zstack:") || Object.values(ROLES).includes(type)
-			? `blocked: the ${role} runs on its own model, not as a subagent of this one. Start it with the delegate tool, on the model \`bin/policy seat ${role}\` prints.`
+			? `blocked: the ${role} runs on its own model, not as a subagent of this one. Start it with the delegate tool, on the model \`queue.py seat ${role}\` prints.`
 			: undefined;
 	}
 	const agent = ROLES[String(input.role ?? "")];
@@ -93,6 +95,6 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 		: `blocked: the ${agent} runs on ${seats.map((x) => x.model).join(" or ")}, not ${typeof model === "string" ? model : "the model this thread runs on"}. Pass it as target.model.`;
 }
 
-export function check(tool: "bash" | "write", target: string, cwd: string | undefined, ready: boolean): string | undefined {
-	return tool === "bash" ? checkBash(target, owned, host, cwd, ready, owned) : checkWrite(target, host, cwd);
+export function check(tool: "bash" | "write", target: string, cwd: string | undefined): string | undefined {
+	return tool === "bash" ? checkBash(target, owned, host, cwd, owned) : checkWrite(target);
 }

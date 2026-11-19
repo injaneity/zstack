@@ -11,11 +11,11 @@ license: MIT
 ## Who is reading
 
 - **A coding thread** does the work. Every section below applies. Its model is `models.coding` in the config.
-- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `bin/queue` queues, frees the slot of a thread that died, and relays what comes back. Its instructions are `dispatch/playbook.md` in the package, not this skill.
+- **The dispatcher** is one scheduled thread per machine. It never edits repo files, runs builds or tests, or pushes. It launches the coding threads `queue.py` names, frees the slot of a thread that died, and relays what comes back. Its instructions are the `dispatch` skill in the package, not this skill.
 
-## Hard rules
+## Invariants
 
-The rules are `config/rules.toml` in the zstack package, and nowhere else. The plugin or launcher that started you put `bin/policy rules --thread` in your context, so you already have them. The values the code enforces are the config; this skill and its playbook name those keys and never restate their values.
+The invariants are `config/invariants.toml` in the zstack package, plus the target repo's own `invariants.toml` in the config, and nowhere else. The plugin or launcher that started you put `queue.py invariants` in your context, so you already have them. A hook or the guard refuses whatever would break one. What nothing enforces is the judgment list in your brief. The values the code enforces are the config; this skill and its playbook name those keys and never restate their values.
 
 ## Work
 
@@ -31,21 +31,21 @@ Your model needs no instruction in how to read code, design or debug. These line
 
 ## Subagents
 
-The three delegates are the role files in the package's `agents/`. Each runs on the provider and model the machine file's `[models]` gives its name, never on a model you pick. Start one with the delegate tool your harness has: T3 Code's `delegate_task`, or pi's `subagent` tool (`docs/SUBAGENT.md`). The `verifier` never runs on your own model: without its seat it returns an error and nothing runs.
+The three delegates are the role files in the package's `agents/`. Each runs on the provider and model the machine file's `[models]` gives its name, never on a model you pick. Start one with the delegate tool your harness has: T3 Code's `delegate_task`, or pi's `subagent` tool (`pi/README.md`). The `verifier` never runs on your own model: without its seat it returns an error and nothing runs.
 
 | Role | Agent | Step | Only when |
 |---|---|---|---|
 | Explore | `explorer`, 2 to 4 at once | A question, research, any step | Required for a complex question: one that spans many files or services, needs a broad repo, code, log or PR search, or follows a cross-cutting flow. A simple one (one module, one function, a narrow question) stays inline with no explorers. When in doubt, take the simple path. |
 | Design | `designer`, twice (`variant` 1 and 2) | A change, before building | Deep risk or new work only. Small fixes skip it. Give both the same brief, pick one plan, and graft in the best of the other. |
-| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Every diff and every done claim that rests on one, and a review of someone else's PR, as Hard rules' Checks says. |
+| Verify | `verifier` | Before you call the work done or open a PR, and after a push that changes more than wording | Every diff and every done claim that rests on one, and a review of someone else's PR, as the invariant `turn-ends-verified` says. |
 
 - **Fan out in one message.** For a complex question, split it into 2 to 4 angles, each a distinct slice, and spawn every explorer in a single message, one delegate call per angle. Then synthesize yourself. Explorers return file pointers and short summaries, never pasted file contents, and you keep only those summaries.
-- **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. For a queue item, the brief also carries the `queue verified` line your own brief gives you, with the PR number and the head filled in, and the verifier runs it. Wait for the verifier inside your turn: when your turn ends, the queue frees your slot and reports what happened, so a turn that ends while the verifier still runs is reported as unfinished. A fix round's brief carries only its findings and the new range, never your logs or reasoning.
+- **Hand off to the verifier.** Its brief carries the diff range, the worktree, the scope, the host's platform limits, and your short test plan: what to run, which lanes, and the repro a fix must now pass. It returns pass or fail with only the failing lines. For a queue item, the brief also carries the `queue.py verified` line your own brief gives you, with the PR number and the head filled in, and the verifier runs it. Wait for the verifier inside your turn: when your turn ends, the queue frees your slot and reports what happened, so a turn that ends while the verifier still runs is reported as unfinished. A fix round's brief carries only its findings and the new range, never your logs or reasoning.
 - **Nowhere else.** Do everything else yourself.
 - **The brief stands alone.** A child sees only the brief, never this conversation. Give it the diff range, the scope, what is out of scope, and the shape of the answer. Pass long inputs as file paths.
 - **A report is evidence, not a verdict.** Check it before a decision rests on it.
 - **No nesting.** A delegate starts no delegate of its own, and a brief never asks one to start an agent from its shell. Without the tool or the role, do that step yourself and say so.
-- **The gate is the verifier's.** For a queue item, the verifier's own `queue verified` call is what lets the PR merge. You never run it, and never ask the verifier for a result. Elsewhere its pass is evidence for your run report.
+- **The gate is the verifier's.** For a queue item, the verifier's own `queue.py verified` call is what lets the PR merge. You never run it, and never ask the verifier for a result. Elsewhere its pass is evidence for your run report.
 
 ## Autonomy
 
@@ -67,5 +67,5 @@ Editing a skill is a change like any other. Match the neighbouring SKILL.md file
 
 The target repo's `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` wins over this section. Read it before the first change. Where it says nothing:
 
-- No admin bypass. Force-pushes follow Hard rules' Scope and Merging.
+- No admin bypass, and no force-push: the invariant `own-controls`.
 - Never print secrets or tokens. Never commit local agent config.

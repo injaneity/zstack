@@ -1,5 +1,4 @@
-import { check, checkDelegate } from "../extensions/rule-guard/host.ts";
-import { readyAllowed } from "../extensions/rule-guard/rules.ts";
+import { check, checkDelegate } from "./host.ts";
 
 let text = "";
 for await (const chunk of process.stdin) text += chunk;
@@ -14,9 +13,9 @@ const input = call.tool_input ?? {};
 const cwd = typeof call.cwd === "string" ? call.cwd : undefined;
 const tool = String(call.tool_name ?? "");
 const reason =
-	tool === "Bash" ? check("bash", String(input.command ?? ""), cwd, readyAllowed()) :
+	tool === "Bash" ? check("bash", String(input.command ?? ""), cwd) :
 	tool === "Agent" || tool === "Task" || tool.endsWith("delegate_task") ? checkDelegate(tool.endsWith("delegate_task") ? "delegate" : tool, input) :
-	check("write", String(input.file_path ?? input.notebook_path ?? ""), cwd, false);
+	check("write", String(input.file_path ?? input.notebook_path ?? ""), cwd);
 if (reason) {
 	console.error(reason);
 	process.exit(2);

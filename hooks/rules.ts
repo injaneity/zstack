@@ -1,6 +1,5 @@
 import * as path from "node:path";
-import { fold } from "./holds.ts";
-import { base, commands, program } from "./shell.ts";
+import { commands, program } from "./shell.ts";
 
 export type Owned = ReadonlySet<string> | null;
 
@@ -14,44 +13,19 @@ export function mergeOwned(dump: () => string): Owned {
 	}
 }
 
-export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
-	return env === "1";
-}
-
 export interface Host {
 	repoAt(dir: string): string | null | undefined;
-	isHolds(p: string): boolean;
+	labels?: readonly string[] | null;
 	ghRepo?: string;
-	authorOf?(repo: string, n: number): string | undefined;
-	reviewOnly?(): ReadonlySet<string> | null;
+	readonly?(): boolean | undefined;
 	readText?(file: string, dir: string | undefined): string | undefined;
 	thread?: string;
 	gate?(repo: string, pr: number, head: string): string | undefined;
 }
-const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
-
-export function reviewOnlyLogins(texts: (string | undefined)[]): ReadonlySet<string> | null {
-	if (!texts.some((t) => t !== undefined)) return null;
-	const out = new Set<string>();
-	for (const line of texts.join("\n").split("\n")) {
-		const f = line.split("|").map((x) => x.trim());
-		if (!line.trimStart().startsWith("#") && f[0] === "review-only" && f[1]) out.add(f[1].toLowerCase());
-	}
-	return out;
-}
+const NO_HOST: Host = { repoAt: () => undefined };
 
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
-const HOLDS = "hold-prs.txt";
-const HOLDS_WAY = "Only the owner edits hold-prs.txt (Hard rules, Work). To relay the owner's explicit call, use `bin/hold-row add '<row>; <owner> <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
-
-function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
-	const named = fold(base(w)) === HOLDS;
-	if (remote || /[$`*?[{]/.test(w) || /^~[^/]/.test(w)) return named;
-	const abs = /^[/~]/.test(w) ? w : dir && `${dir}/${w}`;
-	return abs === undefined ? named : host.isHolds(abs);
-}
-
 interface Cmd { words: string[]; raw: string[]; dirs: (string | undefined)[]; at: (string | undefined)[]; remote: boolean }
 const REMOTE = new Set(["ssh", "vm"]);
 
@@ -112,10 +86,21 @@ function simpleCommands(line: string, dirs: (string | undefined)[], remote = fal
 	return out;
 }
 
-function gitPush(w: string[], raw: string[]): string | undefined {
+function pushAt(w: string[]): number {
 	let i = 1;
 	while (i < w.length && w[i].startsWith("-")) i += GIT_VALUE_OPTS.has(w[i]) ? 2 : 1;
-	if (w[i] !== "push") return undefined;
+	return w[0] === "git" && w[i] === "push" ? i : -1;
+}
+
+function gitPush(w: string[], raw: string[]): string | undefined {
+	let end = 1;
+	while (end < w.length && w[end].startsWith("-")) end += GIT_VALUE_OPTS.has(w[end]) ? 2 : 1;
+	const global = w.slice(1, end), env = raw.slice(0, raw.length - w.length);
+	if (w[0] === "git" && (global.some((a, k) => (/^alias\./i.test(a) && (global[k - 1] === "-c" || global[k - 1] === "--config-env")) || /^(-c|--config-env=?)alias\./i.test(a))
+		|| env.some((a) => /^GIT_CONFIG_(COUNT|KEY_\d+)=/.test(a))))
+		return "it defines a git alias or config for this one command, which the guard cannot read";
+	const i = pushAt(w);
+	if (i < 0) return undefined;
 	if ([...raw.slice(0, raw.length - w.length), ...w.slice(1, i)].some((a) => /core\.hookspath/i.test(a)))
 		return "it overrides core.hooksPath, which skips the pre-push hook";
 	for (const a of w.slice(i + 1)) {
@@ -184,12 +169,12 @@ function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string 
 	return pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
 }
 
-function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
+function ghOwned(c: Cmd, owned: Owned, host: Host): string | undefined {
 	const w = c.words;
 	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
-	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (bin/policy dump failed)";
+	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (queue.py dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
-	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || GRAPHQL_READY.test(a)))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => /^--input(=|$)/.test(a) || /^[\w-]+=@/.test(a)))
 		return `a GraphQL query read from a file or stdin, which the guard cannot read, while ${who}`;
@@ -200,7 +185,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 		return `\`gh ${g1}${g1 === "alias" ? ` ${g2}` : ""}\`: the guard cannot read what an alias or extension runs, and ${who}`;
 	const act = help ? undefined :
 		g1 === "pr" && g2 === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
-		g1 === "pr" && g2 === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
+		g1 === "pr" && g2 === "ready" && !flag("--undo") ? "`gh pr ready` (a draft is a hold)" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
 	if (!act) return undefined;
 	if (!owned) return `${act} while ${who}`;
@@ -209,7 +194,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	const hit = repos.find((r) => owned.has(r as string));
 	if (!hit) return undefined;
 	const how = "`gh pr merge <pr> --squash --match-head-commit <the head the verifier passed>`";
-	if (act !== "`gh pr merge`" || !host.gate || repos.length !== 1) return `${act} in ${hit}: a PR there merges only with ${how} (Hard rules, Merging)`;
+	if (act !== "`gh pr merge`" || !host.gate || repos.length !== 1) return `${act} in ${hit}: a PR there merges only with ${how} (the invariant merge-verified)`;
 	const rest = w.slice(3), seen: Record<string, string[]> = { pr: [], head: [], repo: [], squash: [] };
 	let odd = w[1] !== "pr" || w[2] !== "merge" || c.raw.length !== w.length;
 	for (let i = 0; i < rest.length; i++) {
@@ -227,21 +212,60 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	return host.gate(hit, Number(pr), head);
 }
 
-const QUEUE_OPEN = new Set(["release", "gate", "list", "next"]);
+const QUEUE_DISPATCHER = new Set(["add", "claim"]);
+
+function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
+	const w = c.words;
+	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
+	const mine = host.labels?.map((x) => x.toLowerCase());
+	const named: string[] = [];
+	const [g1, g2] = operands(w.slice(1), GH_VALUE_OPTS);
+	const edits = (g1 === "pr" || g1 === "issue") && (g2 === "create" || g2 === "edit");
+	for (let i = 2; edits && i < w.length; i++) {
+		const m = w[i].match(/^(--label|--add-label|--remove-label)(?:=(.*))?$/s) ?? w[i].match(/^(-l)(.+)?$/s);
+		if (m) named.push(...(m[2] ?? w[++i] ?? "").split(","));
+	}
+	const api = w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/labels(\/|$|\?)/.test(a) || /(^|[^a-z])labels(\[[^\]]*\])?\s*=/i.test(a) || /"labels"\s*:/i.test(a)
+		|| /\b(addLabelsToLabelable|removeLabelsFromLabelable|clearLabelsFromLabelable|labelIds|createLabel|updateLabel|deleteLabel)\b/.test(a));
+	const whole = g1 === "label" && ["delete", "edit", "create", "clone"].includes(g2 ?? "");
+	if (whole) named.push(...operands(w.slice(3), GH_VALUE_OPTS));
+	if (!named.length && !api) return undefined;
+	const hit = api ? "a label write through `gh api`, which the guard cannot read" :
+		!mine ? "a label change while the labels the queue reads are unknown (queue.py dump failed)" :
+		named.find((x) => /[$`*?{]/.test(x) || mine.includes(x.trim().toLowerCase()));
+	if (!hit) return undefined;
+	const repos = owned ? targetRepos(c, host) : [undefined];
+	if (!repos.includes(undefined) && !repos.some((r) => owned!.has(r as string))) return undefined;
+	return api || !mine ? hit : `it adds, removes or changes the label \`${hit.trim()}\`, which only the owner sets (the invariant own-controls)`;
+}
 export const THREAD_VAR = "T3CODE_THREAD_ID";
 
-function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
+const GH_READS = new Set(["view", "list", "status", "checks", "diff", "checkout", "download", "watch", "clone"]);
+const GH_READ_GROUPS = new Set(["search", "auth", "status", "help", "version", "completion", "browse"]);
+
+function writes(w: string[]): boolean {
+	if (pushAt(w) >= 0) return true;
+	if (w[0] !== "gh") return false;
+	const [g1, g2] = operands(w.slice(1), GH_VALUE_OPTS);
+	return g1 === "api" ? ghApiWrites(w) : g1 !== undefined && !GH_READ_GROUPS.has(g1) && !GH_READS.has(g2 ?? "");
+}
+
+function threadOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
+	if (writes(c.words) && host.readonly && host.readonly() !== false)
+		return "a push or a GitHub write from a read-only item: this thread is a first review of a review-only teammate's PR (or the queue could not be read), so it pushes and posts nothing and puts every comment in its report";
 	const at = cwd === undefined ? undefined : host.repoAt(cwd);
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
+	if (c.raw.some((a) => /queue\.json/.test(a)))
+		return "it names the queue's file: a thread reads the queue with `queue.py list` and never touches the file";
 	if (c.raw.some((a) => a === THREAD_VAR || a.startsWith(`${THREAD_VAR}=`)))
 		return `it sets or clears ${THREAD_VAR}: the queue tells an item's own thread from its verifier by it`;
-	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
+	const w = c.words, i = w.findIndex((a) => /(^|\/)queue\.py$/.test(a));
 	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
-		return `\`queue verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
-	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined)
-		return "`queue release <id>` from a coding thread: a thread releases only its own item, with `queue release`";
-	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && w[i + 1] !== "verified" && !QUEUE_OPEN.has(w[i + 1]))
-		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue list\``;
+		return `\`queue.py verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
+	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined && w[i + 2] !== "--hook")
+		return "`queue.py release <id>` from a coding thread: a thread releases only its own item, with `queue.py release`";
+	if (i >= 0 && i <= 2 && QUEUE_DISPATCHER.has(w[i + 1]))
+		return `\`queue.py ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue.py list\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
 		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
 	return undefined;
@@ -250,7 +274,7 @@ function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefine
 const NAMES_PR = /(^|[^\w&])#\d+\b|github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const closeWay = (issues: Owned) => {
 	const repo = issues ? [...issues][0] : undefined;
-	return `Close ${repo ? `a ${repo}` : "an"} issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: \`gh issue close <n>${repo ? ` -R ${repo}` : ""} --comment "Fixed by #<pr>."\` (Hard rules, Scope: issue-close). Otherwise leave it open, or put it under questions:.`;
+	return `Close ${repo ? `a ${repo}` : "an"} issue by hand only when one of our merged PRs fixed it, with a comment naming that PR: \`gh issue close <n>${repo ? ` -R ${repo}` : ""} --comment "Fixed by #<pr>."\` (the repo invariant issue-close). Otherwise leave it open, or put it under questions:.`;
 };
 
 function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
@@ -284,7 +308,7 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 			act = "an issue update through `gh api --input`, which may close it";
 	}
 	if (!act) return undefined;
-	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (bin/policy dump failed)`;
+	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (queue.py dump failed)`;
 	if (act.includes("GraphQL")) return act;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown)`;
@@ -294,13 +318,13 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 
 const TITLE = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()\s][^()]*\))?!?: \S/;
 const LOCAL_PATH = /(^|[\s`'"(=])(\/home\/|\/Users\/)[\w.-]+\//;
-const TEXT_WAY = "Fix the title or body and run it again (Hard rules, Commits and PR text; Merging: merge-no-verify-lines).";
+const TEXT_WAY = "Fix the title or body and run it again (the repo invariant text).";
 
 export function prTextProblems(title: string | undefined, body: string | undefined): string[] {
 	const out: string[] = [];
 	if (title !== undefined && !title.startsWith("$") && !TITLE.test(title)) out.push("a PR title that is not Conventional Commit syntax (`fix(scope): …`)");
 	if (body === undefined) return out;
-	if (/^verify(-ran)?:/m.test(body)) out.push("a PR body with a `verify:` or `verify-ran:` line");
+	if (/^.*generated with \[[^\]]+\]\(/im.test(body)) out.push("a PR body with a \"Generated with\" line for a tool");
 	if (/^co-authored-by:/im.test(body)) out.push("a PR body with a `Co-authored-by` trailer");
 	if (LOCAL_PATH.test(body)) out.push("a PR body with a local machine path");
 	return out;
@@ -325,57 +349,6 @@ function ghPrText(c: Cmd, owned: Owned, host: Host): string | undefined {
 	return repos.some((r) => r !== undefined && r !== null && owned.has(r)) ? problems.join(", and ") : undefined;
 }
 
-const TEAMMATE_WAY = "PRs and issues by a review-only teammate (a `review-only` row in hold-prs.txt) get a first review and nothing else; they are never closed by us (Hard rules, Scope). Leave it open, or put it under questions:.";
-
-function apiFields(w: string[]): { key: string; value: string; file: boolean }[] {
-	const out: { key: string; value: string; file: boolean }[] = [];
-	for (let i = 2; i < w.length; i++) {
-		const m = w[i].match(/^(-f|-F|--raw-field|--field)(?:=(.*)|(.+))?$/s);
-		if (!m || (m[3] !== undefined && m[1].startsWith("--"))) continue;
-		const kv = m[2] ?? m[3] ?? w[++i] ?? "";
-		const eq = kv.indexOf("=");
-		const value = eq < 0 ? "" : kv.slice(eq + 1);
-		out.push({ key: eq < 0 ? kv : kv.slice(0, eq), value, file: /^(-F|--field)$/.test(m[1]) && value.startsWith("@") });
-	}
-	return out;
-}
-
-function closeTarget(w: string[]): { n?: number; what: string } | undefined {
-	if ((w[1] === "issue" || w[1] === "pr") && w[2] === "close" && !w.includes("--help") && !w.includes("-h")) {
-		const a = operands(w.slice(3), GH_VALUE_OPTS)[0] ?? "";
-		const m = a.match(/^#?(\d+)$/) ?? a.match(/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/(\d+)/);
-		return { n: m ? Number(m[1]) : undefined, what: `\`gh ${w[1]} close\`` };
-	}
-	if (w[1] !== "api" || !ghApiWrites(w)) return undefined;
-	const ops = operands(w.slice(2), GH_API_VALUE_OPTS);
-	const fields = apiFields(w);
-	const input = w.some((a) => /^--input(=|$)/.test(a));
-	if (ops[0] === "graphql")
-		return w.some((a) => /\b(closeIssue|closePullRequest)\b/.test(a)) ? { what: "a GraphQL close mutation" } :
-			input || fields.some((f) => f.key === "query" && f.file) ? { what: "a GraphQL query read from a file or stdin, which may close" } : undefined;
-	const m = (ops[0] ?? "").replace(/[?#].*$/s, "").match(/^(?:https?:\/\/[^/]+\/)?\/?repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/(\d+)\/?$/);
-	const closes = input || fields.some((f) => f.key === "state" && (f.file || /^closed$/i.test(f.value))) || w.some((a) => /"state"\s*:\s*"closed"/i.test(a));
-	return m && closes ? { n: Number(m[1]), what: "a close through `gh api`" } : undefined;
-}
-
-function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined {
-	if (c.words[0] !== "gh" || (issues && !issues.size)) return undefined;
-	const t = closeTarget(c.words);
-	if (!t) return undefined;
-	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (bin/policy dump failed)`;
-	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\`, or pass the query inline`;
-	const repos = targetRepos(c, host);
-	if (repos.includes(undefined)) return `${t.what} where the target repo can't be told, so its author can't be checked`;
-	const repo = repos.find((r) => issues.has(r as string));
-	if (!repo) return undefined;
-	if (t.n === undefined) return `${t.what} in ${repo} without a number or URL, so its author can't be checked against the review-only teammates; name it`;
-	const team = host.reviewOnly?.() ?? null;
-	if (!team) return `${t.what} of ${repo}#${t.n} while no hold-prs.txt could be read, so the review-only teammates are unknown`;
-	const who = host.authorOf?.(repo, t.n);
-	if (who === undefined) return `${t.what} of ${repo}#${t.n} whose author \`gh api repos/${repo}/issues/${t.n}\` could not tell`;
-	return team.has(who.toLowerCase()) ? `${t.what} of ${repo}#${t.n}, which ${who} opened, a review-only teammate` : undefined;
-}
-
 function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < args.length; i++) {
@@ -386,54 +359,18 @@ function operands(args: string[], valued: Set<string> = new Set()): string[] {
 	return out;
 }
 
-function writesHolds(w: string[], dir: string | undefined, remote: boolean, host: Host): boolean {
-	const isHolds = (a: string) => holdsAt(a, dir, remote, host);
-	for (let i = 0; i < w.length; i++) {
-		const m = /\s/.test(w[i]) ? null : w[i].match(/>>?\|?(.*)$/);
-		const to = m && (m[1] || w[i + 1]);
-		if (to && isHolds(to)) return true;
-	}
-	const [p, ...all] = w;
-	const args = all.filter((a, i) => !/^(?:\d*|&)?[<>]/.test(a) && !/^(?:\d*|&)?[<>]{1,2}\|?$/.test(all[i - 1] ?? ""));
-	const ops = operands(args, new Set(["-t", "-S", "-m", "-o", "-g", "-e", "--target-directory", "--suffix"]));
-	switch (p) {
-		case "tee": case "rm": case "unlink": case "truncate": case "chmod": case "chown": case "touch": case "shred":
-			return ops.some(isHolds);
-		case "sed": case "perl":
-			return args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place")) && ops.some(isHolds);
-		case "mv": case "rsync": case "cp": case "install": case "ln": case "ditto": {
-			const t = args.findIndex((a) => a === "-t" || a.startsWith("--target-directory"));
-			const into = t < 0 ? undefined : args[t].includes("=") ? args[t].slice(args[t].indexOf("=") + 1) : args[t + 1];
-			const sources = into !== undefined ? ops : ops.slice(0, -1);
-			if ((p === "mv" || args.includes("--remove-source-files")) && sources.some(isHolds)) return true;
-			const dest = into ?? ops[ops.length - 1];
-			if (dest === undefined || !sources.length) return false;
-			return (into === undefined && isHolds(dest)) || sources.some((s) => isHolds(`${dest}/${base(s)}`));
-		}
-		case "dd":
-			return args.some((a) => a.startsWith("of=") && isHolds(a.slice(3)));
-	}
-	return false;
-}
-
-export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false, issues: Owned = new Set()): string | undefined {
-	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/(?<!\\)\$ONIGIRI_READY_ALLOWED(?![A-Za-z0-9_])/g, "").replace(/["'\\]/g, "")))
-		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
+export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, issues: Owned = new Set()): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
-		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
-			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready) ?? dispatcherOnly(c, owned, host, cwd);
-		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
+		const why = (c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host) ?? ghLabels(c, owned, host)) ?? threadOnly(c, owned, host, cwd);
+		if (why) return `blocked: ${why}. The invariants forbid it; if you think it is needed, put it under questions:.`;
 		const words = ghPrText(c, owned, host);
 		if (words) return `blocked: ${words}. ${TEXT_WAY}`;
 		const close = ghIssueClose(c, issues, host);
 		if (close) return `blocked: ${close}. ${closeWay(issues)}`;
-		const mate = ghTeammateClose(c, issues, host);
-		if (mate) return `blocked: ${mate}. ${TEAMMATE_WAY}`;
 	}
 	return undefined;
 }
 
-export function checkWrite(file: string, host: Host = NO_HOST, cwd?: string): string | undefined {
-	return holdsAt(file.replace(/^@/, ""), cwd, false, host) ? `blocked: it writes the holds file. ${HOLDS_WAY}` : undefined;
+export function checkWrite(file: string): string | undefined {
+	return /(^|\/)queue\.json$/.test(file.replace(/^@/, "")) ? "blocked: it writes the queue's file. Only `queue.py` writes it (the invariant own-controls)." : undefined;
 }

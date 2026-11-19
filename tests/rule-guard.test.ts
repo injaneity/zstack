@@ -3,21 +3,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, mergeOwned, prTextProblems, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, prTextProblems } from "../hooks/rules.ts";
 
 for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
-const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
+const DUMP = () => execFileSync("python3", ["-I", new URL("../queue.py", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
 const ISSUES = OWNED;
 const repoAt = (dir: string) => (dir.startsWith("/app") ? "acme/app" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
-const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-const TEAM = reviewOnlyLogins(["review-only    | f-teammate      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
-const AUTHORS: Record<number, string> = { 7030: "f-teammate", 4468: "DDupont808", 3138: "octo", 6853: "someone" };
-const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)), reviewOnly: () => TEAM,
-	authorOf: (_repo: string, n: number) => AUTHORS[n] };
+const host = { repoAt, labels: ["hold", "needs-review", "preapproved"] };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inApp = "/app/wt";
@@ -33,6 +28,9 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 		"git push --no-verify origin x",
 		"git -C wt push --force",
 		"git -c core.hooksPath=/dev/null push origin x",
+		"git -c alias.send=push send origin main",
+		"git -calias.send='push -f' send",
+		"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.send GIT_CONFIG_VALUE_0=push git send",
 		"cd wt && git push -f",
 		"env GIT_TRACE=1 git push -f",
 		"/usr/bin/git push --force",
@@ -62,6 +60,8 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 });
 
 test("ordinary pushes and git commands run", () => {
+	for (const c of ["git add -- -calias.notes", "git -c user.name=x commit -m 'fix: x'", "git -c core.pager=cat log", "git config alias.x y", "git commit -m 'alias.send=push'"])
+		allowed(c);
 	for (const c of [
 		"git push",
 		"git push -u origin fix/x",
@@ -134,7 +134,7 @@ test("merges elsewhere run, and nothing is owned unless configured", () => {
 	blocked("{ gh pr merge 1 -R acme/app; }");
 	blocked("{ cd /app; gh pr merge 1; }");
 	blocked("if cd /app; then gh pr merge 1; fi");
-	blocked("if true; then echo x >> hold-prs.txt; fi", "/srv/onigiri");
+	blocked("if true; then gh pr merge 1; fi", inApp);
 	blocked("gh pr merge 1 -R github.com/acme/app");
 	blocked("gh pr merge 1 --repo=https://github.com/acme/app.git");
 	blocked("gh api repos/acme/app/pulls/1/merge -f x=y -X PUT");
@@ -175,51 +175,12 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	allowed("gh pr view 7040 --json isDraft", inApp);
 });
 
-test("a brief that allows merging lets the session ready its draft, and nothing else", () => {
-	const ok = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd, true), undefined, c);
-	const no = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd, true) ?? "", /^blocked: /, c);
-	ok("gh pr ready 7040 -R acme/app");
-	ok("gh pr ready 7040", inApp);
-	ok(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no("gh pr merge 7040 -R acme/app --squash");
-	no("gh pr merge 7040 --auto", inApp);
-	ok("gh run rerun 9 -R acme/app");
-	no("gh api -X PUT repos/acme/app/pulls/7040/merge");
-	no(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no("git push -f origin HEAD:main");
-	assert.equal(readyAllowed("1"), true);
-	for (const v of ["", "0", "true", "yes", " 1"]) assert.equal(readyAllowed(v), false, v);
-	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R acme/app");
-	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inApp);
-	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R acme/app'");
-	blocked("export ONIGIRI_READY_ALLOWED=1; pi -p go");
-	blocked("ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED");
-	blocked("bash -c 'env ONIGIRI_READY_ALLOWED=1 pi -p go'");
-	blocked("printf -v ONIGIRI_READY_ALLOWED %s 1; pi -p go");
-	blocked("read ONIGIRI_READY_ALLOWED <<< 1; pi -p go");
-	blocked("declare -x ONIGIRI_READY_ALLOWED=1; pi -p go");
-	blocked(`export ONIGIRI_READY_""ALLOWED=1; pi -p go`);
-	blocked("export ONIGIRI_READY_'A'LLOWED=1; pi -p go");
-	blocked("export ONIGIRI_READY_\\ALLOWED=1; pi -p go");
-	blocked("ONIGIRI_READY_ALLOWED1=1 true");
-	blocked("python3 - <<'EOF'\nimport os; os.environ['ONIGIRI_READY_ALLOWED'] = '1'; os.execvp('pi', ['pi', '-p', 'go'])\nEOF");
-	blocked(`set -a; : "\${ONIGIRI_READY_ALLOWED:=1}"; pi -p go`);
-	blocked("echo ${ONIGIRI_READY_ALLOWED=1}");
-	blocked("export $'ONIGIRI_READY_ALLOWED'=1; pi -p go");
-	blocked(`export $"ONIGIRI_READY_ALLOWED"=1; pi -p go`);
-	blocked("export \\$ONIGIRI_READY_ALLOWED=1");
-	blocked("echo ${ONIGIRI_READY_ALLOWED:-unset}");
-	allowed(`echo $ONIGIRI_READY_ALLOWED "[$ONIGIRI_READY_ALLOWED]"`);
-});
-
 test("here-document bodies are data unless a shell reads them", () => {
 	allowed("cd /zs && python3 - <<'EOF'\nsub('docs', 'never gh pr merge 1 or git push -f')\nEOF");
 	allowed("cat > /tmp/body.md <<EOF\nwe never run gh pr merge here\nEOF\ngh pr create --body-file /tmp/body.md", inApp);
 	blocked("python3 - <<'EOF'\nx\nEOF\ngit push -f");
 	blocked("bash <<'EOF'\ngit push --force\nEOF");
-	blocked("~/onigiri-vm/vm <<'EOF'\necho x >> /srv/onigiri/hold-prs.txt\nEOF");
+	blocked("~/onigiri-vm/vm <<'EOF'\ngit push -f\nEOF");
 	blocked("cat <<EOF\nx"+"\ngit push -f");
 	blocked("echo '<<EOF'\ngit push -f\nEOF");
 	blocked("cat <<EOF\n$(git push -f)\nEOF");
@@ -232,205 +193,25 @@ test("here-document bodies are data unless a shell reads them", () => {
 	allowed("cat <<'EOF'\n$(git push -f)\nEOF");
 });
 
-test("writes to the real holds file are blocked; reads run", () => {
-	const root = "/srv/onigiri";
-	for (const c of [
-		"echo 'hold | 1 | no | x' >> /srv/onigiri/hold-prs.txt",
-		"printf x > hold-prs.txt",
-		"sed -i '/7031/d' /srv/onigiri/hold-prs.txt",
-		"sed -i.bak 's/a/b/' hold-prs.txt",
-		"cp /tmp/new /srv/onigiri/hold-prs.txt",
-		"mv hold-prs.txt.new hold-prs.txt",
-		"echo x | tee -a /srv/onigiri/hold-prs.txt",
-		"rm /srv/onigiri/hold-prs.txt",
-		"rm ./hold-prs.txt",
-		"rm ../onigiri/hold-prs.txt",
-		"chmod u+w ~/onigiri/sync/hold-prs.txt",
-		"~/onigiri-vm/vm \"echo x >> /srv/onigiri/hold-prs.txt\"",
-		"cp /tmp/new hold-prs.txt --verbose",
-		"cp -f /tmp/new /srv/onigiri/hold-prs.txt",
-		"perl -pi -e 's/a/b/' hold-prs.txt",
-		"echo x 2>>hold-prs.txt",
-		"dd if=/tmp/x of=/srv/onigiri/hold-prs.txt",
-		"echo x>hold-prs.txt",
-		"echo x>>/srv/onigiri/hold-prs.txt",
-		"echo x > /zs/sync/hold-prs.txt",
-		"cp -t /srv/onigiri /tmp/hold-prs.txt",
-		"cp --target-directory=/srv/onigiri /tmp/hold-prs.txt",
-		"cp /tmp/hold-prs.txt /srv/onigiri/",
-		"cp -p /tmp/hold-prs.txt $ROOT",
-		"cp /tmp/hold-prs.txt /srv/$D",
-		"cp /tmp/hold-prs.txt /srv/onig*",
-		"mv /tmp/hold-prs.txt /srv/onigiri",
-		"cp /tmp/hold-prs.txt /zs/sync",
-		"mv /srv/onigiri/hold-prs.txt /tmp/holds-copy",
-		"mv hold-prs.txt /tmp/holds-copy",
-		"mv -t /tmp /srv/onigiri/hold-prs.txt",
-		"mv --target-directory=/tmp hold-prs.txt",
-		"rsync --remove-source-files -t /tmp hold-prs.txt",
-		"cp /tmp/x/hold-prs.txt /srv/onigiri/",
-		"cp /tmp/x/hold-prs.txt /srv/onigiri//",
-		"rsync --remove-source-files hold-prs.txt /tmp/x",
-		"rm $ROOT/hold-prs.txt",
-		"rm ~other/hold-prs.txt",
-		"rm /srv/{onigiri,x}/hold-prs.txt",
-		...(process.platform === "darwin" ? ["rm $ROOT/HOLD-PRS.TXT"] : []),
-	])
-		blocked(c, root);
-	blocked("ssh host 'cp /tmp/hold-prs.txt /srv/onigiri'");
-	blocked("ssh host 'echo x > /tmp/t/hold-prs.txt'");
-	for (const c of [
-		"cat /srv/onigiri/hold-prs.txt",
-		"grep 7031 /srv/onigiri/hold-prs.txt",
-		"cp /srv/onigiri/hold-prs.txt /tmp/holds-copy",
-		"cp /srv/onigiri/hold-prs.txt /srv/onigiri/hold-prs.txt.bak-x",
-		"diff hold-prs.txt hold-prs.txt.bak-1105",
-		"~/onigiri-vm/vm 'cat /srv/onigiri/hold-prs.txt' > ~/onigiri/sync/hold-prs.txt.new",
-		'git commit -m "fix: use rm hold-prs.txt in docs"',
-		"tee hold-prs.txt.bak < hold-prs.txt",
-		"sed -n 1,5p hold-prs.txt",
-		"cp hold-prs.txt /tmp/x.txt",
-		'echo "x >hold-prs.txt"',
-		"cp /srv/onigiri/hold-prs.txt ~/scratch/holds.bak-1108",
-		"cp ~/onigiri/sync/hold-prs.txt /zs/dry/root/",
-		"cp /srv/onigiri/hold-prs.txt /tmp",
-	])
-		allowed(c, root);
-	for (const c of [
-		"printf 'hold | 1 | all | x\\n' > /tmp/t/vm/hold-prs.txt",
-		"echo x >> hold-prs.txt",
-		"rm -f hold-prs.txt",
-		"mv hold-prs.txt.new hold-prs.txt",
-		"sed -i '' 1d /tmp/t/hold-prs.txt",
-		"cp /srv/onigiri/hold-prs.txt .",
-		"cp /tmp/hold-prs.txt /zs/dry/root/",
-		"cd /tmp/home && touch hold-prs.txt",
-		"cd -P /tmp/home && touch hold-prs.txt",
-		"pushd /tmp/home && touch hold-prs.txt",
-		"env -i rm hold-prs.txt",
-		"HOME=/tmp/h bash -c 'rm /tmp/h/onigiri/hold-prs.txt'",
-		"bash -c 'rm hold-prs.txt'",
-		"sh -c 'cd /tmp/t && echo x > hold-prs.txt'",
-	])
-		allowed(c, "/zs/wt");
-	assert.match(checkBash("cd /srv/onigiri || cd /tmp; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
-	assert.match(checkBash("bash -c 'rm hold-prs.txt'", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
-	assert.match(checkBash("cd /srv/onigiri && bash -c 'echo x > hold-prs.txt'", OWNED, host, "/tmp") ?? "", /^blocked: /);
-	assert.match(checkBash("cd /tmp || true; cp /tmp/hold-prs.txt .", OWNED, host, "/srv/onigiri") ?? "", /^blocked: /);
-	assert.match(checkBash("cd /tmp/x extra || cd sync; cp /tmp/hold-prs.txt .", OWNED, host, "/zs") ?? "", /^blocked: /);
-	assert.match(checkBash("cd /tmp/x extra || cd sync; gh pr merge 1", OWNED, host, "/app") ?? "", /^blocked: /);
-	for (const c of [
-		"cd /tmp/$TARGET && rm hold-prs.txt",
-		"cd /srv/onig?ri && rm hold-prs.txt",
-		"cd /srv/{onigiri,x} && rm hold-prs.txt",
-		"cd /tmp/`printf x` && rm hold-prs.txt",
-		"cd /tmp/$(printf x) && rm hold-prs.txt",
-		'cd "/tmp/$(printf x)" && rm hold-prs.txt',
-		"cd $(printf /tmp)/x; rm hold-prs.txt",
-		"cd /tmp; cd /srv/x; cd -; rm hold-prs.txt",
-		"pushd /tmp && popd && rm hold-prs.txt",
-		"env -C /srv/onigiri rm hold-prs.txt",
-		"env --chdir=/srv/onigiri rm hold-prs.txt",
-		"sudo -D /srv/onigiri rm hold-prs.txt",
-		"env -C /srv/onigiri bash -c 'rm hold-prs.txt'",
-		"ssh host 'rm hold-prs.txt'",
-		"cd ~/x && rm hold-prs.txt",
-		"CDPATH=/srv; cd onigiri && rm hold-prs.txt",
-		"export CD''PATH=/srv && cd onigiri && rm hold-prs.txt",
-		"cd onigiri && rm hold-prs.txt",
-		"cd ./x && rm hold-prs.txt",
-	])
-		assert.match(checkBash(c, OWNED, host, "/tmp") ?? "", /^blocked: /, c);
-	for (const c of ["cd -P /srv/onigiri && rm hold-prs.txt", "pushd /srv/onigiri && rm hold-prs.txt", "cd -L /zs/sync; echo x > hold-prs.txt"])
-		assert.match(checkBash(c, OWNED, host, "/tmp") ?? "", /^blocked: /, c);
-	const write = (f: string, cwd?: string) => checkWrite(f, host, cwd) ?? "";
-	assert.match(write("/srv/onigiri/hold-prs.txt"), /^blocked: /);
-	assert.match(write("@/srv/onigiri/hold-prs.txt"), /^blocked: /);
-	assert.match(write("hold-prs.txt", "/srv/onigiri"), /^blocked: /);
-	assert.match(write("sync/hold-prs.txt", "/zs"), /^blocked: /);
-	assert.match(write("hold-prs.txt"), /^blocked: /);
-	assert.equal(write("/srv/onigiri/notes.md"), "");
-	assert.equal(write("hold-prs.txt.md"), "");
-	assert.equal(write("/tmp/t/hold-prs.txt"), "");
-	assert.equal(write("hold-prs.txt", "/tmp/t"), "");
-});
-
-test("bin/hold-row is the sanctioned way to append a row relaying Robin's call; direct writes still name it", () => {
-	const row = "preapprove | #7338 | no | " + "a".repeat(40) + " | deep; Robin 11 Nov 14:56 SGT (green at pin)";
-	for (const c of [
-		`bin/hold-row add '${row}'`,
-		`~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add "${row}"`,
-		`ONIGIRI_ROOT=/srv/onigiri bin/hold-row add '${row}'`,
-		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add '${row}'"`,
-		`ssh vm 'bin/hold-row add "hold | 7400 | no | Robin 11 Nov 17:00 SGT: wait for bench"'`,
-		`bin/hold-row retire '${row}' 'Robin 11 Nov 18:00 SGT: stale pin'`,
-		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row replace '${row}' '${row.replace("a".repeat(40), "b".repeat(40))}'"`,
-	])
-		allowed(c, "/srv/onigiri");
-	blocked(`bin/hold-row add '${row}' > /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
-	blocked(`bin/hold-row add '${row}'; echo x >> /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
-	assert.match(checkBash("echo x >> /srv/onigiri/hold-prs.txt", OWNED, host) ?? "", /bin\/hold-row add/);
-	assert.match(checkWrite("/srv/onigiri/hold-prs.txt", host) ?? "", /bin\/hold-row add/);
-});
-
-test("the real holds paths are this host's config, matched on the filesystem with symlinks followed", () => {
-	assert.deepEqual(holdsPaths({ ONIGIRI_ROOT: "/srv/onigiri" }, "~/copy/hold-prs.txt"), ["/srv/onigiri/hold-prs.txt", "~/copy/hold-prs.txt"]);
-	assert.deepEqual(holdsPaths({}), ["~/zstack/hold-prs.txt"]);
-	assert.deepEqual(holdsPaths({}, "~/zstack/hold-prs.txt"), ["~/zstack/hold-prs.txt"]);
-	const t = fs.mkdtempSync(path.join(os.tmpdir(), "rule-guard-"));
-	try {
-		const root = path.join(t, "root"), other = path.join(t, "test-home", "onigiri");
-		fs.mkdirSync(root);
-		fs.mkdirSync(other, { recursive: true });
-		fs.writeFileSync(path.join(root, "hold-prs.txt"), "hold | 1 | all | x\n");
-		fs.symlinkSync(root, path.join(t, "link"));
-		fs.symlinkSync(path.join(root, "hold-prs.txt"), path.join(t, "file-link"));
-		fs.linkSync(path.join(root, "hold-prs.txt"), path.join(t, "hard-link"));
-		const holds = holdsPaths({ ONIGIRI_ROOT: root });
-		const real = { repoAt: () => undefined, isHolds: (p: string) => isHoldsPath(p, holds, t) };
-		const no = (c: string, cwd = t) => assert.match(checkBash(c, OWNED, real, cwd) ?? "", /^blocked: /, c);
-		const ok = (c: string, cwd = t) => assert.equal(checkBash(c, OWNED, real, cwd), undefined, c);
-		for (const c of [`echo x >> ${root}/hold-prs.txt`, `rm ${root}/hold-prs.txt`, `mv ${root}/hold-prs.txt /tmp/x`, `cp /tmp/x ${root}/hold-prs.txt`, `sed -i '' 1d ${root}/hold-prs.txt`])
-			no(c);
-		no("echo x > link/hold-prs.txt");
-		no("rm link/hold-prs.txt");
-		no("echo x > file-link");
-		no("rm hard-link");
-		fs.mkdirSync(path.join(root, "sub"));
-		fs.symlinkSync(path.join(root, "sub"), path.join(t, "sublink"));
-		no("echo x > sublink/../hold-prs.txt");
-		no("cd sublink/.. && rm hold-prs.txt");
-		fs.symlinkSync(other, path.join(root, "away"));
-		no(`cd ${root}/away/.. && rm hold-prs.txt`, other);
-		no(`cd -L ${root}/away/.. && rm hold-prs.txt`, other);
-		no(`mv -t /tmp ${t}/sublink/../hold-prs.txt`);
-		no("cp /tmp/x/hold-prs.txt sublink/..");
-		assert.match(checkWrite("sublink/../hold-prs.txt", real, t) ?? "", /^blocked: /);
-		ok("echo x > sublink/hold-prs.txt");
-		no("echo x > hold-prs.txt", root);
-		no("echo x > ../../root/./hold-prs.txt", other);
-		no("echo x > ~/root/hold-prs.txt");
-		assert.match(checkWrite(path.join(t, "link", "hold-prs.txt"), real) ?? "", /^blocked: /);
-		fs.renameSync(path.join(root, "hold-prs.txt"), path.join(root, "gone"));
-		no("echo x > link/hold-prs.txt");
-		fs.symlinkSync(path.join(root, "hold-prs.txt"), path.join(t, "alias"));
-		fs.symlinkSync("../../link/hold-prs.txt", path.join(other, "rel-alias"));
-		no("echo x > alias");
-		no("echo x > rel-alias", other);
-		assert.match(checkWrite(path.join(t, "alias"), real) ?? "", /^blocked: /);
-		if (process.platform === "darwin") no(`echo x > ${root.toUpperCase()}/HOLD-PRS.TXT`);
-		fs.symlinkSync(path.join(t, "loop"), path.join(t, "loop"));
-		ok("touch loop");
-		no("rm loop/hold-prs.txt");
-		ok("rm loop/notes.md");
-		for (const c of [`printf 'hold | 2 | all | y\\n' > ${other}/hold-prs.txt`, `echo x >> ${other}/hold-prs.txt`, `mv ${other}/hold-prs.txt ${other}/old`, `rm ${other}/hold-prs.txt`])
-			ok(c);
-		ok("touch hold-prs.txt && rm hold-prs.txt", other);
-		assert.equal(checkWrite(path.join(other, "hold-prs.txt"), real), undefined);
-		assert.equal(checkWrite("hold-prs.txt", real, other), undefined);
-	} finally {
-		fs.rmSync(t, { recursive: true, force: true });
-	}
+test("the labels the queue reads are the owner's: a thread never adds, removes or changes one", () => {
+	for (const c of ["gh pr edit 3 -R acme/app --remove-label hold", "gh issue edit 3 --remove-label=hold", "gh issue edit 3 -R acme/app --add-label bug,Preapproved",
+		"gh pr create -R acme/app --title 'fix: x' --body y -l needs-review", "gh issue create -R acme/app --title x --label preapproved", "gh pr edit 3 --add-label $L",
+		"gh label delete hold -R acme/app --yes", "gh label edit hold --name later", "gh label create preapproved", "gh pr -R acme/app edit 3 --remove-label hold",
+		"gh api -X DELETE repos/acme/app/issues/3/labels/hold", "gh api repos/acme/app/issues/3/labels -f 'labels[]=preapproved'",
+		"gh api -X PUT repos/acme/app/issues/3/labels --input l.json", "bash -c 'gh issue edit 3 --remove-label hold'",
+		"gh api -X PATCH repos/acme/app/issues/12 -f labels[]=preapproved", "gh api -X PATCH repos/acme/app/issues/12 -F 'labels[0]=bug'",
+		`gh api -X PATCH repos/acme/app/issues/12 --raw-field '{"labels": []}'`,
+		`gh api graphql -f query='mutation { addLabelsToLabelable(input: {labelableId: "I", labelIds: ["L"]}) { clientMutationId } }'`,
+		`gh api graphql -f query='mutation { removeLabelsFromLabelable(input: {labelableId: "I", labelIds: ["L"]}) { clientMutationId } }'`,
+		`gh api graphql -f query='mutation { updateIssue(input: {id: "I", labelIds: []}) { clientMutationId } }'`])
+		blocked(c, inApp);
+	assert.match(checkBash("gh pr edit 3 --remove-label hold", OWNED, host, inApp) ?? "", /the label `hold`, which only the owner sets \(the invariant own-controls\)/);
+	for (const c of ["gh pr edit 3 --add-label bug", "gh issue list --label hold", "gh pr list -l needs-review", "gh label list", "gh api repos/acme/app/issues/3/labels",
+		"gh api -X PATCH repos/acme/app/issues/12 -f title=labels", "gh api -X PATCH repos/injaneity/zstack/issues/12 -f labels[]=preapproved",
+		`gh api graphql -f query='{ repository(owner:"acme",name:"app"){ labels(first:5){ nodes { name } } } }'`,
+		"gh pr edit 3 -R injaneity/zstack --remove-label hold", "gh pr edit 3 --title 'fix: hold the lock'"])
+		allowed(c, inApp);
+	assert.match(checkBash("gh pr edit 3 --add-label bug", OWNED, { ...host, labels: null }, inApp) ?? "", /the labels the queue reads are unknown/);
 });
 
 test("the owned repos are every repo the config has, and an unreadable config refuses every merge and ready", () => {
@@ -440,14 +221,14 @@ test("the owned repos are every repo the config has, and an unreadable config re
 		assert.equal(mergeOwned(dump), null);
 	for (const c of ["gh pr merge 33 -R injaneity/zstack --squash", "gh pr ready 1", "gh api -X PUT repos/x/y/pulls/1/merge",
 		"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"])
-		assert.match(checkBash(c, null, host, "/zs") ?? "", /bin\/policy dump failed/, c);
+		assert.match(checkBash(c, null, host, "/zs") ?? "", /queue\.py dump failed/, c);
 	for (const c of ["gh pr view 1", "gh run rerun 9 --failed", "gh pr merge 1 --help", "git push"])
 		assert.equal(checkBash(c, null, host, "/zs"), undefined, c);
 });
 
 test("closing a acme/app issue by hand needs a comment naming the PR that fixed it", () => {
-	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, false, ISSUES) ?? "", /^blocked: .*issue-close/, c);
-	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, false, ISSUES), undefined, c);
+	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, ISSUES) ?? "", /^blocked: .*issue-close/, c);
+	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, ISSUES), undefined, c);
 	assert.deepEqual(ISSUES, new Set(["acme/app"]));
 	for (const c of [
 		'gh issue close 6853 -R acme/app --comment "Fixed by #6928."',
@@ -490,58 +271,47 @@ test("closing a acme/app issue by hand needs a comment naming the PR that fixed 
 	ok("gh api -X PATCH repos/acme/app/issues/6853 -f title=x");
 	ok("gh api -X POST repos/acme/app/issues/6853/comments --input body.json");
 	no("gh issue close 12", "/tmp/x");
-	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
-	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", false, new Set()), undefined);
+	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", null) ?? "", /^blocked: /);
+	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", new Set()), undefined);
 });
 
-test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {
-	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
-	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", false, ISSUES), undefined, c);
-	assert.deepEqual(TEAM, new Set(["f-teammate", "ddupont808"]));
-	for (const c of [
-		'gh issue close 7030 -R acme/app --comment "Fixed by #7147."',
-		'gh pr close 7030 -R acme/app --comment "Replaced by #7147, which merged."',
-		'gh pr close https://github.com/acme/app/pull/4468 -c "Replaced by #4560"',
-		'gh issue close https://github.com/acme/app/issues/4468 --comment "Fixed by #4560"',
-		"gh api -X PATCH repos/acme/app/pulls/7030 -f state=closed",
-		'ssh vm "gh pr close 7030 -R acme/app"',
-	]) no(c);
-	for (const c of ["gh api -X PATCH repos/{owner}/{repo}/pulls/7030 -f state=closed", "gh pr close 7030 -c 'Replaced by #7147'"])
-		assert.match(checkBash(c, OWNED, host, inApp, false, ISSUES) ?? "", /, a review-only teammate\. /, c);
-	ok('gh pr close 3138 -R acme/app --comment "Replaced by #7587, which merged."');
-	ok('gh issue close 6853 -R acme/app --comment "Fixed by #6928."');
-	ok("gh pr close 7030 -R injaneity/zstack");
-	ok("gh pr view 7030 -R acme/app");
-	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", why, c);
-	refuse('gh pr close 3138 -R acme/app -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /no hold-prs.txt could be read/);
-	refuse('gh pr close 9999 -R acme/app -c "Replaced by #7587"', host, /could not tell/);
-	refuse('gh pr close -R acme/app -c "Replaced by #7587"', host, /without a number/);
-	refuse(`gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`, host, /GraphQL close/);
-	for (const c of ["gh api graphql -F query=@close.graphql", "gh api graphql --field=query=@q.graphql -F id=X"]) refuse(c, host, /GraphQL query read from a file/);
-	for (const c of ["gh api graphql --input mutation.json", "gh api graphql --input=- < m.json", "gh api graphql -Fquery=@q"])
-		refuse(c, host, /GraphQL query read from a file or stdin/);
-	for (const c of ["gh api -X PATCH repos/acme/app/pulls/7030 -F state=@state.txt", "gh api -X PATCH repos/acme/app/pulls/7030 --field=state=@s",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -fstate=closed", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field=state=closed",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -F state=CLOSED", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field state=closed",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -Fstate=@-"])
-		refuse(c, host, /, a review-only teammate\. /);
-	ok("gh api graphql -f query='query { viewer { login } }'");
-	ok("gh api -X PATCH repos/acme/app/pulls/7030 -F title=@t.txt");
-	ok("gh api -X PATCH repos/acme/app/pulls/7030 -f state=open");
-	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
-	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
+test("a read-only item's thread pushes nothing and posts nothing, and reads freely", () => {
+	const ro = { ...host, readonly: () => true as boolean | undefined };
+	const no = (c: string, h = ro) => assert.match(checkBash(c, OWNED, h, inApp) ?? "", /^blocked: a push or a GitHub write from a read-only item/, c);
+	for (const c of ["git push origin x", "git -C wt push", "gh pr comment 7030 --body x", "gh pr review 7030 --approve", "gh pr close 7030", "gh issue close 7030 -c 'Fixed by #1.'",
+		"gh pr create --title 'fix: x' --body y", "gh pr edit 7030 --title 'fix: y'", "gh issue comment 7030 -b x", "gh api -X POST repos/acme/app/issues/7030/comments -f body=x",
+		"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'", "gh pr -R acme/app comment 7030 -b x", "bash -c 'git push'", "gh pr create -h feature --title 'fix: x' --body y", "gh pr comment 7030 --help"])
+		no(c);
+	for (const cwd of ["/zs", "/tmp/elsewhere"])
+		assert.match(checkBash("cd /tmp && gh pr comment 3 -R acme/app -b hi", OWNED, ro, cwd) ?? "", /^blocked: a push or a GitHub write from a read-only item/, cwd);
+	for (const c of ["gh pr view 7030 --json files", "gh pr diff 7030", "gh pr checkout 7030", "gh pr list", "gh pr checks 7030", "gh api repos/acme/app/pulls/7030/files",
+		"gh run view 9 --log", "gh search prs x", "git fetch origin", "git log -3", "git commit -m 'fix: x'"])
+		assert.equal(checkBash(c, OWNED, ro, inApp), undefined, c);
+	no("git push origin x", { ...host, readonly: () => undefined });
+	for (const h of [host, { ...host, readonly: () => false as boolean | undefined }])
+		assert.equal(checkBash("gh pr comment 7030 --body x", OWNED, h, inApp), undefined);
 });
 
-test("a PR title or body that breaks Commits and PR text is refused in the merge job's repo, and nowhere else", () => {
-	const files: Record<string, string> = { "/app/wt/body.md": "## Summary\nx\n\nverify: ran\n", "/app/wt/ok.md": "## Summary\nthe scoped repository checks passed\nrisk: light\n" };
+test("a thread never touches the queue's file", () => {
+	for (const c of ["cat ~/zstack/acme/app/queue.json", "python3 -c 'open(\"/r/queue.json\", \"w\")'", "echo {} > /r/queue.json", "jq .verdicts /r/queue.json", "rm queue.json"])
+		assert.match(checkBash(c, OWNED, host, inApp) ?? "", /^blocked: it names the queue's file/, c);
+	allowed("cat /r/queue.json", "/zs");
+	allowed("./queue.py list", inApp);
+	for (const f of ["/r/queue.json", "queue.json", "@/r/queue.json"]) assert.match(checkWrite(f) ?? "", /^blocked: it writes the queue's file/);
+	for (const f of ["/r/queue.json.md", "/r/myqueue.json", "queue.py", ""]) assert.equal(checkWrite(f), undefined, f);
+});
+
+test("a PR title or body that breaks the repo invariant text is refused in the merge job's repo, and nowhere else", () => {
+	const files: Record<string, string> = { "/app/wt/body.md": "## Summary\nx\n\n🤖 Generated with [Some Tool](https://example.com/tool)\n", "/app/wt/ok.md": "## Summary\nthe scoped repository checks passed\nrisk: light\n" };
 	const h = { ...host, readText: (f: string, d: string | undefined) => files[path.posix.resolve(d ?? "/", f)] };
 	const no = (c: string, why: RegExp, cwd = inApp) => assert.match(checkBash(c, OWNED, h, cwd) ?? "", why, c);
 	const ok = (c: string, cwd = inApp) => assert.equal(checkBash(c, OWNED, h, cwd), undefined, c);
 	no('gh pr create --title "Fix the driver" --body "x"', /^blocked: a PR title that is not Conventional Commit/);
 	no('gh pr create -R acme/app -t "fix: x" -b "built in /home/box/work/app"', /local machine path/, "/zs");
-	no('gh pr edit 12 --body "x\nverify-ran: clippy"', /`verify:` or `verify-ran:` line/);
+	no('gh pr edit 12 --body "x\nGenerated with [A Tool](https://a.example)"', /"Generated with" line for a tool/);
+	ok('gh pr edit 12 --body "x\nverify: the report is generated with care"');
 	no('gh pr create --title "fix(driver): x" --body "x\n\nCo-authored-by: A <a@b.c>"', /Co-authored-by/);
-	no("gh pr create --title 'fix(driver): x' --body-file body.md", /`verify:`/);
+	no("gh pr create --title 'fix(driver): x' --body-file body.md", /"Generated with" line/);
 	no('gh pr create --title="refactor x" -F ok.md', /Conventional Commit/);
 	ok('gh pr create --title "fix(driver): keep the window focused" --body-file ok.md');
 	ok('gh pr create --title "feat!: drop the old flag" --body "risk: light"');
@@ -584,24 +354,23 @@ test("a merge in an owned repo runs only as the gated command, and only when the
 });
 
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
-	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto";
+	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/queue.py verified app-1 40 abc auto";
 	const inThread = { ...host, thread: "t-9" };
-	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue requeue app-1", "bin/queue release app-2",
-		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
+	for (const c of ["./queue.py claim app-1 t-9 /w", "/pkg/zstack/queue.py claim app-1 t-9 /w", verdict, "queue.py release app-2",
+		"python3 queue.py add x", "cd /tmp && /pkg/zstack/queue.py add y --preapproved", "python3 -I ../zstack/queue.py claim a t /w",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
 		blocked(c, inApp);
-	for (const c of ["/pkg/zstack/bin/queue release", "bin/queue gate 40 abc", "bin/queue list", "gh api repos/acme/app/statuses/abc",
-		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
+	for (const c of ["/pkg/zstack/queue.py release", "queue.py release --hook", "queue.py gate 40 abc", "queue.py list", "queue.py next", "queue.py invariants",
+		"queue.py seat verifier", "gh api repos/acme/app/statuses/abc", "gh api repos/acme/app/commits/abc/check-runs", "ls queue.py", "git add queue.py"])
 		allowed(c, inApp);
-	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 40 abc pass auto",
+	for (const c of ["./queue.py claim app-1 t-9 /w", "queue.py verified app-1 40 abc auto",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
 		allowed(c, "/zs");
-	assert.match(checkBash("bin/queue start app-1", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
+	assert.match(checkBash("./queue.py claim app-1 t-9 /w", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
 	assert.equal(checkBash(verdict, OWNED, inThread, inApp), undefined);
 	assert.equal(checkBash("echo $T3CODE_THREAD_ID", OWNED, inThread, inApp), undefined);
 	for (const c of [`T3CODE_THREAD_ID=t-0 ${verdict}`, `env -u T3CODE_THREAD_ID ${verdict}`, `unset T3CODE_THREAD_ID; ${verdict}`,
-		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "bin/queue start app-1"])
+		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "./queue.py claim app-1 t-9 /w"])
 		assert.match(checkBash(c, OWNED, inThread, inApp) ?? "", /^blocked: /, c);
 });
-

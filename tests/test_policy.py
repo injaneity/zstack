@@ -25,19 +25,19 @@ class Policy(unittest.TestCase):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
         self.pkg = Path(td.name) / "pkg"
-        for f in ("bin/policy", *FILES, "config/rules.toml", "config/state.toml"):
+        for f in ("queue.py", "hooks/pre-push", *FILES, "config/invariants.toml", "config/repos/acme/app/invariants.toml"):
             (self.pkg / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PKG / f, self.pkg / f)
         shutil.copytree(PKG / "vendor", self.pkg / "vendor")
-        self.env = {**os.environ, "ONIGIRI_HOST": "", "ONIGIRI_ROOT": str(Path(td.name) / "root"),
-                    "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}"}
+        self.env = {**os.environ, "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}"}
+        self.env.pop("ONIGIRI_ROOT", None)
 
     def edit(self, old, new):
         self.assertEqual(sum(t.count(old) for t in SHIPPED.values()), 1, old)
         for f, t in SHIPPED.items():
             (self.pkg / f).write_text(t.replace(old, new))
 
-    def run_(self, *args, prog="bin/policy"):
+    def run_(self, *args, prog="queue.py"):
         return subprocess.run([str(self.pkg / prog), *args], capture_output=True, text=True, env=self.env, timeout=60)
 
     def test_the_shipped_file_is_valid_and_get_reads_it(self):
@@ -53,8 +53,10 @@ class Policy(unittest.TestCase):
                          {k: project[k] for k in ("people", "patent", "issues", "review")})
         self.assertEqual(dump["merge"], {"repo": "acme/app", **project["merge"]})
         self.assertEqual(dump["repos"], ["acme/app"])
-        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "holds": "~/zstack/acme/app/hold-prs.txt",
-                                        "labels": [], "unlabelled": True, "all_labels": []})
+        self.assertEqual(dump["host"], {"clone": "~/work/app", "root": "~/zstack/acme/app", "repos": ["acme/app"], "labels": [], "unlabelled": True,
+                                        "all_labels": []})
+        self.env["ONIGIRI_ROOT"] = "/somewhere/else/"
+        self.assertEqual(self.run_("get", "host.root").stdout, "/somewhere/else\n")
 
     def second_repo(self):
         other = self.pkg / "config" / "repos" / "acme" / "tool"
@@ -68,7 +70,7 @@ class Policy(unittest.TestCase):
         other = self.second_repo()
         r = self.run_("get", "merge.repo")
         self.assertEqual(r.returncode, 1)
-        self.assertEqual(r.stderr, "policy: this machine works on acme/app, acme/tool; set ZSTACK_REPO or run from one of their clones\n")
+        self.assertEqual(r.stderr, "queue: this machine works on acme/app, acme/tool; set ZSTACK_REPO or run from one of their clones\n")
         self.env["ZSTACK_REPO"] = "Acme/Tool"
         self.assertEqual(self.run_("get", "merge.gate_check").stdout, "tool-gate\n")
         self.assertEqual(self.run_("get", "host.clone").stdout, "~/work/tool\n")
@@ -79,7 +81,7 @@ class Policy(unittest.TestCase):
         clone = self.pkg.parent / "clone"
         subprocess.run(["git", "init", "-q", str(clone)], check=True)
         subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", "git@github.com:acme/tool.git"], check=True)
-        r = subprocess.run([str(self.pkg / "bin/policy"), "get", "merge.repo"], capture_output=True, text=True, env=self.env, cwd=clone)
+        r = subprocess.run([str(self.pkg / "queue.py"), "get", "merge.repo"], capture_output=True, text=True, env=self.env, cwd=clone)
         self.assertEqual(r.stdout, "acme/tool\n")
         self.assertEqual(self.run_("check").returncode, 0)
         (other / "policy.toml").write_text("schema = 1\n")
@@ -109,16 +111,41 @@ class Policy(unittest.TestCase):
                 self.assertIn(why or "", r.stderr)
 
     def test_a_repos_own_rules_are_added_to_the_stacks(self):
-        (self.pkg / "config" / "repos" / "acme" / "app" / "rules.toml").write_text(
-            'schema = 1\n[[section]]\ntitle = "Project"\n[[section.rule]]\nid = "project-gate"\ntext = "Wait for {merge.gate_check}."\n')
-        out = self.run_("rules").stdout
-        self.assertTrue(out.rstrip().endswith("### Project\n\n- Wait for ci-gate."), out[-200:])
-        self.assertIn("### Work", out)
-        self.assertEqual(self.run_("rules", "project-gate").stdout, "- Wait for ci-gate.\n")
+        mine = self.pkg / "config" / "repos" / "acme" / "app" / "invariants.toml"
+        mine.write_text('schema = 1\n[[invariant]]\nid = "project-gate"\ntext = "Wait for {merge.gate_check}."\nenforced = "ci"\ntest = "x"\n'
+                        '[[guidance]]\nid = "project-tone"\ntext = "Be brief."\n')
+        out = self.run_("invariants").stdout
+        self.assertIn("### In this repo\n\n- Wait for ci-gate.\n", out)
+        self.assertNotIn("Be brief.", out)
+        self.assertEqual(self.run_("invariants", "project-tone").stdout, "- Be brief.\n")
+        self.assertIn("### Always", out)
+        self.assertEqual(self.run_("invariants", "project-gate").stdout, "- Wait for ci-gate.\n")
+        mine.unlink()
+        self.assertNotIn("### In this repo", self.run_("invariants").stdout)
+
+    def test_check_refuses_a_clone_whose_commits_would_carry_no_identity(self):
+        clone = self.pkg.parent / "nameless"
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        self.edit('clone = "~/work/app"', f'clone = "{clone}"')
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        self.assertIn("has no git user.email", self.run_("check").stderr)
+        subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
+        self.assertEqual(self.run_("check").returncode, 0)
+
+    def test_a_repo_with_no_patent_hold_leaves_it_out_and_pushes_freely(self):
+        self.edit('[patent]\nheld_words = ["skyhook", "vaultkey", "sealing"]', '[nopatent]\nheld_words = ["skyhook", "vaultkey", "sealing"]')
+        self.assertIn("unknown key nopatent", self.run_("check").stderr)
+        text = SHIPPED[FILES[1]]
+        start, end = text.index("[patent]"), text.index("# How a PR merges")
+        (self.pkg / FILES[1]).write_text(text[:start] + text[end:])
+        self.assertIn("no key patent.held_words", self.run_("check").stderr)
+        (self.pkg / "config" / "repos" / "acme" / "app" / "invariants.toml").unlink()
+        self.assertEqual(self.run_("check").returncode, 0)
+        self.assertNotIn("patent", json.loads(self.run_("dump").stdout))
 
     def test_a_missing_key_is_named(self):
         r = self.run_("get", "ci.nope")
-        self.assertEqual((r.returncode, r.stderr), (1, "policy: no key ci.nope\n"))
+        self.assertEqual((r.returncode, r.stderr), (1, "queue: no key ci.nope\n"))
 
     def test_every_bad_edit_is_refused_with_its_reason(self):
         cases = [
@@ -150,7 +177,11 @@ class Policy(unittest.TestCase):
             ("labels = []", 'labels = ["a", "a"]', 'repos."acme/app".labels must be a list of distinct label names'),
             ('review_label = "needs-review"', 'review_label = ""', "merge.review_label must be a label name"),
             ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["a", "a"]', "merge.preapproved_labels must be a list of distinct"),
-            ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["needs-review"]', "merge.review_label cannot also be"),
+            ('preapproved_labels = ["preapproved"]', 'preapproved_labels = ["needs-review"]', "merge.preapproved_labels must all differ"),
+            ('hold_label = "hold"', 'hold_label = "needs-review"', "merge.preapproved_labels must all differ"),
+            ('hold_label = "hold"', "", "missing merge.hold_label"),
+            ('review_only = ["f-teammate"]', 'review_only = "f-teammate"', "people.review_only must be a list of distinct logins"),
+            ('skip = ["app/app-agents"]', "", "missing people.skip"),
             ('gate_check = "ci-gate"', "", "missing merge.gate_check"),
             ('fixes = "Fixes #{issue}"', 'fixes = "Fixes #{n}"', "issues.fixes must be one line with {issue} once"),
             ('fixes = "Fixes #{issue}"', "", "missing issues.fixes"),
@@ -175,9 +206,9 @@ class Policy(unittest.TestCase):
         (self.pkg / FILES[0]).unlink()
         self.assertIn("no machine file", self.run_("check").stderr)
 
-    def test_readers_refuse_a_policy_bin_policy_rejects(self):
+    def test_every_reader_refuses_a_config_the_check_rejects(self):
         self.edit("threads = 3", "threads = -1")
-        for args in (["seat", "coding"], ["rules"], ["dump"]):
+        for args in (["seat", "coding"], ["invariants"], ["dump"]):
             with self.subTest(args=args):
                 r = self.run_(*args)
                 self.assertNotEqual(r.returncode, 0, r.stdout)
@@ -185,25 +216,19 @@ class Policy(unittest.TestCase):
                 self.assertNotIn("Traceback", r.stderr)
 
     def test_a_push_is_refused_without_the_patent_policy(self):
-        (self.pkg / "services").mkdir(parents=True, exist_ok=True)
-        for f in ("patent_push.py", "wake.py", "pre-push"):
-            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
         self.edit('held_words = ["skyhook", "vaultkey", "sealing"]', 'held_words = ["Skyhook"]')
-        r = subprocess.run([str(self.pkg / "services/pre-push"), "origin", "https://github.com/acme/app"],
+        r = subprocess.run([str(self.pkg / "hooks/pre-push"), "origin", "https://github.com/acme/app"],
                            input=f"refs/heads/x {'a' * 40} refs/heads/x {'0' * 40}\n", capture_output=True, text=True, env=self.env, timeout=60)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("patent hold: the config is unreadable (patent.held_words must be", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
     def test_a_push_under_a_python_without_tomllib_still_reads_the_patent_policy(self):
-        (self.pkg / "services").mkdir(parents=True, exist_ok=True)
-        for f in ("patent_push.py", "wake.py"):
-            shutil.copy2(PKG / "services" / f, self.pkg / "services" / f)
         (self.pkg / "notoml").mkdir()
         (self.pkg / "notoml" / "tomllib.py").write_text("raise ModuleNotFoundError(\"No module named 'tomllib'\")\n")
         code = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('pp', sys.argv[1]); "
-                "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp); print(pp.held_hits(['src/sealing.rs'], ''))")
-        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "services/patent_push.py")], capture_output=True, text=True,
+                "q = importlib.util.module_from_spec(s); s.loader.exec_module(q); print(q.Patent(q.load()).held_hits(['src/sealing.rs'], ''))")
+        r = subprocess.run([sys.executable, "-c", code, str(self.pkg / "queue.py")], capture_output=True, text=True,
                            env={**self.env, "PYTHONPATH": str(self.pkg / "notoml")}, timeout=60)
         self.assertEqual((r.returncode, r.stdout), (0, "['src/sealing.rs']\n"), r.stderr)
 
