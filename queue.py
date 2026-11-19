@@ -16,11 +16,12 @@ from datetime import datetime, timezone
 PKG = os.path.dirname(os.path.realpath(__file__))
 USAGE = (
     "The queue:\n"
-    "  queue.py next                    read the repo and say what to launch now, as JSON; also clears what has finished\n"
+    "  queue.py next                    read the repo and say what to claim now, as JSON; also clears what has finished\n"
     "  queue.py add <id> [--priority N] [--preapproved]\n"
     "                                   a task from the orchestrator; its text on stdin\n"
-    "  queue.py claim <id> <thread> <worktree>\n"
-    "                                   the thread just launched for the next item, and the worktree it works in\n"
+    "  queue.py claim <id>              take the next item: it runs from now, in a new worktree of the clone. Prints the\n"
+    "                                   worktree and the brief to launch its thread with, again while no thread is recorded\n"
+    "  queue.py attach <id> <thread>    the thread launched in that worktree\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -628,24 +629,57 @@ def next_up(pol):
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
-        launch = {"id": up["id"], "clone": pol["host"]["clone"], "brief": brief(pol, up)} if up else None
-        return {"launch": launch, "waiting": waiting, "running": {k: v["thread"] for k, v in sorted(q["running"].items())},
+        return {"claim": up and up["id"], "waiting": waiting, "running": {k: v["thread"] for k, v in sorted(q["running"].items())},
                 "cleared": cleared, "skipped": skipped}, bool(cleared or gone)
     return locked(pol, go)
 
 
-def claim(pol, ident, thread, worktree):
+def plant(pol, ident):
+    path = os.path.join(root(pol), "trees", ident)
+    clone, there = listed(pol, path)
+    if there:
+        return there
+    rc, base = git("-C", clone, "rev-parse", "--abbrev-ref", "origin/HEAD")
+    base = base.strip()
+    if rc or "/" not in base:
+        raise Refused(f"{clone} does not know its remote's default branch: run git remote set-head origin --auto there")
+    if git("-C", clone, "fetch", "--quiet", "origin", base.split("/", 1)[1])[0]:
+        raise Refused(f"git fetch origin failed in {clone}, so the worktree would start from an old {base}")
+    if git("-C", clone, "worktree", "add", "--quiet", "-B", f"zstack/{ident}", path, base)[0]:
+        raise Refused(f"cannot make the worktree {path} from {base}")
+    return os.path.realpath(path)
+
+
+def claim(pol, ident):
+    def said(it):
+        return {"id": ident, "worktree": it["worktree"], "claimed": it["at"], "brief": brief(pol, dict(it, id=ident))}
+
     def go(q):
+        if ident in q["running"] and not q["running"][ident]["thread"]:
+            return said(q["running"][ident]), False
         for part in ("running", "waiting"):
             if ident in q[part]:
                 raise Refused(f"{ident} is already {part}")
         up, waiting, _, _ = first(pol, q)
         if not up or up["id"] != ident:
             raise Refused(f"{ident} is not next: {waiting or up['id'] + ' is'}")
+        path = plant(pol, ident)
         q["tasks"].pop(ident, None)
-        q["running"][ident] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
-                               "thread": thread, "worktree": worktree, "pr": None, "at": now()}
-        return q["running"][ident], True
+        q["running"][ident] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "task", "title")},
+                               "thread": None, "worktree": path, "pr": None, "at": now()}
+        return said(q["running"][ident]), True
+    return locked(pol, go)
+
+
+def attach(pol, ident, thread):
+    def go(q):
+        it = q["running"].get(ident)
+        if not it:
+            raise Refused(f"{ident} is not running, so no thread was launched for it")
+        if it["thread"] and it["thread"] != thread:
+            raise Refused(f"{ident} already has the thread {it['thread']}")
+        changed, it["thread"] = it["thread"] != thread, thread
+        return {"id": ident, "thread": thread, "worktree": it["worktree"]}, changed
     return locked(pol, go)
 
 
@@ -765,7 +799,14 @@ def tidy(pol, it, whole):
         git("-C", path, "clean", "-Xfdq")
         return True
     dirty, ahead = git("-C", path, "status", "--porcelain"), git("-C", path, "rev-list", "-1", "HEAD", "--not", "--remotes")
-    return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
+    if dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip():
+        return False
+    ours = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")[1].strip()
+    if git("-C", clone, "worktree", "remove", path)[0]:
+        return False
+    if ours.startswith("zstack/"):
+        git("-C", clone, "branch", "-D", ours)
+    return True
 
 
 def branch_pr(pol, it):
@@ -1048,8 +1089,10 @@ def queue_command(pol, argv, stdin):
             return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv)
     if argv == ["next"]:
         return next_up(pol)
-    if len(argv) == 4 and argv[0] == "claim":
-        return claim(pol, argv[1], argv[2], argv[3])
+    if len(argv) == 2 and argv[0] == "claim":
+        return claim(pol, argv[1])
+    if len(argv) == 3 and argv[0] == "attach":
+        return attach(pol, argv[1], argv[2])
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
         return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):

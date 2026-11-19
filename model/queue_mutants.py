@@ -37,6 +37,25 @@ M = [
         [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],
         "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
+    (
+        "launch-without-looking",
+        "a pass that finds an item with no thread recorded launches one, though a thread already works in its worktree",
+        [("Unattached(m, i) /\\ i \\in tree /\\ threads[i] = 0", "Unattached(m, i) /\\ i \\in tree /\\ threads[i] < 2")],
+        "OneThreadPerItem",
+    ),
+    (
+        "launch-before-the-worktree",
+        "a thread is launched for an item the queue has made no worktree for",
+        [("/\\ tree' = tree \\cup {i} /\\ UNCHANGED <<threads, known>>", "/\\ UNCHANGED <<tree, threads, known>>"),
+         ("Launch(m, i) == Unattached(m, i) /\\ i \\in tree /\\", "Launch(m, i) == Unattached(m, i) /\\")],
+        "AThreadWorksInTheQueuesTree",
+    ),
+    (
+        "a-launched-thread-is-never-recorded",
+        "an item whose thread was launched but never recorded holds its slot for good",
+        [("Attach(m, i) == Unattached(m, i) /\\ threads[i] > 0", "Attach(m, i) == Unattached(m, i) /\\ FALSE /\\ threads[i] > 0")],
+        LIVE,
+    ),
     ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (
         "start-a-held-item",
@@ -48,8 +67,8 @@ M = [
     (
         "no-release",
         "an item whose thread's turn ended holds its slot for good",
-        [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
-         ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up')],
+        [('Freed(m, i) == q[m][i] = "running" /\\ i', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ i'),
+         ('TurnEnd(m, i) == q[m][i] = "running" /\\ i', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ i')],
         LIVE,
     ),
     (

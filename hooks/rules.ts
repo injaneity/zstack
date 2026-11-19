@@ -212,7 +212,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host): string | undefined {
 	return host.gate(hit, Number(pr), head);
 }
 
-const QUEUE_DISPATCHER = new Set(["add", "claim"]);
+const QUEUE_DISPATCHER = new Set(["add", "claim", "attach"]);
 
 function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
 	const w = c.words;
