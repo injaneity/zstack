@@ -239,18 +239,18 @@ const GH_READ_GROUPS = new Set(["search", "auth", "status", "help", "version", "
 
 function writes(w: string[]): boolean {
 	if (pushAt(w) >= 0) return true;
-	if (w[0] !== "gh" || w.includes("--help") || w.includes("-h")) return false;
+	if (w[0] !== "gh") return false;
 	const [g1, g2] = operands(w.slice(1), GH_VALUE_OPTS);
 	return g1 === "api" ? ghApiWrites(w) : g1 !== undefined && !GH_READ_GROUPS.has(g1) && !GH_READS.has(g2 ?? "");
 }
 
 function threadOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
+	if (writes(c.words) && host.readonly && host.readonly() !== false)
+		return "a push or a GitHub write from a read-only item: this thread is a first review of a review-only teammate's PR (or the queue could not be read), so it pushes and posts nothing and puts every comment in its report";
 	const at = cwd === undefined ? undefined : host.repoAt(cwd);
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
 	if (c.raw.some((a) => /queue\.json/.test(a)))
 		return "it names the queue's file: a thread reads the queue with `queue.py list` and never touches the file";
-	if (writes(c.words) && host.readonly?.() !== false && host.readonly)
-		return "a push or a GitHub write from a read-only item: this thread is a first review of a review-only teammate's PR (or the queue could not be read), so it pushes and posts nothing and puts every comment in its report";
 	if (c.raw.some((a) => a === THREAD_VAR || a.startsWith(`${THREAD_VAR}=`)))
 		return `it sets or clears ${THREAD_VAR}: the queue tells an item's own thread from its verifier by it`;
 	const w = c.words, i = w.findIndex((a) => /(^|\/)queue\.py$/.test(a));

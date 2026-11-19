@@ -275,15 +275,16 @@ test("a read-only item's thread pushes nothing and posts nothing, and reads free
 	const no = (c: string, h = ro) => assert.match(checkBash(c, OWNED, h, inApp) ?? "", /^blocked: a push or a GitHub write from a read-only item/, c);
 	for (const c of ["git push origin x", "git -C wt push", "gh pr comment 7030 --body x", "gh pr review 7030 --approve", "gh pr close 7030", "gh issue close 7030 -c 'Fixed by #1.'",
 		"gh pr create --title 'fix: x' --body y", "gh pr edit 7030 --title 'fix: y'", "gh issue comment 7030 -b x", "gh api -X POST repos/acme/app/issues/7030/comments -f body=x",
-		"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'", "gh pr -R acme/app comment 7030 -b x", "bash -c 'git push'"])
+		"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'", "gh pr -R acme/app comment 7030 -b x", "bash -c 'git push'", "gh pr create -h feature --title 'fix: x' --body y", "gh pr comment 7030 --help"])
 		no(c);
+	for (const cwd of ["/zs", "/tmp/elsewhere"])
+		assert.match(checkBash("cd /tmp && gh pr comment 3 -R acme/app -b hi", OWNED, ro, cwd) ?? "", /^blocked: a push or a GitHub write from a read-only item/, cwd);
 	for (const c of ["gh pr view 7030 --json files", "gh pr diff 7030", "gh pr checkout 7030", "gh pr list", "gh pr checks 7030", "gh api repos/acme/app/pulls/7030/files",
-		"gh run view 9 --log", "gh search prs x", "git fetch origin", "git log -3", "git commit -m 'fix: x'", "gh pr comment --help"])
+		"gh run view 9 --log", "gh search prs x", "git fetch origin", "git log -3", "git commit -m 'fix: x'"])
 		assert.equal(checkBash(c, OWNED, ro, inApp), undefined, c);
 	no("git push origin x", { ...host, readonly: () => undefined });
 	for (const h of [host, { ...host, readonly: () => false as boolean | undefined }])
 		assert.equal(checkBash("gh pr comment 7030 --body x", OWNED, h, inApp), undefined);
-	assert.equal(checkBash("git push origin x", OWNED, ro, "/zs"), undefined);
 });
 
 test("a thread never touches the queue's file", () => {

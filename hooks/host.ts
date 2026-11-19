@@ -32,9 +32,12 @@ const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labe
 function readonly(): boolean | undefined {
 	const thread = process.env[THREAD_VAR];
 	if (!thread) return false;
+	if (!owned) return undefined;
 	try {
-		const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }));
-		return Object.values(q.running as Record<string, { thread: string; readonly: boolean }>).some((v) => v.thread === thread && v.readonly);
+		return [...owned].some((repo) => {
+			const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } }));
+			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => v.thread === thread && v.readonly));
+		});
 	} catch {
 		return undefined;
 	}

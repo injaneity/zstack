@@ -49,13 +49,19 @@ M = [
         "no-release",
         "an item whose thread's turn ended holds its slot for good",
         [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
-         ('TurnEnd(m, i) == q[m][i] = "running" /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ ~Unverified(i)')],
+         ('TurnEnd(m, i) == q[m][i] = "running" /\\ up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ up')],
         LIVE,
     ),
     (
         "end-a-turn-unverified",
         "a thread's turn ends while its open PR's head has no verdict",
-        [('TurnEnd(m, i) == q[m][i] = "running" /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running"')],
+        [('TurnEnd(m, i) == q[m][i] = "running" /\\ up /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running" /\\ up')],
+        "ATurnEndsVerified",
+    ),
+    (
+        "end-a-turn-when-the-forge-is-down",
+        "a turn ends because the PR could not be read, though its head has no verdict",
+        [('TurnEnd(m, i) == q[m][i] = "running" /\\ up /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running" /\\ ~(up /\\ Unverified(i))')],
         "ATurnEndsVerified",
     ),
     (

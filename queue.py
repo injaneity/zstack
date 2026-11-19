@@ -804,9 +804,12 @@ def unverified(pol, q, it):
     try:
         pr = it["pr"] or branch_pr(pol, it)
         live = pr_view(pol, pr) if pr else None
-    except Refused:
-        return None
-    return pr if live and live["state"] == "OPEN" and live["headRefOid"] != q["verdicts"].get(str(pr), {}).get("head") else None
+    except Refused as e:
+        return f"Whether your PR's head has a verdict cannot be told ({e}), so your turn is not over. Try again."
+    if live and live["state"] == "OPEN" and live["headRefOid"] != q["verdicts"].get(str(pr), {}).get("head"):
+        return (f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
+                "wait for its verdict inside this turn.")
+    return None
 
 
 def release(pol, ident=None, hook=False):
@@ -819,10 +822,9 @@ def release(pol, ident=None, hook=False):
             if ident:
                 raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
-        pr = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
-        if pr:
-            return Unfinished(f"PR {pr} has no verdict for its current head, so your turn is not over. Have the verifier check that head and "
-                              "wait for its verdict inside this turn."), False
+        held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
+        if held_back:
+            return Unfinished(held_back), False
         it = q[was][key]
         state, why = outcome(pol, q, key)
         said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"])

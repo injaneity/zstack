@@ -367,6 +367,11 @@ class Release(Case):
             with patch.dict(os.environ, {queue.THREAD_VAR: "t-verifier"}):
                 queue.verified(self.pol, "a", 40, H1, "fail")
             self.assertEqual(queue.release(self.pol, hook=True)["state"], "waiting")
+        self.run_("d", thread="t-d")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-d"}), patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
+            with self.assertRaisesRegex(queue.Unfinished, r"cannot be told \(gh down\), so your turn is not over"):
+                queue.release(self.pol, hook=True)
+            self.assertEqual(queue.release(self.pol)["state"], "waiting")
         self.run_("b", thread="t-b")
         self.pr_open(41)
         self.forge.prs[41]["state"] = "CLOSED"
