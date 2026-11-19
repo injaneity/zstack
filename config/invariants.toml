@@ -33,7 +33,13 @@ test = "model/Queue.tla::ATurnEndsVerified"
 [[invariant]]
 id = "one-thread"
 text = '''One item has one thread on one machine. When its turn ends its slot is freed; its worktree stays while its PR is open, and is removed once nothing in it is unpushed.'''
-enforced = "`queue.py pass` records an item as running before it starts its thread, only when the item is first and within the cap, and launches it again only when T3 Code still lists no thread for it ten minutes on"
+enforced = "`queue.py pass` launches an item only when it is first and within the cap, and `queue.py check` refuses two machines whose labels overlap"
+test = "model/Queue.tla::OneMachinePerItem"
+
+[[invariant]]
+id = "one-launch"
+text = '''An item's thread is started once. A start that went unanswered is not repeated until no thread for the item has shown for {run.lost_min} minutes.'''
+enforced = "`queue.py pass` records an item as running before it starts its thread, takes the thread listed under the item's title, and puts the item back only when none is listed after `run.lost_min`"
 test = "model/Queue.tla::OneThreadPerItem"
 
 [[invariant]]

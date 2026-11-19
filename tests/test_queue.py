@@ -215,8 +215,8 @@ class Launch(Case):
         self.assertEqual((queue.step(self.pol)["waiting"], self.briefed), ("nothing is ready", []))
         self.listing = [{"threadId": "t-old", "title": "a", "createdAt": "2020-01-01T00:00:00.000Z"}]
         self.assertEqual((queue.run_pass(self.pol)["launched"], self.file()["running"]["a"]["thread"], self.briefed), ([], None, []))
-        with patch.object(queue, "LOST_SECONDS", 0):
-            self.assertEqual(queue.run_pass(self.pol)["launched"], [{"id": "a", "thread": "t-a", "worktree": "/nowhere/wt-a"}])
+        self.pol["run"]["lost_min"] = 0
+        self.assertEqual(queue.run_pass(self.pol)["launched"], [{"id": "a", "thread": "t-a", "worktree": "/nowhere/wt-a"}])
         self.assertEqual((self.file()["running"]["a"]["thread"], self.file()["tasks"], len(self.briefed)), ("t-a", {}, 1))
 
     def test_a_start_whose_answer_was_lost_is_found_by_its_title_and_never_started_twice(self):

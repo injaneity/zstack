@@ -97,12 +97,14 @@ def line_with(key):
     return (lambda v: text(v) and v.count(key) == 1 and "{" not in v.replace(key, ""), f"one line with {key} once and no other placeholder")
 
 
+START_SECONDS = 120
 SEAT = (seats, "a {provider, model} table or a non-empty list of them")
 PATHISH = (lambda v: text(v) and v.startswith(("/", "~/")), "a path from / or ~/")
 MACHINE = {
     "models": {role: SEAT for role in ("coding", "explorer", "designer", "verifier")},
     "run": {"idle_min": (pos_int, "a positive integer"), "threads": (pos_int, "a positive integer"),
-            "t3": (text, "the T3 Code command: a name on PATH or a path")},
+            "t3": (text, "the T3 Code command: a name on PATH or a path"),
+            "lost_min": (lambda v: pos_int(v) and v * 60 > START_SECONDS, f"whole minutes, more than the {START_SECONDS} seconds a start may take")},
     "wake": {"url": (lambda v: text(v) and v.startswith("https://"), "an https URL"), "key_file": PATHISH},
 }
 PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
@@ -624,7 +626,6 @@ def brief(pol, it):
 
 
 DEAD = ("completed", "failed", "interrupted", "cancelled")
-START_SECONDS, LOST_SECONDS = 120, 600
 
 
 def t3(pol, *args, stdin=None):
@@ -691,7 +692,7 @@ def reconcile(pol):
                 rows = listing() if rows is None else rows
                 mine = [r["threadId"] for r in rows if r["title"] == key and r["createdAt"] >= it["at"]]
                 asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                if not mine and (datetime.now(timezone.utc) - asked).total_seconds() >= LOST_SECONDS:
+                if not mine and (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60:
                     del q["running"][key]
                     changed = True
                 if not mine:

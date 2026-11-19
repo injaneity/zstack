@@ -19,11 +19,14 @@ verifier = { provider = "codex", model = "gpt-6.1-terra" }
 # `idle_min` is the longest a bash call that declares no timeout may run, in minutes (pi/tool-guard.ts), so a call
 # blocked on a process that never ends returns to the session instead of hanging it. `threads` is how many coding
 # threads this machine works at once (queue.py pass launches none past it). `t3` is the T3 Code command `queue.py pass`
-# starts and reads threads with: a name on PATH, or a path from / or ~/.
+# starts and reads threads with: a name on PATH, or a path from / or ~/. `lost_min` is how many minutes an item whose
+# start went unanswered waits, with no thread for it listed, before `queue.py pass` launches it again (the invariant
+# one-launch).
 [run]
 idle_min = 150
 threads = 3
 t3 = "t3"
+lost_min = 15
 
 # Where queue.py sends a wake for the owner: a POST of one JSON object to `url`, with the bearer
 # token read from `key_file`. An empty or missing key file sends nothing.

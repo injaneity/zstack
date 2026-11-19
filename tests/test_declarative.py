@@ -62,7 +62,8 @@ class Invariants(unittest.TestCase):
         self.assertEqual([x for x in md.splitlines() if x.startswith("#")],
                          ["## Invariants", "### Always", "### In this repo"])
         self.assertNotIn(INV["guidance"][0]["text"], md)
-        self.assertEqual([r["id"] for r in INV["stack"]], ["merge-verified", "held", "turn-ends-verified", "one-thread", "own-controls", "publish"])
+        self.assertEqual([r["id"] for r in INV["stack"]],
+                         ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch", "own-controls", "publish"])
         self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "text", "issue-close", "teammates"])
         self.assertIn("`config/invariants.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 
@@ -76,7 +77,7 @@ class Invariants(unittest.TestCase):
                 self.assertRegex((PKG / "model" / "Queue.cfg").read_text(), rf"(?m)^(INVARIANT|PROPERTY) {name}$", r["id"])
                 self.assertIn(f'"{name}"', (PKG / "model" / "queue_mutants.py").read_text(), f"{r['id']}: no mutant breaks {name}")
         proved = [r["id"] for r in INV["stack"] if r["test"].startswith("model/")]
-        self.assertEqual(proved, ["merge-verified", "held", "turn-ends-verified", "one-thread"])
+        self.assertEqual(proved, ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch"])
         for miss in ("enforced", "test"):
             row = {"id": "a", "text": "t", "enforced": "e", "test": "x"}
             del row[miss]
