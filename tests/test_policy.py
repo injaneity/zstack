@@ -123,6 +123,15 @@ class Policy(unittest.TestCase):
         mine.unlink()
         self.assertNotIn("### In this repo", self.run_("invariants").stdout)
 
+    def test_check_refuses_a_clone_whose_commits_would_carry_no_identity(self):
+        clone = self.pkg.parent / "nameless"
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        self.edit('clone = "~/work/app"', f'clone = "{clone}"')
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        self.assertIn("has no git user.email", self.run_("check").stderr)
+        subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email", "dev@example.com"], check=True)
+        self.assertEqual(self.run_("check").returncode, 0)
+
     def test_a_repo_with_no_patent_hold_leaves_it_out_and_pushes_freely(self):
         self.edit('[patent]\nheld_words = ["skyhook", "vaultkey", "sealing"]', '[nopatent]\nheld_words = ["skyhook", "vaultkey", "sealing"]')
         self.assertIn("unknown key nopatent", self.run_("check").stderr)

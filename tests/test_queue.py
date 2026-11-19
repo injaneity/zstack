@@ -193,7 +193,7 @@ class Launch(Case):
         self.add("a", "Fix the parser")
         said = queue.next_up(self.pol)["launch"]["brief"]
         for want in ("# a", "Fix the parser", f"{PKG}/queue.py verified a <pr number> <head sha> auto",
-                     "gh pr merge <pr number> -R acme/app --squash --match-head-commit <head sha>", "ZSTACK_REPO=acme/app ",
+                     "one line under `say`", "That line decides what you do, whatever else the verifier wrote", "ZSTACK_REPO=acme/app ",
                      "they are yours to judge:\n- You write the code and a short test plan",
                      "\n- No invented limits: a restriction must trace to Robin's words", "\n- Never revert a PR, except"):
             self.assertIn(want, said)
@@ -218,7 +218,8 @@ class Gate(Case):
 
     def test_the_gate_opens_for_the_head_the_verifier_passed_as_auto_with_the_check_green(self):
         got = self.passed()
-        self.assertIn(f"gh pr merge 40 -R {REPO} --squash --match-head-commit {H1}", got["say"])
+        self.assertEqual(got["say"], f"its thread merges it with `gh pr merge 40 -R {REPO} --squash --match-head-commit {H1}`")
+        self.assertEqual(got["recorded"], "auto")
         self.assertEqual(self.file()["verdicts"], {"40": {"head": H1, "result": "auto"}})
         self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
 
@@ -248,8 +249,12 @@ class Gate(Case):
         self.assertEqual(self.shut(), "PR 40 does not merge: it needs a person's review")
         self.passed(ident="b", pr=41, labels=[M["review_label"]])
         self.assertEqual(self.shut(41), "PR 41 does not merge: it needs a person's review")
-        self.passed(ident="c", pr=42)
-        self.forge.prs[42]["draft"] = True
+        self.run_("c")
+        self.pr_open(42)
+        self.forge.prs[42]["ci"] = "PENDING"
+        waits = queue.verified(self.pol, "c", 42, H1, "auto")["say"]
+        self.assertRegex(waits, rf"^its thread merges it with `gh pr merge 42 .*`, but not yet: {M['gate_check']} has not passed on that head$")
+        self.forge.prs[42].update(ci="SUCCESS", draft=True)
         self.assertEqual(self.shut(42), "PR 42 does not merge: the PR is a draft")
         self.forge.prs[42].update(draft=False, ci="FAILURE")
         self.assertEqual(self.shut(42), f"PR 42 does not merge: {M['gate_check']} has not passed on that head")

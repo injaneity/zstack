@@ -367,6 +367,10 @@ def config_command(argv):
         every = list(validate_machine(read_toml(machine_file()))["repos"])
         for name in every:
             invariants(want=name)
+            clone = os.path.expanduser(load(name)["host"]["clone"])
+            who = subprocess.run(["git", "-C", clone, "config", "--get", "user.email"], capture_output=True, text=True).stdout
+            if os.path.isdir(clone) and not who.strip():
+                raise Refused(f"{clone} has no git user.email, so a commit there carries this machine's address: set one the forge knows")
         return print(f"queue: {CONFIG} is valid for {', '.join(every)} on {os.path.basename(machine_file())[:-5]}") or 0
     if argv[:1] == ["invariants"]:
         return print(render(invariants(), argv[1:]), end="") or 0
@@ -601,8 +605,8 @@ repo: a worktree of `{clone}`
 Follow onigiri-mode and the invariants, which are already in your context. Nothing enforces these, so they are yours to judge:
 {guidance}
 
-When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do. On a fail, fix the findings, push, and have it check the new head.
-On `auto`, wait for the PR's checks, then merge that head yourself: `gh pr merge <pr number> -R {repo} --squash --match-head-commit <head sha>`. The guard lets that command through only for the head the verifier passed, with the checks green and no hold; when it refuses, read its reason, and do not try another way. On `review`, or when you think the change needs a person whatever the verifier says, do not merge: say why in your report.
+When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do.
+The queue answers that command with what it recorded and one line under `say`, and the verifier gives you both. That line decides what you do, whatever else the verifier wrote: fix the findings, push and have the new head checked; or merge with the command it names, waiting first for the checks it names; or do not merge, for the reason it gives. The guard lets the merge through only when the queue would; when it refuses, read its reason, and do not try another way. When you think the change needs a person whatever the queue says, do not merge: say why in your report.
 When your turn ends, the queue frees your slot and tells the orchestrator what happened, so finish everything before you stop. A turn that tries to end while your open PR's head has no verdict is sent back to get one.
 
 End with a final report: the PR URLs, then
@@ -614,7 +618,7 @@ questions:
 def brief(pol, it):
     env = {"ZSTACK_CONFIG": CONFIG, "ZSTACK_MACHINE": os.environ.get("ZSTACK_MACHINE"), "ZSTACK_REPO": pol["merge"]["repo"]}
     said = "\n".join(f"- {r['text']}" for r in invariants(want=pol["merge"]["repo"])["guidance"])
-    return BRIEF.format(id=it["id"], task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "queue.py"), repo=pol["merge"]["repo"],
+    return BRIEF.format(id=it["id"], task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "queue.py"),
                         guidance=said, env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
@@ -670,7 +674,7 @@ def held(pol, it, live):
     return hold in [x["name"] for x in json.loads(out)["labels"]]
 
 
-def blocked(pol, it, v, live):
+def stopped(pol, it, v, live):
     if not v or v["result"] == "fail" or v["head"] != live["headRefOid"]:
         return f"the verifier has not passed head {live['headRefOid']}"
     pre = bool(it) and it["preapproved"]
@@ -678,13 +682,19 @@ def blocked(pol, it, v, live):
         return "it needs a person's review"
     if held(pol, it, live):
         return f"it is labelled {pol['merge']['hold_label']}"
-    if live.get("isDraft"):
-        return "the PR is a draft"
+    return "the PR is a draft" if live.get("isDraft") else None
+
+
+def unready(pol, live):
     if not gate_green(pol, live):
         return f"{pol['merge']['gate_check']} has not passed on that head"
     running = any(c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")
                   for c in live.get("statusCheckRollup") or [])
     return "a check is still running on that head, and a merge now would arm auto-merge" if running else None
+
+
+def blocked(pol, it, v, live):
+    return stopped(pol, it, v, live) or unready(pol, live)
 
 
 def owner_of(q, pr):
@@ -704,11 +714,14 @@ def verified(pol, ident, pr, head, result):
         it["pr"] = pr
         q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
         q["verdicts"][str(pr)] = {"head": head, "result": result}
+        out = {"id": ident, "pr": pr, "recorded": result}
         if result == "fail":
-            return {"id": ident, "pr": pr, "say": "its thread fixes the findings and has the new head checked"}, True
-        why = blocked(pol, it, q["verdicts"][str(pr)], live)
-        cmd = f"gh pr merge {pr} -R {pol['merge']['repo']} --squash --match-head-commit {head}"
-        return {"id": ident, "pr": pr, "say": f"its thread does not merge it: {why}" if why else f"its thread merges it with `{cmd}`"}, True
+            return dict(out, say="its thread fixes the findings and has the new head checked"), True
+        why = stopped(pol, it, q["verdicts"][str(pr)], live)
+        if why:
+            return dict(out, say=f"its thread does not merge it: {why}"), True
+        cmd, wait = f"gh pr merge {pr} -R {pol['merge']['repo']} --squash --match-head-commit {head}", unready(pol, live)
+        return dict(out, say=f"its thread merges it with `{cmd}`" + (f", but not yet: {wait}" if wait else "")), True
     return locked(pol, go)
 
 
