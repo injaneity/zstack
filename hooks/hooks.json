@@ -6,6 +6,11 @@
           {
             "type": "command",
             "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" invariants"
+          },
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/queue.py\" warm",
+            "timeout": 120
           }
         ]
       }

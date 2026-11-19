@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ctypes
 import fcntl
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,8 @@ USAGE = (
     "  queue.py get <key>               one config value by dotted key (`merge.repo`): a string or number as is, else JSON\n"
     "  queue.py dump                    the merged config as JSON\n"
     "  queue.py invariants [<id>...]    the invariants as markdown, as a thread reads them; ids name single ones\n"
+    "  queue.py warm                    in a new worktree of the clone: share the paths `worktree.warm` names from the\n"
+    "                                   clone copy-on-write, and say which\n"
     "The machine:\n"
     "  queue.py update                  bring this checkout to origin/main, and the installed plugin with it\n"
     "  queue.py pre-push <remote> <url> the clone's pre-push hook: the repo's publishing invariants"
@@ -85,6 +89,10 @@ def words(v):
     return names(v) and all(re.fullmatch(r"[a-z]+", x) for x in v)
 
 
+def inside(v):
+    return bool(v) and not v.startswith(("/", "~")) and not any(part in ("", ".", "..", ".git") for part in v.split("/"))
+
+
 def repo(v):
     return isinstance(v, str) and v.count("/") == 1 and all(v.split("/"))
 
@@ -129,6 +137,7 @@ REPO = {
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5], "one line ending in ` #{pr}`, with no other placeholder"),
     },
     "review": {"outside": (lambda v: v in ("salvage", "request-changes"), "salvage or request-changes")},
+    "worktree": {"warm": (lambda v: names(v) and bool(v) and all(inside(x) for x in v), "a non-empty list of distinct paths inside the repo")},
 }
 
 
@@ -170,7 +179,7 @@ def validate_machine(data):
 
 
 def validate_repo(name, data):
-    sections(name, data, REPO, optional=("patent",))
+    sections(name, data, REPO, optional=("patent", "worktree"))
     if "patent" in data and name.lower() == data["patent"]["private_repo"].lower():
         raise Refused("patent.private_repo must differ from merge.repo")
     m = data["merge"]
@@ -373,9 +382,18 @@ def config_command(argv):
             who = subprocess.run(["git", "-C", clone, "config", "--get", "user.email"], capture_output=True, text=True).stdout
             if os.path.isdir(clone) and not who.strip():
                 raise Refused(f"{clone} has no git user.email, so a commit there carries this machine's address: set one the forge knows")
+            if os.path.isdir(os.path.join(clone, ".git")) and "worktree" in load(name):
+                with tempfile.TemporaryDirectory(dir=os.path.join(clone, ".git")) as d:
+                    open(os.path.join(d, "a"), "w").close()
+                    try:
+                        share(os.path.join(d, "a"), os.path.join(d, "b"))
+                    except OSError as e:
+                        raise Refused(f"{clone} is on a filesystem that cannot clone by reference ({e}), so worktree.warm would copy") from None
         return print(f"queue: {CONFIG} is valid for {', '.join(every)} on {os.path.basename(machine_file())[:-5]}") or 0
     if argv[:1] == ["invariants"]:
         return print(render(invariants(), argv[1:]), end="") or 0
+    if argv == ["warm"]:
+        return print("".join(f"zstack: {x}\n" for x in warm(load())), end="") or 0
     if argv == ["dump"]:
         return print(json.dumps(load())) or 0
     if len(argv) == 2 and argv[0] == "seat":
@@ -386,6 +404,40 @@ def config_command(argv):
         v = get(load(), argv[1])
         return print(v if type(v) in (str, int) else json.dumps(v)) or 0
     return None
+
+
+def share(src, dst):
+    if sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.clonefile(os.fsencode(src), os.fsencode(dst), 0):
+            raise OSError(os.strerror(ctypes.get_errno()))
+        return
+    p = subprocess.run(["cp", "-R", "--reflink=always", src, dst], capture_output=True, text=True)
+    if p.returncode:
+        shutil.rmtree(dst, ignore_errors=True)
+        raise OSError(p.stderr.strip().splitlines()[-1] if p.stderr.strip() else "cp --reflink=always failed")
+
+
+def warm(pol):
+    p = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], capture_output=True, text=True)
+    at = [os.path.realpath(x) for x in p.stdout.splitlines()]
+    if p.returncode or len(at) != 2 or "worktree" not in pol:
+        return []
+    top, clone = at[0], os.path.dirname(at[1])
+    if top == clone or clone != os.path.realpath(os.path.expanduser(pol["host"]["clone"])):
+        return []
+    said = []
+    for path in pol["worktree"]["warm"]:
+        src, dst = os.path.join(clone, path), os.path.join(top, path)
+        if not os.path.lexists(src) or os.path.lexists(dst):
+            continue
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            share(src, dst)
+            said.append(f"{path} is shared from the clone copy-on-write, as it was there")
+        except OSError as e:
+            said.append(f"{path} could not be shared from the clone ({e}), so this worktree starts without it")
+    return said
 
 
 def sha():
