@@ -62,7 +62,8 @@ class Invariants(unittest.TestCase):
         self.assertEqual([x for x in md.splitlines() if x.startswith("#")],
                          ["## Invariants", "### Always", "### In this repo"])
         self.assertNotIn(INV["guidance"][0]["text"], md)
-        self.assertEqual([r["id"] for r in INV["stack"]], ["merge-verified", "held", "turn-ends-verified", "one-thread", "own-controls", "publish"])
+        self.assertEqual([r["id"] for r in INV["stack"]],
+                         ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch", "own-controls", "publish"])
         self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "text", "issue-close", "teammates"])
         self.assertIn("`config/invariants.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 
@@ -76,7 +77,7 @@ class Invariants(unittest.TestCase):
                 self.assertRegex((PKG / "model" / "Queue.cfg").read_text(), rf"(?m)^(INVARIANT|PROPERTY) {name}$", r["id"])
                 self.assertIn(f'"{name}"', (PKG / "model" / "queue_mutants.py").read_text(), f"{r['id']}: no mutant breaks {name}")
         proved = [r["id"] for r in INV["stack"] if r["test"].startswith("model/")]
-        self.assertEqual(proved, ["merge-verified", "held", "turn-ends-verified", "one-thread"])
+        self.assertEqual(proved, ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch"])
         for miss in ("enforced", "test"):
             row = {"id": "a", "text": "t", "enforced": "e", "test": "x"}
             del row[miss]
@@ -184,11 +185,11 @@ class Harness(unittest.TestCase):
 
 
 class Parts(unittest.TestCase):
-    OTHERS = re.compile(r"(?<!usr/)(?<!homebrew/)(?<!#!/)bin/(?!everystate\b)[a-z][\w-]*|services/|(?<!skills/)dispatch/|extensions/"
+    OTHERS = re.compile(r"(?<!usr/)(?<!homebrew/)(?<!#!/)bin/(?!everystate\b)[a-z][\w-]*|services/|dispatch/|extensions/"
                         r"|patent_push|wake\.py")
 
     def test_the_code_names_no_file_that_is_gone(self):
-        wrong = [f"{f}: {m.group(0)}" for f in tracked("queue.py", "pi/*", "pi/**", "hooks/*", ".claude-plugin/*", "package.json", "skills/dispatch/*")  # noqa: E501
+        wrong = [f"{f}: {m.group(0)}" for f in tracked("queue.py", "pi/*", "pi/**", "hooks/*", ".claude-plugin/*", "package.json")
                  for m in self.OTHERS.finditer((PKG / f).read_text())]
         self.assertEqual(wrong, [], "the queue, the config, the holds file and the wake are all queue.py")
 

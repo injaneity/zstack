@@ -5,7 +5,7 @@ root=${XDG_CACHE_HOME:-$HOME/.cache}/zstack/everystate-$rev
 if [ ! -x "$root/bin/everystate" ]; then
   PATH="$HOME/.cargo/bin:$PATH" cargo install --quiet --locked --git https://github.com/injaneity/everystate \
     --rev "$rev" --root "$root" everystate >&2 || {
-    echo "everystate: could not build it at $rev. Install Rust (rustup.rs), or check with TLC: set JAVA and TLA2TOOLS." >&2
+    echo "everystate: could not build it at $rev. Install Rust (rustup.rs)." >&2
     exit 127
   }
 fi

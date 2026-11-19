@@ -27,19 +27,6 @@ jobs:
       - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
         run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
 
-  tlc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-      - name: TLC, the reference checker, agrees on model/Queue.tla and every mutant
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  $RUNNER_TEMP/tla2tools.jar" | sha256sum -c -
-          TLA2TOOLS="$RUNNER_TEMP/tla2tools.jar" JAVA=java tests/queue-model.sh
   test:
     runs-on: ubuntu-latest
     steps:

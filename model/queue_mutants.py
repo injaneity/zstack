@@ -37,10 +37,28 @@ M = [
         [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],
         "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
-    ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
+    (
+        "launch-without-a-record",
+        "a thread is started for an item and the queue never records it, so the next pass starts a second",
+        [('/\\ Set(m, i, "running") /\\ pending\'', '/\\ UNCHANGED q /\\ pending\'')],
+        "OneThreadPerItem",
+    ),
+    (
+        "relaunch-a-start-that-landed",
+        "a start whose answer was lost is launched again without checking that no thread came of it",
+        [('Abort(m, i) == q[m][i] = "running" /\\ i \\notin thread /\\ i', 'Abort(m, i) == q[m][i] = "running" /\\ i')],
+        "OneThreadPerItem",
+    ),
+    (
+        "relaunch-a-start-still-in-flight",
+        "an item whose start has not answered yet is launched again before the start can no longer land",
+        [('/\\ i \\notin thread /\\ i \\notin pending /\\ Set', '/\\ i \\notin thread /\\ Set')],
+        "OneThreadPerItem",
+    ),
+    ("launch-past-the-cap", "a thread is launched with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
     (
         "start-a-held-item",
-        "an item is claimed while it is held",
+        "an item is launched while it is held",
         [('/\\ i \\in Accepts[m] /\\ i \\notin held /\\ First(m, i)', '/\\ i \\in Accepts[m] /\\ First(m, i)')],
         "HeldNeverStarted",
     ),
@@ -85,7 +103,7 @@ M = [
 ]
 
 
-def run(jar, java, scratch, src, cfg, name, why, edits, rule, *conf):
+def run(checker, scratch, src, cfg, name, why, edits, rule, *conf):
     s = src
     for old, new in edits:
         if s.count(old) != 1:
@@ -96,7 +114,7 @@ def run(jar, java, scratch, src, cfg, name, why, edits, rule, *conf):
     open(os.path.join(d, "Queue.tla"), "w").write(s)
     open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
     for attempt in range(2):
-        cmd = [java, "-XX:+UseParallelGC", "-cp", jar, "tlc2.TLC", "-workers", "2", "-metadir", os.path.join(d, f"meta{attempt}")]
+        cmd = [checker, "-workers", "2", "-metadir", os.path.join(d, f"meta{attempt}")]
         try:
             p = subprocess.run([*cmd, "-config", "Queue.cfg", "Queue.tla"], cwd=d, capture_output=True, text=True, timeout=900)
             out, end = p.stdout, f"exit {p.returncode}: " + ((p.stdout + p.stderr).strip().splitlines()[-1:] or ["no output"])[0][:200]
@@ -113,14 +131,14 @@ def run(jar, java, scratch, src, cfg, name, why, edits, rule, *conf):
     return f"SURVIVED {name}: {why} -> {got or (m and 'model error: ' + m.group(3)) or 'no error'} (expected {rule})"
 
 
-def main(jar, java, scratch):
+def main(checker, scratch):
     src = open(os.path.join(HERE, "Queue.tla")).read()
     cfg = open(os.path.join(HERE, "Queue.cfg")).read()
     with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
-        said = list(pool.map(lambda m: run(jar, java, scratch, src, cfg, *m), M))
+        said = list(pool.map(lambda m: run(checker, scratch, src, cfg, *m), M))
     print("\n".join(said))
     return int(any(not x.startswith("killed") for x in said))
 
 
 if __name__ == "__main__":
-    sys.exit(main(*sys.argv[1:4]))
+    sys.exit(main(*sys.argv[1:3]))
