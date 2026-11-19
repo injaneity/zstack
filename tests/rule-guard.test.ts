@@ -60,6 +60,8 @@ test("force-pushes and hook skips are blocked however they are written", () => {
 });
 
 test("ordinary pushes and git commands run", () => {
+	for (const c of ["git add -- -calias.notes", "git -c user.name=x commit -m 'fix: x'", "git -c core.pager=cat log", "git config alias.x y", "git commit -m 'alias.send=push'"])
+		allowed(c);
 	for (const c of [
 		"git push",
 		"git push -u origin fix/x",
