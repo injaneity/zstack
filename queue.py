@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 
 PKG = os.path.dirname(os.path.realpath(__file__))
@@ -1076,6 +1077,25 @@ def lint(head, cwd=None):
     return out[:8]
 
 
+BUILT = re.compile(r"(^|/)(dist|bundle)/|\.(min|bundle)\.[cm]?js$")
+DOCS = re.compile(r"\.(md|mdx|markdown)$", re.I)
+DOC_ROW = re.compile(r"\s*\|")
+DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
+LONG_LINE = 1000
+
+
+def unmatched(lines):
+    same = Counter(n for s, n, _ in lines if s == "-") & Counter(n for s, n, _ in lines if s == "+")
+    left = {"-": Counter(same), "+": Counter(same)}
+    out = []
+    for s, n, raw in lines:
+        if left[s][n]:
+            left[s][n] -= 1
+        else:
+            out.append(raw)
+    return out
+
+
 class Patent:
     def __init__(self, pol):
         self.pol, pt = pol, pol.get("patent") or {"held_words": [], "skip_lockfiles": ["-"], "private_repo": ""}
@@ -1089,20 +1109,27 @@ class Patent:
         return bool(re.search(rf"github\.com[:/]{re.escape(self.staging)}(\.git)?/?$", url or ""))
 
     def held_hits(self, paths, diff):
-        hits = [p for p in paths if not self.lockfile.search(p) and self.held.search(p)]
-        lock, cols, hunk = False, 1, False
-        for line in (diff or "").splitlines():
+        hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
+        skip, docs, cols, hunk, lines = False, False, 1, False, []
+        for line in (diff or "").splitlines() + ["@@"]:
+            if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
+                hits += unmatched(lines)
+                lines = []
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
-                lock, cols, hunk = bool(self.lockfile.search(path)), 1, False
+                skip, docs, cols, hunk = bool(self.lockfile.search(path) or BUILT.search(path)), bool(DOCS.search(path)), 1, False
                 continue
             if line.startswith("@@"):
                 cols, hunk = len(line) - len(line.lstrip("@")) - 1, True
                 continue
             if not hunk and line.startswith(("+++ ", "--- ")):
                 continue
-            if not lock and line[:cols] in ("+" * cols, "-" * cols) and self.held.search(line[cols:]):
-                hits.append(line[:100])
+            text = line[cols:]
+            if skip or line[:cols] not in ("+" * cols, "-" * cols) or len(text) > LONG_LINE:
+                continue
+            if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
+                continue
+            lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
 
     def choose_remote(self, url, hits, staging_ok):

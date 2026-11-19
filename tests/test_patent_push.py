@@ -34,6 +34,37 @@ class PatentPush(unittest.TestCase):
         lock = "libs/app-spacesd/tests/skyhook-e2e/Cargo.lock"
         self.assertEqual(pp.held_hits([lock], f"diff --git a/{lock} b/{lock}\n+name = \"skyhook-e2e\"\n"), [])
 
+    def test_minified_and_bundled_js_is_skipped(self):
+        long = "+" + "x" * 1000 + "Space in the app (Skyhook)." + "y" * 50
+        self.assertEqual(pp.held_hits(["web/assets/viewer.js"], "diff --git a/web/assets/viewer.js b/web/assets/viewer.js\n" + long + "\n"), [])
+        for path in ("web/vendor/skyhook.min.js", "web/dist/skyhook.js", "web/bundle/app.js", "web/app.bundle.mjs"):
+            with self.subTest(path=path):
+                self.assertEqual(pp.held_hits([path], f"diff --git a/{path} b/{path}\n+const skyhook = 1;\n"), [])
+        self.assertTrue(pp.held_hits(["web/src/viewer.ts"], "diff --git a/web/src/viewer.ts b/web/src/viewer.ts\n+skyhook.open();\n"))
+        self.assertTrue(pp.held_hits(["web/distill/skyhook.js"], ""))
+
+    def test_a_whitespace_only_change_is_skipped(self):
+        reindent = ("diff --git a/a.rs b/a.rs\n@@ -1,2 +1,2 @@\n-fn skyhook() {\n-  vaultkey::open();\n"
+                    "+    fn skyhook()  {\n+        vaultkey::open();\n")
+        self.assertEqual(pp.held_hits(["a.rs"], reindent), [])
+        moved = "diff --git a/a.rs b/a.rs\n@@ -1 +0,0 @@\n-fn skyhook() {}\n@@ -9,0 +9 @@\n+fn skyhook() {}\n"
+        self.assertEqual(len(pp.held_hits(["a.rs"], moved)), 2)
+        self.assertEqual(pp.held_hits(["a.rs"], "diff --git a/a.rs b/a.rs\n@@ -1 +1,2 @@\n-skyhook();\n+ skyhook();\n+skyhook();\n"), ["+skyhook();"])
+        self.assertTrue(pp.held_hits(["a.rs"], "diff --git a/a.rs b/a.rs\n@@ -1 +1 @@\n-skyhook(a);\n+skyhook(b);\n"))
+
+    def test_held_words_in_doc_comments_and_doc_tables_are_skipped(self):
+        for line in ("/// the size skyhook of every window", "//! a skyhook of sizes", "/** Skyhook rules. */",
+                     " * every skyhook gives", "    /// hidden ones, for the skyhook"):
+            with self.subTest(line=line):
+                self.assertEqual(pp.held_hits(["src/a.rs"], f"diff --git a/src/a.rs b/src/a.rs\n+{line}\n"), [])
+        row = "diff --git a/src/bridge/README.md b/src/bridge/README.md\n+| `skyhookCode` | returns the skyhook code |\n"
+        self.assertEqual(pp.held_hits(["src/bridge/README.md"], row), [])
+        for path, line in (("src/a.rs", "let mut skyhook: Vec<usize> = vec![];"), ("src/a.rs", "// skyhook the session"),
+                           ("src/a.ts", "x.map(|s| skyhook(s))"), ("src/a.rs", "*ptr = skyhook();"), ("docs/a.md", "Skyhook pairs two hosts.")):
+            with self.subTest(line=line):
+                self.assertTrue(pp.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
+        self.assertTrue(pp.held_hits(["docs/skyhook.md"], "diff --git a/docs/skyhook.md b/docs/skyhook.md\n+| a | b |\n"))
+
     def test_choose_remote(self):
         pub, stg = "https://github.com/acme/app", "https://github.com/acme/app-private.git"
         self.assertEqual(pp.choose_remote(pub, [], lambda: False), "push")
