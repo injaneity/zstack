@@ -34,7 +34,7 @@ class Warm(unittest.TestCase):
         self.root = Path(os.path.realpath(td.name))
         self.clone, self.tree = self.root / "clone", self.root / "tree"
         self.git("init", "-q", str(self.clone), cwd=self.root)
-        (self.clone / ".gitignore").write_text("node_modules/\nweb/dist/\n")
+        (self.clone / ".gitignore").write_text("node_modules/\nweb/dist/\n-cache\n")
         (self.clone / "web").mkdir()
         (self.clone / "web" / "app.js").write_text("app")
         self.git("add", ".gitignore", "web/app.js", cwd=self.clone)
@@ -82,6 +82,12 @@ class Warm(unittest.TestCase):
             self.assertEqual(self.warm(cwd), [], cwd)
         del self.pol["worktree"]
         self.assertEqual((self.warm(self.tree), self.copied), ([], []))
+
+    def test_a_path_that_starts_with_a_dash_is_a_path(self):
+        (self.clone / "-cache").write_text("c")
+        self.pol["worktree"]["warm"] = ["-cache"]
+        self.assertEqual((self.warm(self.tree), (self.tree / "-cache").read_text()),
+                         (["-cache is shared from the clone copy-on-write, as it was there"], "c"))
 
     def test_only_an_ignored_path_reached_through_no_link_is_shared(self):
         outside = self.root / "outside"

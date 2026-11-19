@@ -438,7 +438,7 @@ def warm(pol):
             if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
                 raise OSError("a link on the way to it leads elsewhere")
             folder = os.path.isdir(src) and not os.path.islink(src)
-            if subprocess.run(["git", "-C", top, "check-ignore", "-q", path + "/" * folder], capture_output=True).returncode:
+            if subprocess.run(["git", "-C", top, "check-ignore", "-q", "--", path + "/" * folder], capture_output=True).returncode:
                 raise OSError("git does not ignore it here")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             share(src, dst)
