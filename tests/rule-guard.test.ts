@@ -3,18 +3,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { holdsPaths, isHoldsPath } from "../extensions/rule-guard/holds.ts";
+import { holdsPaths, isHoldsPath } from "../hooks/holds.ts";
 import { execFileSync } from "node:child_process";
-import { checkBash, checkWrite, mergeOwned, prTextProblems, readyAllowed, reviewOnlyLogins } from "../extensions/rule-guard/rules.ts";
+import { checkBash, checkWrite, mergeOwned, prTextProblems } from "../hooks/rules.ts";
 
 for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
-const DUMP = () => execFileSync("python3", ["-I", new URL("../bin/policy", import.meta.url).pathname, "dump"], { encoding: "utf8" });
+const DUMP = () => execFileSync("python3", ["-I", new URL("../queue.py", import.meta.url).pathname, "dump"], { encoding: "utf8" });
 const OWNED = mergeOwned(DUMP);
 const ISSUES = OWNED;
 const repoAt = (dir: string) => (dir.startsWith("/app") ? "acme/app" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
 const HOLDS = new Set(["/srv/onigiri/hold-prs.txt", "/zs/sync/hold-prs.txt", "~/onigiri/sync/hold-prs.txt"]);
-const TEAM = reviewOnlyLogins(["review-only    | f-teammate      | no  | teammate\nreview-only | ddupont808 | no | teammate\n# review-only | retired | no | x\nhold | 5675 | yes | x\n"]);
+const TEAM = new Set(["f-teammate", "ddupont808"]);
 const AUTHORS: Record<number, string> = { 7030: "f-teammate", 4468: "DDupont808", 3138: "octo", 6853: "someone" };
 const host = { repoAt, isHolds: (p: string) => HOLDS.has(p.startsWith("~") ? p : path.posix.resolve(p)), reviewOnly: () => TEAM,
 	authorOf: (_repo: string, n: number) => AUTHORS[n] };
@@ -175,45 +175,6 @@ test("readying a draft in a merge-job repo is blocked, through gh or GraphQL", (
 	allowed("gh pr view 7040 --json isDraft", inApp);
 });
 
-test("a brief that allows merging lets the session ready its draft, and nothing else", () => {
-	const ok = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd, true), undefined, c);
-	const no = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd, true) ?? "", /^blocked: /, c);
-	ok("gh pr ready 7040 -R acme/app");
-	ok("gh pr ready 7040", inApp);
-	ok(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no("gh pr merge 7040 -R acme/app --squash");
-	no("gh pr merge 7040 --auto", inApp);
-	ok("gh run rerun 9 -R acme/app");
-	no("gh api -X PUT repos/acme/app/pulls/7040/merge");
-	no(`gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no(`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "X"}) { clientMutationId } mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no(`gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "X"}) { clientMutationId } }'`);
-	no("git push -f origin HEAD:main");
-	assert.equal(readyAllowed("1"), true);
-	for (const v of ["", "0", "true", "yes", " 1"]) assert.equal(readyAllowed(v), false, v);
-	blocked("ONIGIRI_READY_ALLOWED=1 gh pr ready 7040 -R acme/app");
-	blocked("env ONIGIRI_READY_ALLOWED=1 gh pr ready 7040", inApp);
-	blocked("ONIGIRI_READY_ALLOWED=1 pi -p 'gh pr ready 7040 -R acme/app'");
-	blocked("export ONIGIRI_READY_ALLOWED=1; pi -p go");
-	blocked("ONIGIRI_READY_ALLOWED=1; export ONIGIRI_READY_ALLOWED");
-	blocked("bash -c 'env ONIGIRI_READY_ALLOWED=1 pi -p go'");
-	blocked("printf -v ONIGIRI_READY_ALLOWED %s 1; pi -p go");
-	blocked("read ONIGIRI_READY_ALLOWED <<< 1; pi -p go");
-	blocked("declare -x ONIGIRI_READY_ALLOWED=1; pi -p go");
-	blocked(`export ONIGIRI_READY_""ALLOWED=1; pi -p go`);
-	blocked("export ONIGIRI_READY_'A'LLOWED=1; pi -p go");
-	blocked("export ONIGIRI_READY_\\ALLOWED=1; pi -p go");
-	blocked("ONIGIRI_READY_ALLOWED1=1 true");
-	blocked("python3 - <<'EOF'\nimport os; os.environ['ONIGIRI_READY_ALLOWED'] = '1'; os.execvp('pi', ['pi', '-p', 'go'])\nEOF");
-	blocked(`set -a; : "\${ONIGIRI_READY_ALLOWED:=1}"; pi -p go`);
-	blocked("echo ${ONIGIRI_READY_ALLOWED=1}");
-	blocked("export $'ONIGIRI_READY_ALLOWED'=1; pi -p go");
-	blocked(`export $"ONIGIRI_READY_ALLOWED"=1; pi -p go`);
-	blocked("export \\$ONIGIRI_READY_ALLOWED=1");
-	blocked("echo ${ONIGIRI_READY_ALLOWED:-unset}");
-	allowed(`echo $ONIGIRI_READY_ALLOWED "[$ONIGIRI_READY_ALLOWED]"`);
-});
-
 test("here-document bodies are data unless a shell reads them", () => {
 	allowed("cd /zs && python3 - <<'EOF'\nsub('docs', 'never gh pr merge 1 or git push -f')\nEOF");
 	allowed("cat > /tmp/body.md <<EOF\nwe never run gh pr merge here\nEOF\ngh pr create --body-file /tmp/body.md", inApp);
@@ -355,22 +316,22 @@ test("writes to the real holds file are blocked; reads run", () => {
 	assert.equal(write("hold-prs.txt", "/tmp/t"), "");
 });
 
-test("bin/hold-row is the sanctioned way to append a row relaying Robin's call; direct writes still name it", () => {
-	const row = "preapprove | #7338 | no | " + "a".repeat(40) + " | deep; Robin 11 Nov 14:56 SGT (green at pin)";
+test("queue.py hold is the sanctioned way to append a row relaying Robin's call; direct writes still name it", () => {
+	const row = "hold | #7338 | no | deep; Robin 11 Nov 14:56 SGT (green at pin)";
 	for (const c of [
-		`bin/hold-row add '${row}'`,
-		`~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add "${row}"`,
-		`ONIGIRI_ROOT=/srv/onigiri bin/hold-row add '${row}'`,
-		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row add '${row}'"`,
-		`ssh vm 'bin/hold-row add "hold | 7400 | no | Robin 11 Nov 17:00 SGT: wait for bench"'`,
-		`bin/hold-row retire '${row}' 'Robin 11 Nov 18:00 SGT: stale pin'`,
-		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/bin/hold-row replace '${row}' '${row.replace("a".repeat(40), "b".repeat(40))}'"`,
+		`queue.py hold add '${row}'`,
+		`~/.pi/agent/git/github.com/injaneity/zstack/queue.py hold add "${row}"`,
+		`ONIGIRI_ROOT=/srv/onigiri queue.py hold add '${row}'`,
+		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/queue.py hold add '${row}'"`,
+		`ssh vm 'queue.py hold add "hold | 7400 | no | Robin 11 Nov 17:00 SGT: wait for bench"'`,
+		`queue.py hold retire '${row}' 'Robin 11 Nov 18:00 SGT: stale pin'`,
+		`~/onigiri-vm/vm "~/.pi/agent/git/github.com/injaneity/zstack/queue.py hold replace '${row}' '${row.replace("7338", "7339")}'"`,
 	])
 		allowed(c, "/srv/onigiri");
-	blocked(`bin/hold-row add '${row}' > /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
-	blocked(`bin/hold-row add '${row}'; echo x >> /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
-	assert.match(checkBash("echo x >> /srv/onigiri/hold-prs.txt", OWNED, host) ?? "", /bin\/hold-row add/);
-	assert.match(checkWrite("/srv/onigiri/hold-prs.txt", host) ?? "", /bin\/hold-row add/);
+	blocked(`queue.py hold add '${row}' > /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
+	blocked(`queue.py hold add '${row}'; echo x >> /srv/onigiri/hold-prs.txt`, "/srv/onigiri");
+	assert.match(checkBash("echo x >> /srv/onigiri/hold-prs.txt", OWNED, host) ?? "", /queue\.py hold add/);
+	assert.match(checkWrite("/srv/onigiri/hold-prs.txt", host) ?? "", /queue\.py hold add/);
 });
 
 test("the real holds paths are this host's config, matched on the filesystem with symlinks followed", () => {
@@ -440,14 +401,14 @@ test("the owned repos are every repo the config has, and an unreadable config re
 		assert.equal(mergeOwned(dump), null);
 	for (const c of ["gh pr merge 33 -R injaneity/zstack --squash", "gh pr ready 1", "gh api -X PUT repos/x/y/pulls/1/merge",
 		"gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"])
-		assert.match(checkBash(c, null, host, "/zs") ?? "", /bin\/policy dump failed/, c);
+		assert.match(checkBash(c, null, host, "/zs") ?? "", /queue\.py dump failed/, c);
 	for (const c of ["gh pr view 1", "gh run rerun 9 --failed", "gh pr merge 1 --help", "git push"])
 		assert.equal(checkBash(c, null, host, "/zs"), undefined, c);
 });
 
 test("closing a acme/app issue by hand needs a comment naming the PR that fixed it", () => {
-	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, false, ISSUES) ?? "", /^blocked: .*issue-close/, c);
-	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, false, ISSUES), undefined, c);
+	const no = (c: string, cwd = "/zs", h = host) => assert.match(checkBash(c, OWNED, h, cwd, ISSUES) ?? "", /^blocked: .*issue-close/, c);
+	const ok = (c: string, cwd = "/zs", h = host) => assert.equal(checkBash(c, OWNED, h, cwd, ISSUES), undefined, c);
 	assert.deepEqual(ISSUES, new Set(["acme/app"]));
 	for (const c of [
 		'gh issue close 6853 -R acme/app --comment "Fixed by #6928."',
@@ -490,13 +451,13 @@ test("closing a acme/app issue by hand needs a comment naming the PR that fixed 
 	ok("gh api -X PATCH repos/acme/app/issues/6853 -f title=x");
 	ok("gh api -X POST repos/acme/app/issues/6853/comments --input body.json");
 	no("gh issue close 12", "/tmp/x");
-	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", false, null) ?? "", /^blocked: /);
-	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", false, new Set()), undefined);
+	assert.match(checkBash("gh issue close 12 -R injaneity/zstack", OWNED, host, "/zs", null) ?? "", /^blocked: /);
+	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", new Set()), undefined);
 });
 
 test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {
-	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
-	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", false, ISSUES), undefined, c);
+	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
+	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", ISSUES), undefined, c);
 	assert.deepEqual(TEAM, new Set(["f-teammate", "ddupont808"]));
 	for (const c of [
 		'gh issue close 7030 -R acme/app --comment "Fixed by #7147."',
@@ -507,12 +468,12 @@ test("a PR or issue a review-only teammate opened is never closed, by the author
 		'ssh vm "gh pr close 7030 -R acme/app"',
 	]) no(c);
 	for (const c of ["gh api -X PATCH repos/{owner}/{repo}/pulls/7030 -f state=closed", "gh pr close 7030 -c 'Replaced by #7147'"])
-		assert.match(checkBash(c, OWNED, host, inApp, false, ISSUES) ?? "", /, a review-only teammate\. /, c);
+		assert.match(checkBash(c, OWNED, host, inApp, ISSUES) ?? "", /, a review-only teammate\. /, c);
 	ok('gh pr close 3138 -R acme/app --comment "Replaced by #7587, which merged."');
 	ok('gh issue close 6853 -R acme/app --comment "Fixed by #6928."');
 	ok("gh pr close 7030 -R injaneity/zstack");
 	ok("gh pr view 7030 -R acme/app");
-	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", false, ISSUES) ?? "", why, c);
+	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", ISSUES) ?? "", why, c);
 	refuse('gh pr close 3138 -R acme/app -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /no hold-prs.txt could be read/);
 	refuse('gh pr close 9999 -R acme/app -c "Replaced by #7587"', host, /could not tell/);
 	refuse('gh pr close -R acme/app -c "Replaced by #7587"', host, /without a number/);
@@ -528,8 +489,6 @@ test("a PR or issue a review-only teammate opened is never closed, by the author
 	ok("gh api graphql -f query='query { viewer { login } }'");
 	ok("gh api -X PATCH repos/acme/app/pulls/7030 -F title=@t.txt");
 	ok("gh api -X PATCH repos/acme/app/pulls/7030 -f state=open");
-	assert.equal(reviewOnlyLogins([undefined, undefined]), null);
-	assert.deepEqual(reviewOnlyLogins([undefined, ""]), new Set());
 });
 
 test("a PR title or body that breaks Commits and PR text is refused in the merge job's repo, and nowhere else", () => {
@@ -584,24 +543,23 @@ test("a merge in an owned repo runs only as the gated command, and only when the
 });
 
 test("a coding thread reports to the queue but never moves it, and never marks a head verified", () => {
-	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/bin/queue verified app-1 40 abc pass auto";
+	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/queue.py verified app-1 40 abc auto";
 	const inThread = { ...host, thread: "t-9" };
-	for (const c of ["bin/queue start app-1", "/pkg/zstack/bin/queue claim app-1 t-9", verdict, "/pkg/zstack/bin/queue requeue app-1", "bin/queue release app-2",
-		"queue add x", "cd /tmp && /pkg/zstack/bin/queue sweep", "bin/queue requeue app-1", "bin/queue pickup",
+	for (const c of ["./queue.py claim app-1 t-9 /w", "/pkg/zstack/queue.py claim app-1 t-9 /w", verdict, "queue.py release app-2",
+		"python3 queue.py add x", "cd /tmp && /pkg/zstack/queue.py pickup", "python3 -I ../zstack/queue.py pickup --dry",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
 		blocked(c, inApp);
-	for (const c of ["/pkg/zstack/bin/queue release", "bin/queue gate 40 abc", "bin/queue list", "gh api repos/acme/app/statuses/abc",
-		"gh api repos/acme/app/commits/abc/check-runs", "ls bin/queue", "git add bin/queue"])
+	for (const c of ["/pkg/zstack/queue.py release", "queue.py release --hook", "queue.py gate 40 abc", "queue.py list", "queue.py next", "queue.py rules --thread",
+		"queue.py seat verifier", "queue.py holds", "gh api repos/acme/app/statuses/abc", "gh api repos/acme/app/commits/abc/check-runs", "ls queue.py", "git add queue.py"])
 		allowed(c, inApp);
-	for (const c of ["bin/queue start app-1", "bin/queue verified app-1 40 abc pass auto",
+	for (const c of ["./queue.py claim app-1 t-9 /w", "queue.py verified app-1 40 abc auto",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified"])
 		allowed(c, "/zs");
-	assert.match(checkBash("bin/queue start app-1", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
+	assert.match(checkBash("./queue.py claim app-1 t-9 /w", OWNED, host, inApp) ?? "", /only the dispatcher moves the queue/);
 	assert.equal(checkBash(verdict, OWNED, inThread, inApp), undefined);
 	assert.equal(checkBash("echo $T3CODE_THREAD_ID", OWNED, inThread, inApp), undefined);
 	for (const c of [`T3CODE_THREAD_ID=t-0 ${verdict}`, `env -u T3CODE_THREAD_ID ${verdict}`, `unset T3CODE_THREAD_ID; ${verdict}`,
-		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "bin/queue start app-1"])
+		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "./queue.py claim app-1 t-9 /w"])
 		assert.match(checkBash(c, OWNED, inThread, inApp) ?? "", /^blocked: /, c);
 });
-

@@ -8,7 +8,7 @@ schema = 1
 me = "octo"
 owner = "Robin"
 
-# The patent hold at publish time (services/patent_push.py, the clone's pre-push hook; Hard rules, Patent hold). A change
+# The patent hold at publish time (queue.py pre-push, the clone's pre-push hook; Hard rules, Patent hold). A change
 # whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
 # no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines.
 [patent]
@@ -20,12 +20,12 @@ skip_lockfiles = [
 ]
 private_repo = "acme/app-private"
 
-# How a PR merges (bin/queue; Hard rules, Merging). `gate_check` is the CI check that must be green on a head
-# before bin/queue merges it.
-# The verifier passes a PR as `auto` or `review`. bin/queue merges an `auto` PR once `gate_check` is green on the verified head; a `review` PR
-# waits for the owner. `review_label` on a PR forces `review`. A preapproved item merges itself whatever the verifier or
-# its thread says: an issue carrying one of `preapproved_labels`, a task added with `--preapproved`, or a `preapprove`
-# row for the PR's head in the holds file. A hold row stops any of them.
+# How a PR merges (queue.py; Hard rules, Merging). `gate_check` is the CI check that must be green on a head
+# before its thread may merge it.
+# The verifier passes a PR as `auto` or `review`. The thread merges an `auto` PR once `gate_check` is green on the
+# verified head; a `review` PR waits for the owner. `review_label` on a PR forces `review`. A preapproved item may merge
+# on either pass: an issue carrying one of `preapproved_labels`, or a task added with `--preapproved`. A hold row stops
+# any of them.
 [merge]
 gate_check = "ci-gate"
 review_label = "needs-review"

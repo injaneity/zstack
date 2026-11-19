@@ -14,10 +14,6 @@ export function mergeOwned(dump: () => string): Owned {
 	}
 }
 
-export function readyAllowed(env = process.env.ONIGIRI_READY_ALLOWED ?? ""): boolean {
-	return env === "1";
-}
-
 export interface Host {
 	repoAt(dir: string): string | null | undefined;
 	isHolds(p: string): boolean;
@@ -30,20 +26,10 @@ export interface Host {
 }
 const NO_HOST: Host = { repoAt: () => undefined, isHolds: () => false };
 
-export function reviewOnlyLogins(texts: (string | undefined)[]): ReadonlySet<string> | null {
-	if (!texts.some((t) => t !== undefined)) return null;
-	const out = new Set<string>();
-	for (const line of texts.join("\n").split("\n")) {
-		const f = line.split("|").map((x) => x.trim());
-		if (!line.trimStart().startsWith("#") && f[0] === "review-only" && f[1]) out.add(f[1].toLowerCase());
-	}
-	return out;
-}
-
 const SHELLS = new Set(["ssh", "vm", "bash", "sh", "zsh", "eval"]);
 const GIT_VALUE_OPTS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--exec-path", "--list-cmds", "--attr-source"]);
 const HOLDS = "hold-prs.txt";
-const HOLDS_WAY = "Only the owner edits hold-prs.txt (Hard rules, Work). To relay the owner's explicit call, use `bin/hold-row add '<row>; <owner> <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
+const HOLDS_WAY = "Only the owner edits hold-prs.txt (Hard rules, Work). To relay the owner's explicit call, use `queue.py hold add '<row>; <owner> <date> <time>'` (or `retire '<row>' '<source>'`, `replace '<row>' '<new row>'`) on the merge host; otherwise put the row you want under questions:.";
 
 function holdsAt(w: string, dir: string | undefined, remote: boolean, host: Host): boolean {
 	const named = fold(base(w)) === HOLDS;
@@ -184,12 +170,12 @@ function targetRepos({ words: w, raw, dirs, remote }: Cmd, host: Host): (string 
 	return pattern?.includes("{") ? current.map(fill).map((r) => (r?.includes("{") ? undefined : r)) : current;
 }
 
-function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | undefined {
+function ghOwned(c: Cmd, owned: Owned, host: Host): string | undefined {
 	const w = c.words;
 	if ((owned && !owned.size) || w[0] !== "gh") return undefined;
-	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (bin/policy dump failed)";
+	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (queue.py dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
-	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || (!ready && GRAPHQL_READY.test(a))))
+	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || GRAPHQL_READY.test(a)))
 		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => /^--input(=|$)/.test(a) || /^[\w-]+=@/.test(a)))
 		return `a GraphQL query read from a file or stdin, which the guard cannot read, while ${who}`;
@@ -200,7 +186,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 		return `\`gh ${g1}${g1 === "alias" ? ` ${g2}` : ""}\`: the guard cannot read what an alias or extension runs, and ${who}`;
 	const act = help ? undefined :
 		g1 === "pr" && g2 === "merge" && !flag("--disable-auto") ? "`gh pr merge`" :
-		g1 === "pr" && g2 === "ready" && !flag("--undo") && !ready ? "`gh pr ready` (a draft is a hold)" :
+		g1 === "pr" && g2 === "ready" && !flag("--undo") ? "`gh pr ready` (a draft is a hold)" :
 		api && w.some((a) => /\/pulls\/[^/]+\/merge(\b|$)/.test(a)) ? "a merge through `gh api`" : undefined;
 	if (!act) return undefined;
 	if (!owned) return `${act} while ${who}`;
@@ -227,7 +213,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host, ready: boolean): string | und
 	return host.gate(hit, Number(pr), head);
 }
 
-const QUEUE_OPEN = new Set(["release", "gate", "list", "next"]);
+const QUEUE_DISPATCHER = new Set(["pickup", "add", "claim"]);
 export const THREAD_VAR = "T3CODE_THREAD_ID";
 
 function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): string | undefined {
@@ -235,13 +221,13 @@ function dispatcherOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefine
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
 	if (c.raw.some((a) => a === THREAD_VAR || a.startsWith(`${THREAD_VAR}=`)))
 		return `it sets or clears ${THREAD_VAR}: the queue tells an item's own thread from its verifier by it`;
-	const w = c.words, i = w.findIndex((a) => /(^|\/)bin\/queue$/.test(a) || a === "queue");
+	const w = c.words, i = w.findIndex((a) => /(^|\/)queue\.py$/.test(a));
 	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
-		return `\`queue verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
-	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined)
-		return "`queue release <id>` from a coding thread: a thread releases only its own item, with `queue release`";
-	if (i >= 0 && i <= 2 && w[i + 1] !== undefined && w[i + 1] !== "verified" && !QUEUE_OPEN.has(w[i + 1]))
-		return `\`queue ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue list\``;
+		return `\`queue.py verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
+	if (i >= 0 && i <= 2 && w[i + 1] === "release" && w[i + 2] !== undefined && w[i + 2] !== "--hook")
+		return "`queue.py release <id>` from a coding thread: a thread releases only its own item, with `queue.py release`";
+	if (i >= 0 && i <= 2 && QUEUE_DISPATCHER.has(w[i + 1]))
+		return `\`queue.py ${w[i + 1]}\` from a coding thread: only the dispatcher moves the queue. A thread reads it with \`queue.py list\``;
 	if (w[0] === "gh" && w[1] === "api" && ghApiWrites(w) && w.some((a) => /\/(statuses|check-runs)(\/|$)/.test(a)))
 		return "posting a commit status or check from a coding thread: only the dispatcher marks a head verified";
 	return undefined;
@@ -284,7 +270,7 @@ function ghIssueClose(c: Cmd, issues: Owned, host: Host): string | undefined {
 			act = "an issue update through `gh api --input`, which may close it";
 	}
 	if (!act) return undefined;
-	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (bin/policy dump failed)`;
+	if (!issues) return `${act} while the repo the issue-close rule covers is unknown (queue.py dump failed)`;
 	if (act.includes("GraphQL")) return act;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${act} where the target repo can't be told (no -R, and the directory's remote is unknown)`;
@@ -362,7 +348,7 @@ function ghTeammateClose(c: Cmd, issues: Owned, host: Host): string | undefined 
 	if (c.words[0] !== "gh" || (issues && !issues.size)) return undefined;
 	const t = closeTarget(c.words);
 	if (!t) return undefined;
-	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (bin/policy dump failed)`;
+	if (!issues) return `${t.what} while the repo the teammate rule covers is unknown (queue.py dump failed)`;
 	if (t.what.includes("GraphQL")) return `${t.what}, whose target and author can't be checked; use \`gh pr close\` or \`gh issue close\`, or pass the query inline`;
 	const repos = targetRepos(c, host);
 	if (repos.includes(undefined)) return `${t.what} where the target repo can't be told, so its author can't be checked`;
@@ -416,13 +402,11 @@ function writesHolds(w: string[], dir: string | undefined, remote: boolean, host
 	return false;
 }
 
-export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, ready = false, issues: Owned = new Set()): string | undefined {
-	if (/ONIGIRI_READY_ALLOWED/.test(command.replace(/(?<!\\)\$ONIGIRI_READY_ALLOWED(?![A-Za-z0-9_])/g, "").replace(/["'\\]/g, "")))
-		return "blocked: only the launcher sets ONIGIRI_READY_ALLOWED, from the brief's `merge: allowed` line. If you think it is needed, put it under questions:.";
+export function checkBash(command: string, owned: Owned, host: Host = NO_HOST, cwd?: string, issues: Owned = new Set()): string | undefined {
 	for (const c of simpleCommands(command, [cwd])) {
 		if (c.at.some((d) => writesHolds(c.words, d, c.remote, host)))
 			return `blocked: it writes the holds file. ${HOLDS_WAY}`;
-		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host, ready) ?? dispatcherOnly(c, owned, host, cwd);
+		const why = c.words[0] === "git" ? gitPush(c.words, c.raw) : ghOwned(c, owned, host) ?? dispatcherOnly(c, owned, host, cwd);
 		if (why) return `blocked: ${why}. onigiri-mode's Hard rules forbid it; if you think it is needed, put it under questions:.`;
 		const words = ghPrText(c, owned, host);
 		if (words) return `blocked: ${words}. ${TEXT_WAY}`;

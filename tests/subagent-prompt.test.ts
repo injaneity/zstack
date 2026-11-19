@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { test } from "node:test";
-import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../extensions/subagent/prompt.ts";
+import { buildChildPrompt, expandRules, NO_POLLING_LINE, onSeatProblem, ROLE_FRAMING, ruleIds, VERIFIER } from "../pi/subagent/prompt.ts";
 
 for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
@@ -17,7 +17,7 @@ test("a child's prompt is its role prompt, the no-polling line and the framing l
 test("the verifier is the one agent that verifies; every agent file is one of the three roles", () => {
 	const agents = fs.readdirSync(`${root}agents`).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
 	assert.deepEqual(agents, ["designer", "explorer", "verifier"]);
-	const roles = Object.keys(JSON.parse(execFileSync("python3", ["-I", `${root}bin/policy`, "dump"], { encoding: "utf8" })).models);
+	const roles = Object.keys(JSON.parse(execFileSync("python3", ["-I", `${root}queue.py`, "dump"], { encoding: "utf8" })).models);
 	assert.deepEqual(roles.filter((r) => /verif|review/.test(r)), ["verifier"]);
 });
 
@@ -36,8 +36,8 @@ for (const name of ["verifier", "explorer", "designer"]) {
 	});
 }
 
-test("an agent's {{rule <id>}} lines become bin/policy's rendering of those rules, and nothing else changes", () => {
-	const render = (id: string) => execFileSync("python3", ["-I", `${root}bin/policy`, "rules", id], { encoding: "utf8" });
+test("an agent's {{rule <id>}} lines become queue.py's rendering of those rules, and nothing else changes", () => {
+	const render = (id: string) => execFileSync("python3", ["-I", `${root}queue.py`, "rules", id], { encoding: "utf8" });
 	for (const name of ["verifier", "designer"]) {
 		const ids = ruleIds(body(name));
 		assert.ok(ids.length > 0, `${name} quotes a rule`);

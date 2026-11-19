@@ -10,11 +10,11 @@ for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete proce
 const root = new URL("..", import.meta.url).pathname;
 const hooks = JSON.parse(fs.readFileSync(`${root}hooks/hooks.json`, "utf8")).hooks;
 const command = (event: string) => hooks[event][0].hooks[0].command.replaceAll("${CLAUDE_PLUGIN_ROOT}", root.replace(/\/$/, ""));
-const repo = spawnSync("python3", ["-I", `${root}bin/policy`, "get", "merge.repo"], { encoding: "utf8" }).stdout.trim();
+const repo = spawnSync("python3", ["-I", `${root}queue.py`, "get", "merge.repo"], { encoding: "utf8" }).stdout.trim();
 
 function guard(call: unknown, env: Record<string, string> = {}) {
 	const text = typeof call === "string" ? call : JSON.stringify(call);
-	return spawnSync("sh", ["-c", command("PreToolUse")], { input: text, encoding: "utf8", env: { ...process.env, ONIGIRI_READY_ALLOWED: "", ...env } });
+	return spawnSync("sh", ["-c", command("PreToolUse")], { input: text, encoding: "utf8", env: { ...process.env, ...env } });
 }
 
 test("the Claude Code hook refuses what the pi extension refuses, with exit 2 and the reason alone on stderr", () => {
@@ -37,10 +37,10 @@ test("an allowed call passes in silence", () => {
 	}
 });
 
-test("`gh pr ready` follows ONIGIRI_READY_ALLOWED as it does under pi", () => {
+test("`gh pr ready` is refused whatever the environment says", () => {
 	const call = { tool_name: "Bash", tool_input: { command: `gh pr ready 12 --repo ${repo}` }, cwd: "/tmp" };
 	assert.equal(guard(call).status, 2);
-	assert.equal(guard(call, { ONIGIRI_READY_ALLOWED: "1" }).status, 0);
+	assert.equal(guard(call, { ONIGIRI_READY_ALLOWED: "1" }).status, 2);
 });
 
 test("input the hook cannot read is refused, not waved through", () => {
@@ -88,7 +88,7 @@ test("a config directory that is not there refuses every guarded call instead of
 });
 
 test("a helper runs on the model the config gives its role, never as a subagent of the coding model", () => {
-	const seat = (role: string) => spawnSync("python3", ["-I", `${root}bin/policy`, "seat", role], { encoding: "utf8" }).stdout.trim().split(" ")[1];
+	const seat = (role: string) => spawnSync("python3", ["-I", `${root}queue.py`, "seat", role], { encoding: "utf8" }).stdout.trim().split(" ")[1];
 	for (const type of ["zstack:verifier", "zstack:explorer", "verifier"]) {
 		const r = guard({ tool_name: "Agent", tool_input: { subagent_type: type, prompt: "x" }, cwd: "/tmp" });
 		assert.equal(r.status, 2, type);

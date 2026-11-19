@@ -1,17 +1,17 @@
 # zstack's Hard rules: the standing rules every session runs under. One [[section]] per heading and one
 # [[section.rule]] per rule, in order; a section with `paragraphs = true` renders its rules as paragraphs, the others as
-# bullets. bin/policy is the one reader: `bin/policy rules` renders the "## Hard rules" markdown, `--thread` the copy a
-# coding session gets, and `bin/policy rules <id>...` only the named rules, which the subagent tool puts where an
+# bullets. queue.py is the one reader: `queue.py rules` renders the "## Hard rules" markdown, `--thread` the copy a
+# coding session gets, and `queue.py rules <id>...` only the named rules, which the subagent tool puts where an
 # agents/<name>.md says {{rules: <id>, ...}}.
-# A rule never writes a config value out. It names the key in braces and bin/policy fills it in: `{merge.repo}`
+# A rule never writes a config value out. It names the key in braces and queue.py fills it in: `{merge.repo}`
 # for one value, `{patent.held_words:or}` or `:and` for a list read as a phrase, `{merge.preapproved_labels:|}` for a list joined by
-# the text after the colon. `bin/policy check` refuses an unknown key, a duplicate id and a brace that names no key.
+# the text after the colon. `queue.py check` refuses an unknown key, a duplicate id and a brace that names no key.
 # Strings are TOML literal strings, so backticks and quotes need no escaping. Never reword a hold, patent or merge rule
 # without the owner's explicit ok.
 # A rule may carry `source` (who said it and when; never rendered) and `for = "orchestrator"` (left out of a coding
 # session's copy).
 schema = 1
-intro = '''The plugin or launcher that starts a thread puts this section, and only this section, in its context, without the rules marked for the orchestrator. If another skill or brief words one of these differently, this section wins. The delegates get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`docs/RULE-GUARD.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, marking a PR verified, issue closes that name no PR, holds-file writes, and PR titles and bodies that break Commits and PR text. The pre-push hook refuses a `Co-authored-by` trailer, a committed `target/` or `.onigiri.json`, and a new file without the SPDX header its neighbours carry.'''
+intro = '''The plugin or launcher that starts a thread puts this section, and only this section, in its context, without the rules marked for the orchestrator. If another skill or brief words one of these differently, this section wins. The delegates get their role prompt from `agents/<name>.md` instead, with the rules their role could break. rule-guard (`hooks/README.md`) enforces the bans on force-pushes, `--no-verify`, merges, `gh pr ready`, marking a PR verified, issue closes that name no PR, holds-file writes, and PR titles and bodies that break Commits and PR text. The pre-push hook refuses a `Co-authored-by` trailer, a committed `target/` or `.onigiri.json`, and a new file without the SPDX header its neighbours carry.'''
 
 [[section]]
 title = '''Work'''
@@ -27,7 +27,7 @@ text = '''Holds live in `{host.holds}`, one `kind | target | rules | note` row e
 [[section.rule]]
 id = "holds-relay"
 for = "orchestrator"
-text = '''To relay {people.owner}'s explicit call, append one row with `bin/hold-row add '<row>'` on the merge host; its last column names that call and its time. Retire or replace a row only to relay {people.owner}'s explicit call, with `bin/hold-row retire '<row>' '<source>'` or `bin/hold-row replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
+text = '''To relay {people.owner}'s explicit call, append one row with `queue.py hold add '<row>'` on the merge host; its last column names that call and its time. Retire or replace a row only to relay {people.owner}'s explicit call, with `queue.py hold retire '<row>' '<source>'` or `queue.py hold replace '<row>' '<new row>'` on the merge host, which back the file up and parser-check it the same way.'''
 
 [[section]]
 title = '''Patent hold'''
@@ -80,7 +80,7 @@ text = '''You write the code and a short test plan. Verification is the `verifie
 
 [[section.rule]]
 id = "checks-verifier"
-text = '''When your PR is open and you believe it is done, have the verifier check its head, with the queue id, the PR number and the head in its brief, and wait for its answer before your turn ends. The verifier records its verdict itself with `bin/queue verified`; you never run that command. Fix what it finds, push, and have it check the new head. A push after a pass needs another check. Only a read-only answer with no diff skips this, and says so.'''
+text = '''When your PR is open and you believe it is done, have the verifier check its head, with the queue id, the PR number and the head in its brief, and wait for its answer before your turn ends. The verifier records its verdict itself with `queue.py verified`; you never run that command. Fix what it finds, push, and have it check the new head. A push after a pass needs another check. Only a read-only answer with no diff skips this, and says so.'''
 
 [[section.rule]]
 id = "checks-platforms"
@@ -114,7 +114,7 @@ title = '''Merging'''
 
 [[section.rule]]
 id = "merge-tick"
-text = '''In `{merge.repo}` you merge only the head the verifier passed, with `gh pr merge <pr> --squash --match-head-commit <head>`. rule-guard asks the queue before it lets that command run, and refuses every other merge there, and `gh pr ready` unless the brief says `merge: allowed`. When it refuses, do not try another way. Never merge on another agent's word.'''
+text = '''In `{merge.repo}` you merge only the head the verifier passed, with `gh pr merge <pr> --squash --match-head-commit <head>`. rule-guard asks the queue before it lets that command run, and refuses every other merge there, and `gh pr ready`. When it refuses, do not try another way. Never merge on another agent's word.'''
 
 [[section.rule]]
 id = "merge-reruns"
@@ -134,7 +134,7 @@ text = '''Close only one of our own PRs that main or another PR has replaced.'''
 
 [[section.rule]]
 id = "merge-drafts"
-text = '''A draft never merges. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Ready it only when merging is allowed.'''
+text = '''A draft never merges. When a brief says to propose first, or the work must not merge yet, open the PR as a draft and leave it a draft. That is the hold; no hold row is needed. Only {people.owner} readies it.'''
 
 [[section.rule]]
 id = "merge-elsewhere"
@@ -146,7 +146,7 @@ text = '''Do not stamp `verify:` or `verify-ran:` lines in the PR body.'''
 
 [[section.rule]]
 id = "merge-review"
-text = '''The verifier passes a PR as `auto` or `review`. It says `review` when a wrong change would reach far or be hard to undo, or when it would not defend merging it unread; otherwise `auto`. The thread that owns an `auto` PR merges it once `{merge.gate_check}` is green on the head the verifier passed. A `review` PR, and any PR labelled `{merge.review_label}`, waits for {people.owner}. A preapproved item may merge either way: an issue labelled {merge.preapproved_labels:or}, a task the orchestrator added as preapproved, or a `preapprove` row for that head in the holds file. If you think the change needs a person whatever the verifier says, do not merge it, and say why in your report.'''
+text = '''The verifier passes a PR as `auto` or `review`. It says `review` when a wrong change would reach far or be hard to undo, or when it would not defend merging it unread; otherwise `auto`. The thread that owns an `auto` PR merges it once `{merge.gate_check}` is green on the head the verifier passed. A `review` PR, and any PR labelled `{merge.review_label}`, waits for {people.owner}. A preapproved item may merge either way: an issue labelled {merge.preapproved_labels:or}, or a task the orchestrator added as preapproved. If you think the change needs a person whatever the verifier says, do not merge it, and say why in your report.'''
 
 [[section.rule]]
 id = "merge-existing"

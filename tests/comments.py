@@ -8,7 +8,7 @@ import sys
 import tokenize
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-ROOTS = ("bin/", "services/", "dispatch/", "model/", "hooks/", "extensions/", "tests/", ".github/")
+ROOTS = ("queue.py", "bin/", "model/", "hooks/", "pi/", "tests/", ".github/")
 KEEP = re.compile(r"#!|#\s*(noqa|shellcheck |type:)|//\s*(@ts-|eslint)")
 USAGE = "usage: tests/comments.py check | strip [file...]"
 

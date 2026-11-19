@@ -18,13 +18,10 @@ jobs:
           python-version: "3.9"
       - name: python3 is 3.9
         run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
-      - name: scripts parse under 3.9
-        run: |
-          for f in bin/* services/*; do
-            case "$(head -1 "$f")" in *python3*) python3 -m py_compile "$f";; esac
-          done
-      - name: bin/policy reads the config under 3.9 (vendor/tomli)
-        run: bin/policy check && bin/policy get merge.gate_check && bin/policy dump > /dev/null && bin/policy rules > /dev/null
+      - name: queue.py parses under 3.9
+        run: python3 -m py_compile queue.py
+      - name: queue.py reads the config under 3.9 (vendor/tomli)
+        run: ./queue.py check && ./queue.py get merge.gate_check && ./queue.py dump > /dev/null && ./queue.py rules > /dev/null
       - name: the suite passes under 3.9
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass under 3.9 (no VM starts)
@@ -48,16 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: scripts parse
-        run: |
-          for f in bin/* services/*; do
-            case "$(head -1 "$f")" in
-              *python3*) python3 -m py_compile "$f";;
-              '#!/bin/bash'*) bash -n "$f";;
-            esac
-          done
-      - name: the config, rules.toml and state.toml are valid (bin/policy check, the one parser)
-        run: bin/policy check && bin/policy rules > /dev/null
-      - name: queue, holds, patent hook, wake, hold-row, policy, config-reference and declarative-config tests
+        run: python3 -m py_compile queue.py && bash -n bin/everystate && bash -n bin/everystate-java && sh -n hooks/pre-push
+      - name: the config and rules.toml are valid (queue.py check, the one parser)
+        run: ./queue.py check && ./queue.py rules > /dev/null
+      - name: queue, holds, patent hook, wake, config, config-reference and declarative-config tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: the mini's lume-e2e wrapper tests pass (no VM starts)
         run: python3 -m unittest discover -s hosts/mini/lume-e2e -p 'test_*.py'
@@ -65,8 +56,8 @@ jobs:
         run: python3 tests/comments.py check
       - name: lint the services and tests
         run: |
-          pipx run ruff==0.17.3 check services tests bin/hold-row bin/policy bin/queue model
-          shellcheck services/pre-push services/ensure-main tests/ensure-main.sh tests/queue-model.sh bin/everystate bin/everystate-java
+          pipx run ruff==0.17.3 check queue.py tests model
+          shellcheck hooks/pre-push tests/update.sh tests/queue-model.sh bin/everystate bin/everystate-java
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -78,8 +69,8 @@ jobs:
         run: node --test tests/tool-guard.test.ts
       - name: the Claude Code hook
         run: node --test tests/claude-hook.test.ts
-      - name: ensure-main fast-forwards the package to origin/main or refuses
-        run: tests/ensure-main.sh
+      - name: queue.py update fast-forwards the package to origin/main or refuses
+        run: tests/update.sh
       - uses: actions/cache@v4
         with:
           path: ~/.cache/zstack
@@ -98,11 +89,11 @@ jobs:
           if grep -n '^models\?:' agents/*.md; then echo "set models in pi's config, not here"; exit 1; fi
       - name: every agent the docs name exists
         run: |
-          names=$(sed -n 's/^name: *//p' agents/*.md; ls skills prompts | sed 's/\.md$//')
+          names=$(sed -n 's/^name: *//p' agents/*.md; ls skills pi/prompts | sed 's/\.md$//')
           fail=0
           while IFS=: read -r file name; do
             echo "$names" | grep -qx -- "$name" || { echo "$file names \`$name\` but no agent, skill or prompt has that name"; fail=1; }
-          done < <(grep -roE '`(zstack|onigiri)-[a-z0-9-]+`' --include='*.md' skills prompts docs README.md AGENTS.md | tr -d '`' | sort -u)
+          done < <(grep -roE '`(zstack|onigiri)-[a-z0-9-]+`' --include='*.md' skills pi hooks README.md PROVENANCE.md AGENTS.md | tr -d '`' | sort -u)
           exit $fail
       - name: every skill and playbook the docs name exists
         run: |
@@ -115,9 +106,9 @@ jobs:
             [[ $ref == \*\** ]] && [[ $file =~ $verbatim ]] && continue
             [[ $ref == \*\** ]] && echo "$agents" | grep -qx -- "$name" && continue
             [ -f "skills/$name/SKILL.md" ] || { echo "$file names skill \`$name\` but skills/$name/SKILL.md does not exist"; fail=1; }
-          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills prompts docs agents README.md AGENTS.md | sort -u)
+          done < <(grep -roE '\*\*`?[a-z]+(-[a-z]+)*`?\*\*|/skill:[a-z-]+|\.\./[a-z-]+/SKILL\.md|(\.cursor/|\.pi/)?skills/[a-z-]+/' --include='*.md' skills pi hooks agents README.md PROVENANCE.md AGENTS.md | sort -u)
           while IFS=: read -r file ref; do
             name=$(echo "$ref" | sed -E 's#^playbooks/##; s#\.md$##; s#^\(`##; s#`\)$##')
             [ -f "skills/onigiri-mode/playbooks/$name.md" ] || { echo "$file names playbook \`$name\` but skills/onigiri-mode/playbooks/$name.md does not exist"; fail=1; }
-          done < <({ grep -roE 'playbooks/[a-z-]+\.md' --include='*.md' skills prompts docs agents README.md AGENTS.md || true; grep -HoE '\(`[a-z-]+`\)' skills/onigiri-mode/SKILL.md || true; } | sort -u)
+          done < <({ grep -roE 'playbooks/[a-z-]+\.md' --include='*.md' skills pi hooks agents README.md PROVENANCE.md AGENTS.md || true; grep -HoE '\(`[a-z-]+`\)' skills/onigiri-mode/SKILL.md || true; } | sort -u)
           exit $fail

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { boundBash, idleSeconds } from "../extensions/tool-guard/index.ts";
+import { boundBash, idleSeconds } from "../pi/tool-guard.ts";
 
 for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
 const root = new URL("..", import.meta.url).pathname;
 
 test("a bash call with no timeout gets run.idle_min less the supervisor's minute; a declared one is kept", () => {
-	const idle = Number(execFileSync("python3", ["-I", `${root}bin/policy`, "get", "run.idle_min"], { encoding: "utf8" }).trim());
+	const idle = Number(execFileSync("python3", ["-I", `${root}queue.py`, "get", "run.idle_min"], { encoding: "utf8" }).trim());
 	const s = idleSeconds();
 	assert.equal(s, (idle - 1) * 60);
 	const none: { timeout?: unknown } = {};

@@ -14,7 +14,7 @@ import { buildChildPrompt, expandRules, onSeatProblem, ruleIds } from "./prompt.
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MODELS_CONFIG = "the machine file's [models]";
-const POLICY = path.join(PACKAGE_DIR, "bin", "policy");
+const QUEUE = path.join(PACKAGE_DIR, "queue.py");
 const CHILD_SESSIONS = path.join(getAgentDir(), "sessions", "subagents");
 const rawDepth = process.env.PI_SUBAGENT_DEPTH ?? "";
 const SUBAGENT_DEPTH = rawDepth === "" ? 0 : /^\d+$/.test(rawDepth) ? Number(rawDepth) : 1;
@@ -39,7 +39,7 @@ interface Seat {
 function seatFor(agent: string, variant: number | undefined): { seat?: Seat; label: string; error?: string } {
 	let roles: Record<string, unknown>;
 	try {
-		roles = JSON.parse(execFileSync("python3", ["-I", POLICY, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] })).models;
+		roles = JSON.parse(execFileSync("python3", ["-I", QUEUE, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] })).models;
 	} catch (error) {
 		const why = String((error as { stderr?: unknown }).stderr ?? "").trim() || (error as Error).message;
 		return { label: agent, error: `cannot read ${MODELS_CONFIG}: ${why}` };
@@ -210,7 +210,7 @@ async function runSingleAgent(
 	let rolePrompt: string;
 	try {
 		const ids = ruleIds(agent.systemPrompt);
-		const lines = ids.length ? execFileSync("python3", ["-I", POLICY, "rules", ...ids], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }).split("\n") : [];
+		const lines = ids.length ? execFileSync("python3", ["-I", QUEUE, "rules", ...ids], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }).split("\n") : [];
 		rolePrompt = expandRules(agent.systemPrompt, (id) => lines[ids.indexOf(id)]);
 	} catch (error) {
 		const why = String((error as { stderr?: unknown }).stderr ?? "").trim() || (error as Error).message;

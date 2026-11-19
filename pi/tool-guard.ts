@@ -9,9 +9,9 @@ export const GUIDELINES = [
 	"Measure with a fixed, time-bounded matrix (a set number of runs, each under `timeout`), not a long serial loop in the foreground.",
 ];
 
-const POLICY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/policy");
+const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../queue.py");
 
-export function idleSeconds(get: () => string = () => execFileSync("python3", ["-I", POLICY, "get", "run.idle_min"],
+export function idleSeconds(get: () => string = () => execFileSync("python3", ["-I", QUEUE, "get", "run.idle_min"],
 	{ encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] })): number | undefined {
 	try {
 		const n = Number(get().trim());

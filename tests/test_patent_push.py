@@ -10,20 +10,12 @@ from unittest.mock import patch
 for _k in ("ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"):
     os.environ.pop(_k, None)
 
-VM = Path(__file__).resolve().parent.parent / "services"
-H, H2 = "a" * 40, "b" * 40
-
-
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, VM / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-wake = load("wake")
-pp = load("patent_push")
-
+PKG = Path(__file__).resolve().parent.parent
+H = "a" * 40
+spec = importlib.util.spec_from_file_location("queue_patent", PKG / "queue.py")
+q = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(q)
+pp = q.Patent(q.load())
 
 
 class PatentPush(unittest.TestCase):
@@ -65,10 +57,11 @@ class PatentPush(unittest.TestCase):
         g("push", "-q", "origin", "main", cwd=work)
         g("fetch", "-q", "origin", cwd=work)
         hook = Path(work, ".git/hooks/pre-push")
-        hook.write_text(f"#!{sys.executable}\nimport importlib.util, sys\n"
-                        f"s = importlib.util.spec_from_file_location('pp', {str(VM / 'patent_push.py')!r})\n"
-                        "pp = importlib.util.module_from_spec(s); s.loader.exec_module(pp)\n"
-                        f"sys.exit(pp.main(sys.argv, sys.stdin, staging_ok=lambda: False, root={root!r}))\n")
+        hook.write_text(f"#!{sys.executable}\nimport importlib.util, os, sys\n"
+                        f"os.environ['ONIGIRI_ROOT'] = {root!r}\n"
+                        f"s = importlib.util.spec_from_file_location('q', {str(PKG / 'queue.py')!r})\n"
+                        "q = importlib.util.module_from_spec(s); s.loader.exec_module(q)\n"
+                        "sys.exit(q.Patent(q.load()).main(sys.argv[1:], sys.stdin, staging_ok=lambda: False))\n")
         hook.chmod(0o755)
         return g, pub, work, root
 
@@ -99,19 +92,20 @@ class PatentPush(unittest.TestCase):
 
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
-            with patch.object(pp.wake, "post", side_effect=["webhook failed: OSError", "webhook sent (200)"]) as post:
-                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
-                self.assertTrue(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
-                self.assertFalse(pp.wake_hold("onigiri/z", H, ["src/sealing.rs"], root))
+            there = q.Patent({**pp.pol, "host": {**pp.pol["host"], "root": root}})
+            with patch.object(q, "wake", side_effect=["webhook failed: OSError", "webhook sent (200)"]) as post:
+                self.assertFalse(there.wake_hold("onigiri/z", H, ["src/sealing.rs"]))
+                self.assertTrue(there.wake_hold("onigiri/z", H, ["src/sealing.rs"]))
+                self.assertFalse(there.wake_hold("onigiri/z", H, ["src/sealing.rs"]))
             self.assertEqual(post.call_count, 2)
             self.assertEqual([x.split(" ", 7)[6] for x in Path(f"{root}/events.log").read_text().splitlines()], ["failed:", "sent"])
 
-    def test_the_installed_hook_is_a_symlink_and_logs_beside_the_clone(self):
+    def test_the_installed_hook_is_a_symlink_and_logs_under_the_configured_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             g, pub, work, _ = self.repo(tmp)
             hook = Path(work, ".git/hooks/pre-push")
             hook.unlink()
-            hook.symlink_to(VM / "pre-push")
+            hook.symlink_to(PKG / "hooks" / "pre-push")
             Path(tmp, "bin").mkdir()
             Path(tmp, "bin/gh").write_text("#!/bin/sh\nexit 1\n")
             Path(tmp, "bin/gh").chmod(0o755)
@@ -125,7 +119,8 @@ class PatentPush(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(g("ls-remote", pub, "refs/heads/onigiri/w"), "")
-            self.assertEqual([x.split(" ", 3)[1:3] for x in Path(f"{tmp}/events.log").read_text().splitlines()], [["patent-held", "app:onigiri/w"]])
+            log = Path(f"{tmp}/zstack/acme/app/events.log").read_text().splitlines()
+            self.assertEqual([x.split(" ", 3)[1:3] for x in log], [["patent-held", "app:onigiri/w"]])
             g("checkout", "-qb", "onigiri/ok", cwd=work)
             Path(work, "relay.rs").write_text("fn relay() {}\n")
             g("add", ".", cwd=work)
@@ -166,9 +161,9 @@ class PatentPush(unittest.TestCase):
 
     def test_rename_source_and_target_paths_both_count(self):
         ns = "R100\tsrc/sealing.rs\tsrc/link.rs\nM\tREADME\n"
-        self.assertEqual(pp.status_paths(ns), ["src/sealing.rs", "src/link.rs", "README"])
-        self.assertEqual(pp.held_hits(pp.status_paths(ns), ""), ["src/sealing.rs"])
-        self.assertEqual(pp.held_hits(pp.status_paths("R090\tsrc/a.rs\tsrc/skyhook.rs\n"), ""), ["src/skyhook.rs"])
+        self.assertEqual(q.status_paths(ns), ["src/sealing.rs", "src/link.rs", "README"])
+        self.assertEqual(pp.held_hits(q.status_paths(ns), ""), ["src/sealing.rs"])
+        self.assertEqual(pp.held_hits(q.status_paths("R090\tsrc/a.rs\tsrc/skyhook.rs\n"), ""), ["src/skyhook.rs"])
 
     def test_a_combined_diff_counts_only_the_merges_own_lines(self):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
@@ -263,10 +258,6 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotEqual(remote, "")
             self.assertFalse(os.path.exists(f"{root}/events.log"))
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 if __name__ == "__main__":
