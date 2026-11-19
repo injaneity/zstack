@@ -1,5 +1,5 @@
 {
   "name": "zstack",
   "version": "0.5.0",
-  "description": "Rigorous agent workflows: the zstack skills, with the invariants loaded and their guard on every Bash call."
+  "description": "Rigorous agent workflows: the zstack skills, with the invariants loaded and their guard on every command and file write."
 }

@@ -16,7 +16,7 @@ M = [
     (
         "merge-a-held-item",
         "a hold added after a head passed does not close the gate",
-        [(' /\\ ~NeedsPerson(i) /\\ i \\notin held\nMerge', ' /\\ ~NeedsPerson(i)\nMerge')],
+        [('Open(i) == status[i] # "none" /\\ ~NeedsPerson(i) /\\ i \\notin held', 'Open(i) == status[i] # "none" /\\ ~NeedsPerson(i)')],
         "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
     (
@@ -34,7 +34,7 @@ M = [
     (
         "pass-survives-a-push",
         "a pass stays on the PR after a new push",
-        [('status[i] # "none" /\\ status\' = [status EXCEPT ![i] = "none"]', 'status[i] # "none" /\\ status\' = status')],
+        [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],
         "ThreadMergesOnlyAVerifiedAllowedHead",
     ),
     ("launch-past-the-cap", "a thread is claimed with the machine at its cap", [("  /\\ Busy(m) < Cap\n", "")], "CapHolds"),
@@ -48,8 +48,15 @@ M = [
     (
         "no-release",
         "an item whose thread's turn ended holds its slot for good",
-        [('Release(m, i) == q[m][i] = "running" /\\ UNCHANGED rest', 'Release(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED rest')],
+        [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
+         ('TurnEnd(m, i) == q[m][i] = "running" /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ ~Unverified(i)')],
         LIVE,
+    ),
+    (
+        "end-a-turn-unverified",
+        "a thread's turn ends while its open PR's head has no verdict",
+        [('TurnEnd(m, i) == q[m][i] = "running" /\\ ~Unverified(i)', 'TurnEnd(m, i) == q[m][i] = "running"')],
+        "ATurnEndsVerified",
     ),
     (
         "a-late-verdict-is-refused",

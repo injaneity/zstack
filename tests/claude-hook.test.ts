@@ -25,6 +25,11 @@ test("the Claude Code hook refuses what the pi extension refuses, with exit 2 an
 	const label = guard({ tool_name: "Bash", tool_input: { command: `gh pr edit 12 --repo ${repo} --remove-label hold` }, cwd: "/tmp" });
 	assert.equal(label.status, 2);
 	assert.match(label.stderr, /only the owner sets/);
+	for (const tool of ["Write", "Edit", "MultiEdit"]) {
+		const file = guard({ tool_name: tool, tool_input: { file_path: "/tmp/root/queue.json" }, cwd: "/tmp" });
+		assert.equal(file.status, 2, tool);
+		assert.match(file.stderr, /the queue's file/);
+	}
 });
 
 test("an allowed call passes in silence", () => {
@@ -45,8 +50,8 @@ test("input the hook cannot read is refused, not waved through", () => {
 	assert.equal(guard("not json").status, 2);
 });
 
-test("the hook covers every tool that runs a command or starts a helper, and session start prints the invariants", () => {
-	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Agent", "Bash", "Task", "mcp__.*__delegate_task"]);
+test("the hook covers every tool that runs a command, writes a file or starts a helper, and session start prints the invariants", () => {
+	assert.deepEqual(hooks.PreToolUse[0].matcher.split("|").sort(), ["Agent", "Bash", "Edit", "MultiEdit", "NotebookEdit", "Task", "Write", "mcp__.*__delegate_task"]);
 	const rules = spawnSync("sh", ["-c", command("SessionStart")], { encoding: "utf8" });
 	assert.equal(rules.status, 0);
 	assert.match(rules.stdout, /^## Invariants/m);

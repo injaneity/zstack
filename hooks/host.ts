@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkBash, type Host, mergeOwned, THREAD_VAR } from "./rules.ts";
+import { checkBash, checkWrite, type Host, mergeOwned, THREAD_VAR } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -20,7 +20,7 @@ function originRepo(dir: string): string | null | undefined {
 
 const QUEUE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../queue.py");
 const dump = () => execFileSync("python3", ["-I", QUEUE, "dump"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
-function config(): { merge: { hold_label: string; review_label: string; preapproved_labels: string[] }; people: { review_only: string[] } } | null {
+function config(): { merge: { hold_label: string; review_label: string; preapproved_labels: string[] } } | null {
 	try {
 		return JSON.parse(dump());
 	} catch {
@@ -29,18 +29,15 @@ function config(): { merge: { hold_label: string; review_label: string; preappro
 }
 const owned = mergeOwned(dump);
 const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labels] : null))(config()?.merge);
-function authorOf(repo: string, n: number): string | undefined {
+function readonly(): boolean | undefined {
+	const thread = process.env[THREAD_VAR];
+	if (!thread) return false;
 	try {
-		const login = execFileSync("gh", ["api", `repos/${repo}/issues/${n}`, "--jq", ".user.login"], { encoding: "utf8", timeout: 15000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-		return /^[\w.\[\]/-]+$/.test(login) ? login : undefined;
+		const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] }));
+		return Object.values(q.running as Record<string, { thread: string; readonly: boolean }>).some((v) => v.thread === thread && v.readonly);
 	} catch {
 		return undefined;
 	}
-}
-
-function reviewOnly(): ReadonlySet<string> | null {
-	const people = config()?.people;
-	return people ? new Set(people.review_only.map((x) => x.toLowerCase())) : null;
 }
 function readText(file: string, dir: string | undefined): string | undefined {
 	try {
@@ -65,7 +62,7 @@ export function release(): void {
 	} catch {}
 }
 
-const host: Host = { gate, labels, repoAt: originRepo, authorOf, reviewOnly, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
+const host: Host = { gate, labels, readonly, repoAt: originRepo, readText, get ghRepo() { return process.env.GH_REPO || undefined; }, thread: process.env[THREAD_VAR] || undefined };
 
 const ROLES: Record<string, string> = { research: "explorer", design: "designer", review: "verifier" };
 
@@ -94,6 +91,6 @@ export function checkDelegate(tool: string, input: { subagent_type?: unknown; ro
 		: `blocked: the ${agent} runs on ${seats.map((x) => x.model).join(" or ")}, not ${typeof model === "string" ? model : "the model this thread runs on"}. Pass it as target.model.`;
 }
 
-export function check(command: string, cwd: string | undefined): string | undefined {
-	return checkBash(command, owned, host, cwd, owned);
+export function check(tool: "bash" | "write", target: string, cwd: string | undefined): string | undefined {
+	return tool === "bash" ? checkBash(target, owned, host, cwd, owned) : checkWrite(target);
 }

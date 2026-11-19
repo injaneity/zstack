@@ -60,9 +60,10 @@ class Invariants(unittest.TestCase):
         md = policy.render(INV)
         self.assertTrue(md.startswith("## Invariants\n\n"))
         self.assertEqual([x for x in md.splitlines() if x.startswith("#")],
-                         ["## Invariants", "### Always", "### In this repo", "### Judgment, which nothing enforces"])
+                         ["## Invariants", "### Always", "### In this repo"])
+        self.assertNotIn(INV["guidance"][0]["text"], md)
         self.assertEqual([r["id"] for r in INV["stack"]], ["merge-verified", "held", "turn-ends-verified", "one-thread", "own-controls", "publish"])
-        self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "commit-content", "text", "issue-close", "teammates"])
+        self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "text", "issue-close", "teammates"])
         self.assertIn("`config/invariants.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 
     def test_every_invariant_names_where_it_is_enforced_and_a_test_that_exists(self):
@@ -71,6 +72,11 @@ class Invariants(unittest.TestCase):
             self.assertTrue((PKG / path).is_file(), r["id"])
             self.assertIn(name, (PKG / path).read_text(), r["id"])
             self.assertTrue(r["enforced"].strip(), r["id"])
+            if path.endswith(".tla"):
+                self.assertRegex((PKG / "model" / "Queue.cfg").read_text(), rf"(?m)^(INVARIANT|PROPERTY) {name}$", r["id"])
+                self.assertIn(f'"{name}"', (PKG / "model" / "queue_mutants.py").read_text(), f"{r['id']}: no mutant breaks {name}")
+        proved = [r["id"] for r in INV["stack"] if r["test"].startswith("model/")]
+        self.assertEqual(proved, ["merge-verified", "held", "turn-ends-verified", "one-thread"])
         for miss in ("enforced", "test"):
             row = {"id": "a", "text": "t", "enforced": "e", "test": "x"}
             del row[miss]
@@ -103,9 +109,8 @@ class Invariants(unittest.TestCase):
             self.assertEqual([f"{t!r} restates {k}" for k, t in restated(body, POLICY, repo=True)], [], f)
         full = policy.render(INV)
         self.assertNotIn("{", full)
-        for want in ("waits for Robin, as does any PR labelled `needs-review`", "an issue labelled preapproved, or a task", "`Salvaged from #<pr>`",
-                     "`Fixes #<issue>`", "Nothing labelled `hold` is started or merged", "by f-teammate gets a first review",
-                     "touches skyhook, vaultkey or sealing is", "Only real failures go to Robin."):
+        for want in ("waits for Robin, as does any PR labelled `needs-review`", "an issue labelled preapproved, or a task",
+                     "Nothing labelled `hold` is started or merged", "by f-teammate gets a first review", "touches skyhook, vaultkey or sealing is"):
             self.assertIn(want, full)
         pol = json.loads(json.dumps(POLICY))
         pol["merge"].update(review_label="stop", preapproved_labels=["go", "ship"])

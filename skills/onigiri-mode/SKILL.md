@@ -15,7 +15,7 @@ license: MIT
 
 ## Invariants
 
-The invariants are `config/invariants.toml` in the zstack package, plus the target repo's own `invariants.toml` in the config, and nowhere else. The plugin or launcher that started you put `queue.py invariants` in your context, so you already have them. A hook or the guard refuses whatever would break one. The values the code enforces are the config; this skill and its playbook name those keys and never restate their values.
+The invariants are `config/invariants.toml` in the zstack package, plus the target repo's own `invariants.toml` in the config, and nowhere else. The plugin or launcher that started you put `queue.py invariants` in your context, so you already have them. A hook or the guard refuses whatever would break one. What nothing enforces is the judgment list in your brief. The values the code enforces are the config; this skill and its playbook name those keys and never restate their values.
 
 ## Work
 

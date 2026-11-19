@@ -338,7 +338,7 @@ def render(data, ids=()):
             raise Refused(f"no invariant or guidance {', '.join(miss)} in {INVARIANTS} or the repo's invariants.toml")
         return "".join(f"- {by[i]}\n" for i in ids)
     out = ["## Invariants", "", data["intro"]]
-    for title, part in (("Always", "stack"), ("In this repo", "repo"), ("Judgment, which nothing enforces", "guidance")):
+    for title, part in (("Always", "stack"), ("In this repo", "repo")):
         if data[part]:
             out += ["", f"### {title}", "", *(f"- {r['text']}" for r in data[part])]
     return "\n".join(out) + "\n"
@@ -500,6 +500,10 @@ def skip(c, q, prs, pol):
     return None
 
 
+def teammate(c, pol):
+    return c["kind"] == "review" and c["author"]["login"].lower() in [x.lower() for x in pol["people"]["review_only"]]
+
+
 def task(c, pol):
     name, me, iss = pol["merge"]["repo"], pol["people"]["me"], pol["issues"]
     if c["kind"] == "issue":
@@ -508,12 +512,13 @@ def task(c, pol):
     salvage = pol["review"]["outside"] == "salvage"
     outside = "salvage a fixable PR as a new PR of ours that credits them, instead of requesting changes" if salvage else \
         "request changes on a fixable PR, and do not rewrite it as a PR of ours"
-    teammate = c["author"]["login"].lower() in [x.lower() for x in pol["people"]["review_only"]]
-    who = "teammate (review-only: a first review and nothing else)" if teammate else f"outside contributor ({outside})"
+    mate = teammate(c, pol)
+    who = "teammate (review-only: a first review and nothing else; the guard refuses every push and post from this thread)" if mate else \
+        f"outside contributor ({outside})"
     said = (f"{name}#{c['n']} at head {c['head']} by {c['author']['login']}, a {who}: {c['title']}\n{c['url']}\n\nKind: first "
             f"review, requested of {me}. Run playbooks/pull-requests.md Verify. Post nothing under the owner's name: put every "
             "comment for the author under a `drafts:` section of your final report.")
-    if teammate or not salvage:
+    if mate or not salvage:
         return said
     frm = iss["salvaged_from"].format(pr=c["n"])
     return (f"{said}\nA salvage PR's body carries `{frm}` and a `{iss['fixes'].format(issue='<n>')}` line for each issue "
@@ -558,8 +563,8 @@ def work(pol, q):
             continue
         pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
         ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
-                      "preapproved": pre, "task": task(c, pol), "title": c["title"]})
-    ready += [{"id": k, "kind": "task", "n": None, **t} for k, t in q["tasks"].items()]
+                      "preapproved": pre, "task": task(c, pol), "title": c["title"], "readonly": teammate(c, pol)})
+    ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items()]
     ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
     return ready, skipped, errors, {c["id"] for c in cands}
 
@@ -593,8 +598,8 @@ BRIEF = """# {id}
 
 repo: a worktree of `{clone}`
 
-Follow onigiri-mode and the invariants, which are already in your context.
-No invented limits: a restriction must trace to the owner's words or the invariants. If you think one is needed, put it under `questions:` instead of applying it.
+Follow onigiri-mode and the invariants, which are already in your context. Nothing enforces these, so they are yours to judge:
+{guidance}
 
 When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do. On a fail, fix the findings, push, and have it check the new head.
 On `auto`, wait for the PR's checks, then merge that head yourself: `gh pr merge <pr number> -R {repo} --squash --match-head-commit <head sha>`. The guard lets that command through only for the head the verifier passed, with the checks green and no hold; when it refuses, read its reason, and do not try another way. On `review`, or when you think the change needs a person whatever the verifier says, do not merge: say why in your report.
@@ -608,8 +613,9 @@ questions:
 
 def brief(pol, it):
     env = {"ZSTACK_CONFIG": CONFIG, "ZSTACK_MACHINE": os.environ.get("ZSTACK_MACHINE"), "ZSTACK_REPO": pol["merge"]["repo"]}
+    said = "\n".join(f"- {r['text']}" for r in invariants(want=pol["merge"]["repo"])["guidance"])
     return BRIEF.format(id=it["id"], task=it["task"], clone=pol["host"]["clone"], queue=os.path.join(PKG, "queue.py"), repo=pol["merge"]["repo"],
-                        env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
+                        guidance=said, env=" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items() if v))
 
 
 def next_up(pol):
@@ -633,7 +639,7 @@ def claim(pol, ident, thread, worktree):
         if not up or up["id"] != ident:
             raise Refused(f"{ident} is not next: {waiting or up['id'] + ' is'}")
         q["tasks"].pop(ident, None)
-        q["running"][ident] = {"kind": up["kind"], "n": up["n"], "preapproved": up["preapproved"], "title": up["title"],
+        q["running"][ident] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
                                "thread": thread, "worktree": worktree, "pr": None, "at": now()}
         return q["running"][ident], True
     return locked(pol, go)
@@ -881,7 +887,6 @@ def update(out=sys.stdout):
 
 
 ZERO = "0" * 40
-SPDX = "SPDX-License-Identifier"
 TOOLS = r"claude|anthropic|openai|codex|chatgpt|gpt-|copilot|cursor|gemini|grok|devin|aider|\[bot\]"
 
 
@@ -889,42 +894,17 @@ def status_paths(name_status):
     return [p for line in name_status.splitlines() for p in line.split("\t")[1:]]
 
 
-def has_spdx(head, path, cwd):
-    rc, said = git("show", f"{head}:{path}", cwd=cwd)
-    return rc == 0 and SPDX in "\n".join(said.splitlines()[:10])
-
-
 def lint(head, cwd=None):
-    rc, base = git("merge-base", head, "refs/remotes/origin/main", cwd=cwd)
-    base = base.strip()
-    rc1, status = git("diff", "--name-status", "--no-renames", "--no-color", base, head, cwd=cwd) if rc == 0 and base else (1, "")
-    if rc1:
-        return []
-    out, added = [], []
-    for row in status.splitlines():
-        kind, _, path = row.partition("\t")
-        if kind.startswith("D"):
-            continue
-        parts = path.split("/")
-        if "target" in parts[:-1]:
-            out.append(f"{path} is build output under target/ (the repo invariant commit-content)")
-        if kind.startswith("A"):
-            added.append(path)
-    for path in added:
-        folder, ext = os.path.dirname(path), os.path.splitext(path)[1]
-        rc2, found = git("ls-tree", "--name-only", base, (folder + "/") if folder else ".", cwd=cwd)
-        near = [n for n in found.splitlines() if ext and n.endswith(ext) and n != path][:20]
-        if rc2 == 0 and not has_spdx(head, path, cwd) and any(has_spdx(base, n, cwd) for n in near):
-            out.append(f"{path} is new and lacks the SPDX header its neighbours carry (the repo invariant commit-content)")
     _, ident = git("var", "GIT_COMMITTER_IDENT", cwd=cwd)
     me = ident[ident.find("<") + 1:ident.find(">")]
-    rc3, log = git("log", "--no-merges", "--format=%H%x00%ce%x00%B%x01", head, "--not", "refs/remotes/origin/main", cwd=cwd)
-    for entry in log.split("\x01") if rc3 == 0 else []:
+    rc, log = git("log", "--no-merges", "--format=%H%x00%ce%x00%B%x01", head, "--not", "refs/remotes/origin/main", cwd=cwd)
+    out = []
+    for entry in log.split("\x01") if rc == 0 else []:
         c, _, rest = entry.strip().partition("\x00")
         who, _, body = rest.partition("\x00")
         if c and who == me and re.search(rf"^co-authored-by:.*({TOOLS})", body, re.I | re.M):
             out.append(f"commit {c[:12]} carries a Co-authored-by trailer for a model, agent or tool (the repo invariant text)")
-    return list(dict.fromkeys(out))[:8]
+    return out[:8]
 
 
 class Patent:

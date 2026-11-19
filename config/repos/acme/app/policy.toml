@@ -36,7 +36,7 @@ review_label = "needs-review"
 preapproved_labels = ["preapproved"]
 hold_label = "hold"
 
-# The lines that link a salvage PR to what it replaces (the repo guidance `salvage`): `salvaged_from` names the source
+# The lines that link a salvage PR to what it replaces (a review item's brief says how): `salvaged_from` names the source
 # PR and `fixes` is written once per issue the source fixes, so the forge closes the issue when the salvage merges.
 [issues]
 fixes = "Fixes #{issue}"

@@ -115,7 +115,8 @@ class Policy(unittest.TestCase):
                         '[[guidance]]\nid = "project-tone"\ntext = "Be brief."\n')
         out = self.run_("invariants").stdout
         self.assertIn("### In this repo\n\n- Wait for ci-gate.\n", out)
-        self.assertTrue(out.rstrip().endswith("- Be brief."), out[-200:])
+        self.assertNotIn("Be brief.", out)
+        self.assertEqual(self.run_("invariants", "project-tone").stdout, "- Be brief.\n")
         self.assertIn("### Always", out)
         self.assertEqual(self.run_("invariants", "project-gate").stdout, "- Wait for ci-gate.\n")
         mine.unlink()

@@ -9,12 +9,6 @@ enforced = "the clone's pre-push hook, `queue.py pre-push`; the guard refuses `-
 test = "tests/test_patent_push.py"
 
 [[invariant]]
-id = "commit-content"
-text = '''Commits add no build output such as `target/`, and a new file carries the SPDX/FSL header its neighbours do.'''
-enforced = "the clone's pre-push hook"
-test = "tests/test_patent_push.py"
-
-[[invariant]]
 id = "text"
 text = '''PR titles use Conventional Commit syntax. Commit messages, PR titles and PR bodies name no model, agent or tool, with no `Co-authored-by` trailer or "Generated with" line for one, and no local machine paths.'''
 enforced = "the guard, on `gh pr create` and `gh pr edit`; the pre-push hook, for trailers"
@@ -28,17 +22,13 @@ test = "tests/rule-guard.test.ts"
 
 [[invariant]]
 id = "teammates"
-text = '''A PR or issue by {people.review_only:or} gets a first review and nothing else: never pushed to, rebased, salvaged, rewritten, commented on or closed by us.'''
-enforced = "the guard refuses the close, and the queue's brief for such a review says so; the rest is on the thread"
+text = '''A PR or issue by {people.review_only:or} gets a first review and nothing else: its review thread pushes nothing and posts nothing, and puts every comment for the author in its report.'''
+enforced = "the queue marks that review read-only, and the guard refuses every push and every GitHub write from its thread"
 test = "tests/rule-guard.test.ts"
 
 [[guidance]]
 id = "text-titles"
 text = '''Use `fix(...)` or `feat(...)`, not `refactor(...)`, when a change touches release-tracked packages. Write the plan and proof as the PR body, and call the checks "the scoped repository checks".'''
-
-[[guidance]]
-id = "salvage"
-text = '''Never salvage or rewrite PRs by {people.me} or bots. A salvage keeps the contributor's commits as authored; if none survive, add `Co-authored-by: <name> <their GitHub noreply or commit email>` for the source PR's author. Its body says `{issues.salvaged_from}` and, on its own line, `{issues.fixes}` for each issue the source PR's own body says it fixes; one it names but does not fix gets `{issues.refs}`.'''
 
 [[guidance]]
 id = "merge-fork-runs"

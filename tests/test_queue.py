@@ -140,6 +140,12 @@ class Entry(Case):
             self.assertIn(want, outside)
         self.assertIn("review-only: a first review and nothing else", mate)
         self.assertNotIn("alvage", mate)
+        self.cands = [cand(6, "review", author="mate"), cand(5, "review", author="guest", created="2026-02-01"),
+                      cand(4, author="mate", created="2026-03-01")]
+        self.pol["run"]["threads"] = 9
+        for c in self.cands:
+            queue.claim(self.pol, c["id"], f"t-{c['n']}", "/w")
+        self.assertEqual([v["readonly"] for _, v in sorted(self.file()["running"].items())], [False, False, True])
         self.pol["review"]["outside"] = "request-changes"
         sent_back = queue.task(cand(5, "review", author="guest"), self.pol)
         self.assertIn("request changes on a fixable PR", sent_back)
@@ -187,8 +193,11 @@ class Launch(Case):
         self.add("a", "Fix the parser")
         said = queue.next_up(self.pol)["launch"]["brief"]
         for want in ("# a", "Fix the parser", f"{PKG}/queue.py verified a <pr number> <head sha> auto",
-                     "gh pr merge <pr number> -R acme/app --squash --match-head-commit <head sha>", "ZSTACK_REPO=acme/app "):
+                     "gh pr merge <pr number> -R acme/app --squash --match-head-commit <head sha>", "ZSTACK_REPO=acme/app ",
+                     "they are yours to judge:\n- You write the code and a short test plan",
+                     "\n- No invented limits: a restriction must trace to Robin's words", "\n- Never revert a PR, except"):
             self.assertIn(want, said)
+        self.assertNotIn("{", said)
 
 
 class Gate(Case):
@@ -449,7 +458,7 @@ class Release(Case):
 
     def test_the_states_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
-        for name, to in (("Claim(m, i)", "running"), ("Release(m, i)", "waiting"), ("Release(m, i)", "done"), ("Settle(m, i)", "done")):
+        for name, to in (("Claim(m, i)", "running"), ("Leave(m, i)", "waiting"), ("Leave(m, i)", "done"), ("Settle(m, i)", "done")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0].split("\nSettle")[name == "Settle(m, i)"], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
         self.assertEqual(states - {"none"}, set(queue.KEYS) - {"tasks", "verdicts"})

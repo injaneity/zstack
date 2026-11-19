@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import { execFileSync } from "node:child_process";
-import { checkBash, mergeOwned, prTextProblems } from "../hooks/rules.ts";
+import { checkBash, checkWrite, mergeOwned, prTextProblems } from "../hooks/rules.ts";
 
 for (const k of ["ZSTACK_CONFIG", "ZSTACK_MACHINE", "ZSTACK_REPO"]) delete process.env[k];
 
@@ -12,10 +12,7 @@ const DUMP = () => execFileSync("python3", ["-I", new URL("../queue.py", import.
 const OWNED = mergeOwned(DUMP);
 const ISSUES = OWNED;
 const repoAt = (dir: string) => (dir.startsWith("/app") ? "acme/app" : dir.startsWith("/zs") ? "injaneity/zstack" : dir.startsWith("/scratch") ? null : undefined);
-const TEAM = new Set(["f-teammate", "ddupont808"]);
-const AUTHORS: Record<number, string> = { 7030: "f-teammate", 4468: "DDupont808", 3138: "octo", 6853: "someone" };
-const host = { repoAt, labels: ["hold", "needs-review", "preapproved"], reviewOnly: () => TEAM,
-	authorOf: (_repo: string, n: number) => AUTHORS[n] };
+const host = { repoAt, labels: ["hold", "needs-review", "preapproved"] };
 const blocked = (c: string, cwd = "/zs") => assert.match(checkBash(c, OWNED, host, cwd) ?? "", /^blocked: /, c);
 const allowed = (c: string, cwd = "/zs") => assert.equal(checkBash(c, OWNED, host, cwd), undefined, c);
 const inApp = "/app/wt";
@@ -273,40 +270,29 @@ test("closing a acme/app issue by hand needs a comment naming the PR that fixed 
 	assert.equal(checkBash("gh issue close 6853 -R acme/app", OWNED, host, "/zs", new Set()), undefined);
 });
 
-test("a PR or issue a review-only teammate opened is never closed, by the author gh reports", () => {
-	const no = (c: string, h = host) => assert.match(checkBash(c, OWNED, h, "/zs", ISSUES) ?? "", /^blocked: .*, a review-only teammate\. /, c);
-	const ok = (c: string, h = host) => assert.equal(checkBash(c, OWNED, h, "/zs", ISSUES), undefined, c);
-	assert.deepEqual(TEAM, new Set(["f-teammate", "ddupont808"]));
-	for (const c of [
-		'gh issue close 7030 -R acme/app --comment "Fixed by #7147."',
-		'gh pr close 7030 -R acme/app --comment "Replaced by #7147, which merged."',
-		'gh pr close https://github.com/acme/app/pull/4468 -c "Replaced by #4560"',
-		'gh issue close https://github.com/acme/app/issues/4468 --comment "Fixed by #4560"',
-		"gh api -X PATCH repos/acme/app/pulls/7030 -f state=closed",
-		'ssh vm "gh pr close 7030 -R acme/app"',
-	]) no(c);
-	for (const c of ["gh api -X PATCH repos/{owner}/{repo}/pulls/7030 -f state=closed", "gh pr close 7030 -c 'Replaced by #7147'"])
-		assert.match(checkBash(c, OWNED, host, inApp, ISSUES) ?? "", /, a review-only teammate\. /, c);
-	ok('gh pr close 3138 -R acme/app --comment "Replaced by #7587, which merged."');
-	ok('gh issue close 6853 -R acme/app --comment "Fixed by #6928."');
-	ok("gh pr close 7030 -R injaneity/zstack");
-	ok("gh pr view 7030 -R acme/app");
-	const refuse = (c: string, h: typeof host, why: RegExp) => assert.match(checkBash(c, OWNED, h, "/zs", ISSUES) ?? "", why, c);
-	refuse('gh pr close 3138 -R acme/app -c "Replaced by #7587"', { ...host, reviewOnly: () => null }, /the config could not be read/);
-	refuse('gh pr close 9999 -R acme/app -c "Replaced by #7587"', host, /could not tell/);
-	refuse('gh pr close -R acme/app -c "Replaced by #7587"', host, /without a number/);
-	refuse(`gh api graphql -f query='mutation { closePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'`, host, /GraphQL close/);
-	for (const c of ["gh api graphql -F query=@close.graphql", "gh api graphql --field=query=@q.graphql -F id=X"]) refuse(c, host, /GraphQL query read from a file/);
-	for (const c of ["gh api graphql --input mutation.json", "gh api graphql --input=- < m.json", "gh api graphql -Fquery=@q"])
-		refuse(c, host, /GraphQL query read from a file or stdin/);
-	for (const c of ["gh api -X PATCH repos/acme/app/pulls/7030 -F state=@state.txt", "gh api -X PATCH repos/acme/app/pulls/7030 --field=state=@s",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -fstate=closed", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field=state=closed",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -F state=CLOSED", "gh api -X PATCH repos/acme/app/pulls/7030 --raw-field state=closed",
-		"gh api -X PATCH repos/acme/app/pulls/7030 -Fstate=@-"])
-		refuse(c, host, /, a review-only teammate\. /);
-	ok("gh api graphql -f query='query { viewer { login } }'");
-	ok("gh api -X PATCH repos/acme/app/pulls/7030 -F title=@t.txt");
-	ok("gh api -X PATCH repos/acme/app/pulls/7030 -f state=open");
+test("a read-only item's thread pushes nothing and posts nothing, and reads freely", () => {
+	const ro = { ...host, readonly: () => true as boolean | undefined };
+	const no = (c: string, h = ro) => assert.match(checkBash(c, OWNED, h, inApp) ?? "", /^blocked: a push or a GitHub write from a read-only item/, c);
+	for (const c of ["git push origin x", "git -C wt push", "gh pr comment 7030 --body x", "gh pr review 7030 --approve", "gh pr close 7030", "gh issue close 7030 -c 'Fixed by #1.'",
+		"gh pr create --title 'fix: x' --body y", "gh pr edit 7030 --title 'fix: y'", "gh issue comment 7030 -b x", "gh api -X POST repos/acme/app/issues/7030/comments -f body=x",
+		"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'", "gh pr -R acme/app comment 7030 -b x", "bash -c 'git push'"])
+		no(c);
+	for (const c of ["gh pr view 7030 --json files", "gh pr diff 7030", "gh pr checkout 7030", "gh pr list", "gh pr checks 7030", "gh api repos/acme/app/pulls/7030/files",
+		"gh run view 9 --log", "gh search prs x", "git fetch origin", "git log -3", "git commit -m 'fix: x'", "gh pr comment --help"])
+		assert.equal(checkBash(c, OWNED, ro, inApp), undefined, c);
+	no("git push origin x", { ...host, readonly: () => undefined });
+	for (const h of [host, { ...host, readonly: () => false as boolean | undefined }])
+		assert.equal(checkBash("gh pr comment 7030 --body x", OWNED, h, inApp), undefined);
+	assert.equal(checkBash("git push origin x", OWNED, ro, "/zs"), undefined);
+});
+
+test("a thread never touches the queue's file", () => {
+	for (const c of ["cat ~/zstack/acme/app/queue.json", "python3 -c 'open(\"/r/queue.json\", \"w\")'", "echo {} > /r/queue.json", "jq .verdicts /r/queue.json", "rm queue.json"])
+		assert.match(checkBash(c, OWNED, host, inApp) ?? "", /^blocked: it names the queue's file/, c);
+	allowed("cat /r/queue.json", "/zs");
+	allowed("./queue.py list", inApp);
+	for (const f of ["/r/queue.json", "queue.json", "@/r/queue.json"]) assert.match(checkWrite(f) ?? "", /^blocked: it writes the queue's file/);
+	for (const f of ["/r/queue.json.md", "/r/myqueue.json", "queue.py", ""]) assert.equal(checkWrite(f), undefined, f);
 });
 
 test("a PR title or body that breaks the repo invariant text is refused in the merge job's repo, and nowhere else", () => {

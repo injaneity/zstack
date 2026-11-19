@@ -209,9 +209,8 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotEqual(remote, "")
 
-    def test_a_push_that_commits_build_output_or_a_trailer_is_refused_with_each_reason(self):
-        for name, text, msg, why in (("crates/a/target/debug/x", "bin\n", "x", "the repo invariant commit-content"),
-                                     ("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: Claude <noreply@anthropic.com>", "the repo invariant text")):
+    def test_a_push_whose_commit_carries_a_tool_trailer_is_refused_with_the_reason(self):
+        for name, text, msg, why in (("a.rs", "fn a() {}\n", "fix: a\n\nCo-authored-by: Claude <noreply@anthropic.com>", "the repo invariant text"),):
             with self.subTest(why=why), tempfile.TemporaryDirectory() as tmp:
                 g, pub, work, root = self.repo(tmp)
                 g("checkout", "-qb", "onigiri/z", cwd=work)
@@ -226,7 +225,7 @@ class PatentPush(unittest.TestCase):
                 self.assertEqual(g("ls-remote", pub, "refs/heads/onigiri/z"), "")
                 self.assertFalse(os.path.exists(f"{root}/events.log"))
 
-    def test_someone_elses_trailer_and_a_file_named_target_are_pushed(self):
+    def test_someone_elses_trailer_and_what_the_repos_own_ci_checks_are_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:
             g, pub, work, root = self.repo(tmp)
             g("checkout", "-qb", "onigiri/s", cwd=work)
@@ -235,31 +234,6 @@ class PatentPush(unittest.TestCase):
             g("-c", "user.email=other@x", "commit", "-qm", "fix: theirs\n\nCo-authored-by: B <b@b.c>", cwd=work)
             r = subprocess.run(["git", "push", "origin", "onigiri/s"], cwd=work, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
-
-    def test_a_new_file_needs_the_spdx_header_only_where_its_neighbours_carry_one(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            g, pub, work, root = self.repo(tmp)
-            Path(work, "src").mkdir()
-            Path(work, "src/old.rs").write_text("// SPDX-License-Identifier: FSL-1.1-MIT\nfn old() {}\n")
-            Path(work, "docs").mkdir()
-            Path(work, "docs/old.md").write_text("# old\n")
-            g("add", ".", cwd=work)
-            g("commit", "-qm", "base files", cwd=work)
-            g("push", "-q", "origin", "main", cwd=work)
-            g("fetch", "-q", "origin", cwd=work)
-
-            def push(branch, name, text):
-                g("checkout", "-qb", branch, "main", cwd=work)
-                Path(work, name).write_text(text)
-                g("add", ".", cwd=work)
-                g("commit", "-qm", "fix: x", cwd=work)
-                return subprocess.run(["git", "push", "origin", branch], cwd=work, capture_output=True, text=True)
-            bare = push("onigiri/a", "src/new.rs", "fn new() {}\n")
-            self.assertNotEqual(bare.returncode, 0)
-            self.assertIn("lacks the SPDX header", bare.stderr)
-            self.assertEqual(push("onigiri/b", "src/ok.rs", "// SPDX-License-Identifier: FSL-1.1-MIT\nfn ok() {}\n").returncode, 0)
-            self.assertEqual(push("onigiri/c", "docs/new.md", "# new\n").returncode, 0)
-            self.assertEqual(push("onigiri/d", "src/notes.txt", "x\n").returncode, 0)
 
     def test_a_relay_diff_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:
