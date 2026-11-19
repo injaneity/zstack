@@ -10,7 +10,7 @@ test = "tests/test_patent_push.py"
 
 [[invariant]]
 id = "warm"
-text = '''A new worktree starts with {worktree.warm:and} shared from the clone copy-on-write: cloned by reference, never copied. Your session start says what was shared.'''
+text = '''What a new worktree gets of {worktree.warm:and} is shared from the clone copy-on-write: cloned by reference, never copied. Your session start says what was shared and what could not be.'''
 enforced = "the session-start hook runs `queue.py warm`, which clones by reference or says it could not, and never copies; `queue.py check` refuses a clone whose filesystem cannot"
 test = "tests/test_warm.py"
 

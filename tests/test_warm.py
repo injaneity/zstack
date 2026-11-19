@@ -83,6 +83,31 @@ class Warm(unittest.TestCase):
         del self.pol["worktree"]
         self.assertEqual((self.warm(self.tree), self.copied), ([], []))
 
+    def test_only_an_ignored_path_reached_through_no_link_is_shared(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.tree / "web" / "app.js").unlink()
+        (self.clone / "linked").symlink_to(outside)
+        (self.root / "elsewhere").mkdir()
+        (self.tree / "linked").symlink_to(self.root / "elsewhere")
+        (self.clone / ".git" / "info" / "exclude").write_text("linked/\n")
+        (outside / "cache").mkdir()
+        self.pol["worktree"]["warm"] = ["web/app.js", "linked/cache", "node_modules"]
+        self.assertEqual(self.warm(self.tree), [
+            "web/app.js could not be shared from the clone (git does not ignore it here), so this worktree starts without it",
+            "linked/cache could not be shared from the clone (a link on the way to it leads elsewhere), so this worktree starts without it",
+            "node_modules is shared from the clone copy-on-write, as it was there"])
+        self.assertEqual((self.copied, os.listdir(self.root / "elsewhere"), (self.tree / "web" / "app.js").exists()), (["node_modules"], [], False))
+
+    def test_a_clone_that_is_itself_a_linked_worktree_warms_its_siblings(self):
+        (self.tree / "node_modules").mkdir()
+        (self.tree / "node_modules" / "mine.js").write_text("tree")
+        self.pol["host"]["clone"] = str(self.tree)
+        self.git("worktree", "add", "-q", "-b", "next", str(self.root / "next"), cwd=self.clone)
+        self.pol["worktree"]["warm"] = ["node_modules"]
+        self.assertEqual(len(self.warm(self.root / "next")), 1)
+        self.assertEqual(os.listdir(self.root / "next" / "node_modules"), ["mine.js"])
+
     def test_a_path_that_cannot_be_cloned_by_reference_is_left_out_and_said_never_copied(self):
         def refuse(src, dst):
             raise OSError("Operation not supported")
@@ -102,6 +127,9 @@ class Warm(unittest.TestCase):
             with self.assertRaises(OSError):
                 queue.share(str(src), str(dst))
         self.assertFalse((self.root / "new").exists())
+        (self.root / "link").symlink_to(self.clone / "node_modules")
+        queue.share(str(self.root / "link"), str(self.root / "link-copy"))
+        self.assertTrue((self.root / "link-copy").is_symlink())
 
     def test_the_command_prints_one_line_per_path_for_the_thread(self):
         if not clones(self.root):

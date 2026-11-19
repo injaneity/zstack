@@ -382,8 +382,8 @@ def config_command(argv):
             who = subprocess.run(["git", "-C", clone, "config", "--get", "user.email"], capture_output=True, text=True).stdout
             if os.path.isdir(clone) and not who.strip():
                 raise Refused(f"{clone} has no git user.email, so a commit there carries this machine's address: set one the forge knows")
-            if os.path.isdir(os.path.join(clone, ".git")) and "worktree" in load(name):
-                with tempfile.TemporaryDirectory(dir=os.path.join(clone, ".git")) as d:
+            if "worktree" in load(name) and git_dirs(clone)[1]:
+                with tempfile.TemporaryDirectory(dir=git_dirs(clone)[1]) as d:
                     open(os.path.join(d, "a"), "w").close()
                     try:
                         share(os.path.join(d, "a"), os.path.join(d, "b"))
@@ -409,22 +409,25 @@ def config_command(argv):
 def share(src, dst):
     if sys.platform == "darwin":
         libc = ctypes.CDLL(None, use_errno=True)
-        if libc.clonefile(os.fsencode(src), os.fsencode(dst), 0):
+        if libc.clonefile(os.fsencode(src), os.fsencode(dst), 1):
             raise OSError(os.strerror(ctypes.get_errno()))
         return
-    p = subprocess.run(["cp", "-R", "--reflink=always", src, dst], capture_output=True, text=True)
+    p = subprocess.run(["cp", "-R", "-P", "--reflink=always", src, dst], capture_output=True, text=True)
     if p.returncode:
-        shutil.rmtree(dst, ignore_errors=True)
+        shutil.rmtree(dst) if os.path.isdir(dst) and not os.path.islink(dst) else os.path.lexists(dst) and os.unlink(dst)
         raise OSError(p.stderr.strip().splitlines()[-1] if p.stderr.strip() else "cp --reflink=always failed")
 
 
-def warm(pol):
-    p = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], capture_output=True, text=True)
+def git_dirs(where):
+    cmd = ["git", "-C", where, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
+    p = subprocess.run(cmd, capture_output=True, text=True)
     at = [os.path.realpath(x) for x in p.stdout.splitlines()]
-    if p.returncode or len(at) != 2 or "worktree" not in pol:
-        return []
-    top, clone = at[0], os.path.dirname(at[1])
-    if top == clone or clone != os.path.realpath(os.path.expanduser(pol["host"]["clone"])):
+    return at if p.returncode == 0 and len(at) == 2 else (None, None)
+
+
+def warm(pol):
+    (top, common), (clone, its) = git_dirs("."), git_dirs(os.path.expanduser(pol["host"]["clone"]))
+    if "worktree" not in pol or not top or top == clone or common != its:
         return []
     said = []
     for path in pol["worktree"]["warm"]:
@@ -432,6 +435,11 @@ def warm(pol):
         if not os.path.lexists(src) or os.path.lexists(dst):
             continue
         try:
+            if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
+                raise OSError("a link on the way to it leads elsewhere")
+            folder = os.path.isdir(src) and not os.path.islink(src)
+            if subprocess.run(["git", "-C", top, "check-ignore", "-q", path + "/" * folder], capture_output=True).returncode:
+                raise OSError("git does not ignore it here")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             share(src, dst)
             said.append(f"{path} is shared from the clone copy-on-write, as it was there")

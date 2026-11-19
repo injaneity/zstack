@@ -45,7 +45,7 @@ salvaged_from = "Salvaged from #{pr}"
 
 # What a new worktree starts with (queue.py warm, from the session-start hook; the repo invariant `warm`). Each path
 # in `warm` is shared from the clone copy-on-write: cloned by reference, so it costs no disk until one side writes, and
-# never copied. List only what is safe to share: a folder of installed packages, not one whose files point back at
+# never copied. Only a path git ignores is shared. List only what is safe to share: a folder of installed packages, not one whose files point back at
 # the clone, as a Python virtualenv does. Leave the whole section out, and that invariant, to start every worktree bare.
 [worktree]
 warm = ["node_modules"]
