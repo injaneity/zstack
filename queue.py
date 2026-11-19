@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ctypes
 import fcntl
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,8 @@ USAGE = (
     "  queue.py get <key>               one config value by dotted key (`merge.repo`): a string or number as is, else JSON\n"
     "  queue.py dump                    the merged config as JSON\n"
     "  queue.py invariants [<id>...]    the invariants as markdown, as a thread reads them; ids name single ones\n"
+    "  queue.py warm                    in a new worktree of the clone: share what git ignores in the clone, copy-on-write,\n"
+    "                                   and say what\n"
     "The machine:\n"
     "  queue.py update                  bring this checkout to origin/main, and the installed plugin with it\n"
     "  queue.py pre-push <remote> <url> the clone's pre-push hook: the repo's publishing invariants"
@@ -376,6 +380,8 @@ def config_command(argv):
         return print(f"queue: {CONFIG} is valid for {', '.join(every)} on {os.path.basename(machine_file())[:-5]}") or 0
     if argv[:1] == ["invariants"]:
         return print(render(invariants(), argv[1:]), end="") or 0
+    if argv == ["warm"]:
+        return print("".join(f"zstack: {x}\n" for x in warm(load())), end="") or 0
     if argv == ["dump"]:
         return print(json.dumps(load())) or 0
     if len(argv) == 2 and argv[0] == "seat":
@@ -386,6 +392,67 @@ def config_command(argv):
         v = get(load(), argv[1])
         return print(v if type(v) in (str, int) else json.dumps(v)) or 0
     return None
+
+
+def share(src, dst):
+    if sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.clonefile(os.fsencode(src), os.fsencode(dst), 1):
+            raise OSError(os.strerror(ctypes.get_errno()))
+        return
+    aside = tempfile.mkdtemp(prefix=".zstack-warm-", dir=os.path.dirname(dst))
+    try:
+        p = subprocess.run(["cp", "-R", "-P", "--reflink=always", "--", src, os.path.join(aside, "it")], capture_output=True)
+        if p.returncode:
+            raise OSError((os.fsdecode(p.stderr).strip().splitlines() or ["cp --reflink=always failed"])[-1])
+        if os.path.lexists(dst):
+            raise OSError("something was put there meanwhile")
+        os.rename(os.path.join(aside, "it"), dst)
+    finally:
+        shutil.rmtree(aside)
+
+
+def git_dirs(where):
+    cmd = ["git", "-C", where, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    at = [os.path.realpath(x) for x in p.stdout.splitlines()]
+    return at if p.returncode == 0 and len(at) == 2 else (None, None)
+
+
+def points_back(src):
+    inner = [x.path for x in os.scandir(src) if x.is_dir(follow_symlinks=False)] if os.path.isdir(src) and not os.path.islink(src) else []
+    return any(os.path.lexists(os.path.join(d, mark)) for d in (src, *inner) for mark in ("pyvenv.cfg", ".git"))
+
+
+def warm(pol):
+    def paths(where, *args, stdin=None):
+        p = subprocess.run(["git", "-C", where, *args], capture_output=True, input=stdin)
+        return [os.fsdecode(x).rstrip("/") for x in p.stdout.split(b"\0") if x]
+    (top, common), (clone, its) = git_dirs("."), git_dirs(os.path.expanduser(pol["host"]["clone"]))
+    if not top or top == clone or common != its:
+        return []
+    there = paths(clone, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    wanted = [x for x in sorted(there) if not os.path.lexists(os.path.join(top, x))]
+    asked = b"\0".join(os.fsencode(x + "/" * os.path.isdir(os.path.join(clone, x))) for x in wanted)
+    ignored = set(paths(top, "check-ignore", "-z", "--stdin", stdin=asked)) if wanted else set()
+    shared, said = [], []
+    for path in wanted:
+        src, dst, name = os.path.join(clone, path), os.path.join(top, path), re.sub(r"[^\x20-\x7e]", "?", path)
+        try:
+            if any(os.path.realpath(os.path.dirname(x)) != os.path.dirname(x) for x in (src, dst)):
+                raise OSError("a link on the way to it leads elsewhere")
+            if points_back(src):
+                raise OSError("it holds a Python virtualenv or a checkout, whose files point back at where they are")
+            if path not in ignored:
+                raise OSError("git does not ignore it here")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            share(src, dst)
+            shared.append(name)
+        except OSError as e:
+            said.append(f"{name} is not shared from the clone: {e}")
+    rest = f"`git -C {shlex.quote(top)} ls-files -oi --exclude-standard --directory`"
+    more = f" and {len(shared) - 20} more, which {rest} lists" if len(shared) > 20 else ""
+    return [f"shared from the clone copy-on-write, as they were there: {', '.join(shared[:20])}{more}"] * bool(shared) + said
 
 
 def sha():

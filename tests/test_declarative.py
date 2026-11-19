@@ -63,7 +63,7 @@ class Invariants(unittest.TestCase):
                          ["## Invariants", "### Always", "### In this repo"])
         self.assertNotIn(INV["guidance"][0]["text"], md)
         self.assertEqual([r["id"] for r in INV["stack"]],
-                         ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch", "own-controls", "publish"])
+                         ["merge-verified", "held", "turn-ends-verified", "one-thread", "one-launch", "warm", "own-controls", "publish"])
         self.assertEqual([r["id"] for r in INV["repo"]], ["patent", "text", "issue-close", "teammates"])
         self.assertIn("`config/invariants.toml`", (PKG / "skills" / "onigiri-mode" / "SKILL.md").read_text())
 

@@ -55,6 +55,9 @@ test("the hook covers every tool that runs a command, writes a file or starts a 
 	const rules = spawnSync("sh", ["-c", command("SessionStart")], { encoding: "utf8" });
 	assert.equal(rules.status, 0);
 	assert.match(rules.stdout, /^## Invariants/m);
+	const warm = spawnSync("sh", ["-c", hooks.SessionStart[0].hooks[1].command.replaceAll("${CLAUDE_PLUGIN_ROOT}", root.replace(/\/$/, ""))], { encoding: "utf8", cwd: os.tmpdir() });
+	assert.match(hooks.SessionStart[0].hooks[1].command, /queue\.py" warm$/);
+	assert.deepEqual([warm.status, warm.stdout], [0, ""]);
 });
 
 test("the plugin and the pi package are one version", () => {
