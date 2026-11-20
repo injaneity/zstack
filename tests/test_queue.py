@@ -50,6 +50,9 @@ class Forge:
                 return 1, "", p.get("refuse") or "head moved"
             p["state"] = "MERGED"
             return 0, "", ""
+        if a[:2] == ("api", "graphql"):
+            p = self.prs[int(next(x for x in a if x.startswith("p="))[2:])]
+            return (1, "", "graphql down") if p.get("queue") == "down" else (0, "true\n" if p.get("queue") else "false\n", "")
         if a[:2] == ("issue", "view"):
             if int(a[2]) not in self.issues:
                 return 1, "", "issue not found"
@@ -439,6 +442,16 @@ class Approve(Case):
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-x"}):
             queue.approve(self.pol, "r")
 
+    def test_an_approval_while_a_launch_is_recorded_reaches_the_running_item(self):
+        self.add("a")
+
+        def launch(pol, up):
+            self.assertEqual(queue.approve(self.pol, "a"), {"id": "a", "preapproved": "running"})
+            return "t-a", "/nowhere/wt-a"
+        with patch.object(queue, "launch", launch):
+            self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
+        self.assertEqual((self.file()["tasks"], self.file()["running"]["a"]["preapproved"]), ({}, True))
+
     def test_a_pass_merges_an_approved_waiting_pr_whose_thread_ended_on_review_and_clears_it(self):
         self.assertEqual(self.waiting()["why"], "PR 40 waits for the owner: it needs a person's review")
         self.assertEqual((queue.step(self.pol)["cleared"], self.merges()), ([], []))
@@ -459,17 +472,23 @@ class Approve(Case):
                  ("labelled", {"labels": [M["review_label"]]}, {}, "it needs a person's review"),
                  ("conflicting", {}, {"mergeable": "CONFLICTING"}, "GitHub says it is conflicting, not mergeable"),
                  ("draft", {}, {"draft": True}, "the PR is a draft"),
+                 ("queued", {}, {"queue": True},
+                  "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
+                 ("unknown", {}, {"queue": "down"}, "whether its base branch has a merge queue cannot be told: graphql down"),
                  ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
                   "the pass could not merge it: base branch policy prohibits the merge"))
         for n, (ident, made, then, _) in enumerate(cases):
             self.waiting(ident, pr=50 + n, **made)
             queue.approve(self.pol, ident)
             self.forge.prs[50 + n].update(then)
-        self.assertEqual(queue.step(self.pol)["cleared"], [])
+        got = queue.step(self.pol)
+        self.assertEqual(got["cleared"], [])
+        kept = sorted((c[0], f"PR {50 + n} waits for the owner: {c[3]}") for n, c in enumerate(cases))
+        self.assertEqual(got["kept"], [{"id": ident, "why": why} for ident, why in kept])
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), ["58", "58"])
+        self.assertEqual(self.merges(), ["60", "60"])
 
     def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
         self.waiting(said="auto")

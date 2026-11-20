@@ -671,14 +671,14 @@ def add(pol, ident, said, priority, preapproved=False):
 
 def approve(pol, ident):
     def go(q):
-        part = next((p for p in ("tasks", "running", "waiting") if ident in q[p]), None)
-        if not part:
+        parts = [p for p in ("running", "waiting", "tasks") if ident in q[p]]
+        if not parts:
             raise Refused(f"{ident} is not a task, running or waiting, so there is nothing to approve")
-        it = q[part][ident]
-        if it.get("thread") and os.environ.get(THREAD_VAR) == it["thread"]:
+        if any(q[p][ident].get("thread") and os.environ.get(THREAD_VAR) == q[p][ident]["thread"] for p in parts):
             raise Refused(f"this is {ident}'s own thread: only the owner preapproves an item")
-        it["preapproved"] = True
-        return {"id": ident, "preapproved": part}, True
+        for p in parts:
+            q[p][ident]["preapproved"] = True
+        return {"id": ident, "preapproved": parts[0]}, True
     return locked(pol, go)
 
 
@@ -738,14 +738,14 @@ def launch(pol, up):
 
 def step(pol):
     def intend(q):
-        cleared = settle(pol, q)
+        cleared, kept = settle(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
                                       "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
-        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "skipped": skipped}), bool(cleared or gone or up)
+        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}), bool(cleared or gone or up)
     up, out = locked(pol, intend)
     if not up:
         return out
@@ -801,7 +801,7 @@ def run_pass(pol):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise Refused("another pass is running on this machine") from None
-        out = {"released": [], "launched": [], "cleared": []}
+        out = {"released": [], "launched": [], "cleared": [], "kept": []}
         for key in reconcile(pol):
             try:
                 out["released"].append(release(pol, key))
@@ -810,6 +810,7 @@ def run_pass(pol):
         while True:
             got = step(pol)
             out["cleared"] += got["cleared"]
+            out["kept"] = got["kept"]
             if not got["launched"]:
                 return dict(out, waiting=got["waiting"], skipped=got["skipped"])
             out["launched"].append(got["launched"])
@@ -971,6 +972,14 @@ def approved_merge(pol, it, v, live):
         return "it needs a person's review"
     if live.get("mergeable") != "MERGEABLE":
         return f"GitHub says it is {(live.get('mergeable') or 'unknown').lower()}, not mergeable"
+    owner, name = pol["merge"]["repo"].split("/")
+    rc, out, err = gh("api", "graphql", "-f", "query=query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) "
+                      "{ pullRequest(number: $p) { isMergeQueueEnabled } } }", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
+                      "--jq", ".data.repository.pullRequest.isMergeQueueEnabled")
+    if rc or out.strip() not in ("true", "false"):
+        return f"whether its base branch has a merge queue cannot be told: {err}"
+    if out.strip() == "true":
+        return "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
     rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--squash", "--match-head-commit", live["headRefOid"])
     return f"the pass could not merge it: {err}" if rc else None
 
@@ -1036,12 +1045,11 @@ def release(pol, ident=None, hook=False):
 
 
 def settle(pol, q):
-    cleared = []
+    cleared, kept = [], []
     for key in sorted(q["waiting"]):
         state, why = outcome(pol, q, key, merge=True)
-        if state == "done":
-            cleared.append({"id": key, "why": why})
-    return cleared
+        (cleared if state == "done" else kept).append({"id": key, "why": why})
+    return cleared, kept
 
 
 def plugin(head, out):
