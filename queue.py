@@ -983,6 +983,8 @@ def approved_merge(pol, it, v, live):
         pr, checks = got["pullRequest"], ((got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"] or
                                           {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
         labels = [x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else [])]
+        if not all(isinstance(c, dict) for c in checks["nodes"]):
+            raise TypeError
     except (ValueError, KeyError, IndexError, TypeError):
         return f"it could not be read again just before the merge: {err or 'not the answer asked for'}"
     why = (f"the verifier has not passed head {pr['headRefOid']}" if pr["headRefOid"] != v["head"] else

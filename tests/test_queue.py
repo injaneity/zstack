@@ -57,6 +57,7 @@ class Forge:
             if p.get("queue") == "down":
                 return 1, "", "graphql down"
             checks = [{"name": M["gate_check"], "status": "COMPLETED", "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]
+            checks += [None] if p.get("nulls") else []
             pr = {"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
                   "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]},
                   "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": p.get("many", False)},
@@ -496,6 +497,7 @@ class Approve(Case):
                  ("running-late", {}, {"then": {"more": [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None, "completedAt": None}]}},
                   "a check is still running on that head, and a merge now would arm auto-merge"),
                  ("many-checks", {}, {"many": True}, "it has more checks than one read lists"),
+                 ("null-check", {}, {"then": {"nulls": True}}, "it could not be read again just before the merge: not the answer asked for"),
                  ("queued-late", {}, {"then": {"queue": True}},
                   "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
                  ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
@@ -511,7 +513,7 @@ class Approve(Case):
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), ["67", "67"])
+        self.assertEqual(self.merges(), ["68", "68"])
 
     def test_a_hold_on_the_issue_seen_only_by_the_last_read_stops_the_merge(self):
         hold = M["hold_label"]
