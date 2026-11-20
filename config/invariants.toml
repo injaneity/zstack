@@ -14,9 +14,9 @@ intro = '''These always hold. The guard, the pre-push hook and the queue refuse 
 
 [[invariant]]
 id = "merge-verified"
-text = '''In `{merge.repo}` only the head the verifier passed merges, with `gh pr merge <pr> --squash --match-head-commit <head>`, once `{merge.gate_check}` is green and every check has finished. The verifier passes a head as `auto`, which merges, or `review`, which waits for {people.owner}, as does any PR labelled `{merge.review_label}`. A preapproved item merges on either pass: an issue labelled {merge.preapproved_labels:or}, or a task the orchestrator added as preapproved. A push after a pass needs a new verdict. If you think the change needs a person anyway, do not merge it, and say why.'''
+text = '''In `{merge.repo}` only the head the verifier passed merges, with `gh pr merge <pr> --squash --match-head-commit <head>`, once `{merge.gate_check}` is green and every check has finished. The verifier passes a head as `auto`, which merges, or `review`, which waits for {people.owner}, as does any PR labelled `{merge.review_label}`. A preapproved item merges on either pass: an issue labelled {merge.preapproved_labels:or}, or a task the orchestrator added as preapproved, or any item it approves later with `queue.py approve`; the pass merges such an item's waiting PR once its head may merge. A push after a pass needs a new verdict. If you think the change needs a person anyway, do not merge it, and say why.'''
 enforced = "the guard asks `queue.py gate` before it lets the merge command run, and refuses every other merge"
-test = "model/Queue.tla::ThreadMergesOnlyAVerifiedAllowedHead"
+test = "model/Queue.tla::OnlyAVerifiedAllowedHeadMerges"
 
 [[invariant]]
 id = "held"

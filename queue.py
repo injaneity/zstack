@@ -23,6 +23,8 @@ USAGE = (
     "                                   that died, and launch a thread for each ready item, up to the cap\n"
     "  queue.py add <id> [--priority N] [--preapproved]\n"
     "                                   a task from the orchestrator; its text on stdin\n"
+    "  queue.py approve <id>            the owner preapproves an item already a task, running or waiting: its thread may\n"
+    "                                   merge a passed head, and a pass merges its waiting PR once that head may merge\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -667,6 +669,19 @@ def add(pol, ident, said, priority, preapproved=False):
     return locked(pol, go)
 
 
+def approve(pol, ident):
+    def go(q):
+        parts = [p for p in ("running", "waiting", "tasks") if ident in q[p]]
+        if not parts:
+            raise Refused(f"{ident} is not a task, running or waiting, so there is nothing to approve")
+        if any(q[p][ident].get("thread") and os.environ.get(THREAD_VAR) == q[p][ident]["thread"] for p in parts):
+            raise Refused(f"this is {ident}'s own thread: only the owner preapproves an item")
+        for p in parts:
+            q[p][ident]["preapproved"] = True
+        return {"id": ident, "preapproved": parts[0]}, True
+    return locked(pol, go)
+
+
 BRIEF = """# {id}
 
 {task}
@@ -723,14 +738,14 @@ def launch(pol, up):
 
 def step(pol):
     def intend(q):
-        cleared = settle(pol, q)
+        cleared, kept = settle(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
                                       "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
-        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "skipped": skipped}), bool(cleared or gone or up)
+        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}), bool(cleared or gone or up)
     up, out = locked(pol, intend)
     if not up:
         return out
@@ -786,7 +801,7 @@ def run_pass(pol):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise Refused("another pass is running on this machine") from None
-        out = {"released": [], "launched": [], "cleared": []}
+        out = {"released": [], "launched": [], "cleared": [], "kept": []}
         for key in reconcile(pol):
             try:
                 out["released"].append(release(pol, key))
@@ -795,13 +810,15 @@ def run_pass(pol):
         while True:
             got = step(pol)
             out["cleared"] += got["cleared"]
+            out["kept"] = got["kept"]
             if not got["launched"]:
                 return dict(out, waiting=got["waiting"], skipped=got["skipped"])
             out["launched"].append(got["launched"])
 
 
 def pr_view(pol, pr):
-    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", "state,headRefOid,labels,number,isDraft,statusCheckRollup")
+    fields = "state,headRefOid,labels,number,isDraft,mergeable,statusCheckRollup"
+    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", fields)
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
     return json.loads(out)
@@ -839,8 +856,8 @@ def stopped(pol, it, v, live):
 def unready(pol, live):
     if not gate_green(pol, live):
         return f"{pol['merge']['gate_check']} has not passed on that head"
-    running = any(c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")
-                  for c in live.get("statusCheckRollup") or [])
+    running = any(c.get("status", "COMPLETED") != "COMPLETED" and not (c.get("conclusion") and c.get("completedAt"))
+                  or c.get("state") in ("PENDING", "EXPECTED") for c in live.get("statusCheckRollup") or [])
     return "a check is still running on that head, and a merge now would arm auto-merge" if running else None
 
 
@@ -947,7 +964,45 @@ def its_pr(pol, q, it):
     return live
 
 
-def outcome(pol, q, key):
+FRESH = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid isDraft "
+         "mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { "
+         "contexts(first: 100) { pageInfo { hasNextPage } nodes { ... on CheckRun { name status conclusion completedAt } "
+         "... on StatusContext { context state } } } } } } } }")
+
+
+def approved_merge(pol, it, v, live):
+    why = blocked(pol, it, v, live)
+    if why or not it["preapproved"]:
+        return why or "its thread did not merge it"
+    (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
+    issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
+    rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}{issue} }} }}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
+                      "--jq", ".data.repository")
+    try:
+        got = json.loads(out) if not rc else None
+        pr, checks = got["pullRequest"], ((got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"] or
+                                          {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
+        labels = [x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else [])]
+        if not all(isinstance(c, dict) for c in checks["nodes"]):
+            raise TypeError
+    except (ValueError, KeyError, IndexError, TypeError):
+        return f"it could not be read again just before the merge: {err or 'not the answer asked for'}"
+    why = (f"the verifier has not passed head {pr['headRefOid']}" if pr["headRefOid"] != v["head"] else
+           f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
+           "it needs a person's review" if m["review_label"] in labels else
+           "the PR is a draft" if pr["isDraft"] else
+           "it has more checks than one read lists" if checks["pageInfo"]["hasNextPage"] else
+           unready(pol, {"statusCheckRollup": checks["nodes"]}) or
+           (f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
+            "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
+            if pr["isMergeQueueEnabled"] else None))
+    if why:
+        return why
+    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
+    return f"the pass could not merge it: {err}" if rc else None
+
+
+def outcome(pol, q, key, merge=False):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
 
     def wait(why):
@@ -956,7 +1011,11 @@ def outcome(pol, q, key):
     try:
         live = its_pr(pol, q, it)
         if live and live["state"] == "OPEN":
-            why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
+            v = q["verdicts"].get(str(it["pr"]))
+            why = approved_merge(pol, it, v, live) if merge else blocked(pol, it, v, live) or "its thread did not merge it"
+            if not why:
+                live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
+        if live and live["state"] == "OPEN":
             tidy(pol, it, False)
             return wait(f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
@@ -1004,12 +1063,11 @@ def release(pol, ident=None, hook=False):
 
 
 def settle(pol, q):
-    cleared = []
+    cleared, kept = [], []
     for key in sorted(q["waiting"]):
-        state, why = outcome(pol, q, key)
-        if state == "done":
-            cleared.append({"id": key, "why": why})
-    return cleared
+        state, why = outcome(pol, q, key, merge=True)
+        (cleared if state == "done" else kept).append({"id": key, "why": why})
+    return cleared, kept
 
 
 def plugin(head, out):
@@ -1225,6 +1283,8 @@ def queue_command(pol, argv, stdin):
             return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv)
     if argv == ["pass"]:
         return run_pass(pol)
+    if len(argv) == 2 and argv[0] == "approve":
+        return approve(pol, argv[1])
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
         return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):
