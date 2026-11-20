@@ -327,6 +327,17 @@ class Gate(Case):
         self.forge.prs[42]["more"] = [{"name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"}, {"context": "legacy", "state": "SUCCESS"}]
         self.assertIsNone(self.shut(42))
 
+    def test_a_finished_check_run_github_still_lists_as_in_progress_does_not_block_and_a_running_one_does(self):
+        done = [{"name": M["gate_check"], "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"name": "quick / scope", "status": "IN_PROGRESS", "conclusion": "SUCCESS", "completedAt": "2026-11-19T16:58:54Z"}]
+        self.assertIsNone(queue.unready(self.pol, {"statusCheckRollup": done}))
+        for c in ({"name": "quick", "status": "IN_PROGRESS", "conclusion": None, "completedAt": None},
+                  {"name": "quick", "status": "IN_PROGRESS", "conclusion": "SUCCESS", "completedAt": None},
+                  {"name": "quick", "status": "QUEUED"}, {"context": "legacy", "state": "PENDING"}):
+            with self.subTest(c=c):
+                self.assertEqual(queue.unready(self.pol, {"statusCheckRollup": [*done, c]}),
+                                 "a check is still running on that head, and a merge now would arm auto-merge")
+
     def test_a_hold_label_on_the_pr_or_on_its_issue_keeps_it_shut_and_an_unreadable_issue_counts_as_held(self):
         hold = M["hold_label"]
         self.passed(preapproved=True, said="review")

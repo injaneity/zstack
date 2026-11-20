@@ -839,8 +839,8 @@ def stopped(pol, it, v, live):
 def unready(pol, live):
     if not gate_green(pol, live):
         return f"{pol['merge']['gate_check']} has not passed on that head"
-    running = any(c.get("status", "COMPLETED") != "COMPLETED" or c.get("state") in ("PENDING", "EXPECTED")
-                  for c in live.get("statusCheckRollup") or [])
+    running = any(c.get("status", "COMPLETED") != "COMPLETED" and not (c.get("conclusion") and c.get("completedAt"))
+                  or c.get("state") in ("PENDING", "EXPECTED") for c in live.get("statusCheckRollup") or [])
     return "a check is still running on that head, and a merge now would arm auto-merge" if running else None
 
 
