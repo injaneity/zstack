@@ -56,6 +56,13 @@ M = [
         LIVE,
     ),
     (
+        "one-unreadable-pr-stops-the-pass",
+        "a PR whose read comes back malformed aborts the pass, so no other approved waiting PR merges",
+        [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ unread = {} /\\ Merge")],
+        LIVE,
+        ('  Machines = {"mac", "linux"}\n  Garbles = {}\n', '  Machines = {"mac"}\n  Garbles = {"i2"}\n'),
+    ),
+    (
         "pass-survives-a-push",
         "a pass stays on the PR after a new push",
         [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],
