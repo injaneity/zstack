@@ -60,7 +60,7 @@ M = [
         "a PR whose read comes back malformed aborts the pass, so no other approved waiting PR merges",
         [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ unread = {} /\\ Merge")],
         LIVE,
-        ('  Machines = {"mac", "linux"}\n  Garbles = {}\n', '  Machines = {"mac"}\n  Garbles = {"i2"}\n'),
+        ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n', '  Machines = {"mac"}\n  Garbles = {"i3"}\n  NoTree = {}\n'),
     ),
     (
         "pass-survives-a-push",

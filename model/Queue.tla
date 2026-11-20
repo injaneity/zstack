@@ -50,7 +50,7 @@ Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held
 Merge(i, who) == i \in pr /\ i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = who]
   /\ okAtMerge' = [okAtMerge EXCEPT ![i] = status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held
                                            /\ (who = "pass" => i \in pre /\ i \notin Review)]
-  /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, history>>
+  /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, history>>
 ThreadMerge(m, i) == Takes(m, i) /\ Open(i) /\ Merge(i, "thread")
 PassReady(m, i) == q[m][i] = "waiting" /\ i \in pr /\ i \notin merged /\ Open(i) /\ i \in pre /\ i \notin Review /\ i \notin unread
 PassMerge(m, i) == PassReady(m, i) /\ Merge(i, "pass")
@@ -77,7 +77,7 @@ Flip == up' = ~up /\ UNCHANGED <<q, held, pre, unread, pr, status, stale, merged
 Hold(i) == i \notin held /\ held' = held \cup {i} /\ UNCHANGED <<q, work, history>>
 Unhold(i) == i \in held /\ held' = held \ {i} /\ UNCHANGED <<q, work, history>>
 Approve(i) == i \notin pre /\ pre' = pre \cup {i} /\ UNCHANGED <<q, held, unread, up, pr, status, stale, merged, by, okAtMerge, history>>
-Garble(i) == i \in Garbles /\ i \notin unread /\ unread' = unread \cup {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, merged, by, okAtMerge, history>>
+Garble(i) == i \in Garbles /\ i \in pr /\ i \notin merged /\ (\E m \in Machines : q[m][i] = "waiting") /\ i \notin unread /\ unread' = unread \cup {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, merged, by, okAtMerge, history>>
 Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, merged, by, okAtMerge, history>>
 
 Next ==
