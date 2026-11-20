@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -55,8 +56,17 @@ class Forge:
             p.update(p.pop("then", {}))
             if p.get("queue") == "down":
                 return 1, "", "graphql down"
-            return 0, json.dumps({"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
-                                  "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]}}), ""
+            checks = [{"name": M["gate_check"], "status": "COMPLETED", "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]
+            pr = {"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
+                  "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]},
+                  "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": p.get("many", False)},
+                                                                                         "nodes": checks}}}}]}}
+            issue = re.search(r"issue\(number: (\d+)\)", next(x for x in a if x.startswith("query=")))
+            found = issue and self.issues.get(int(issue.group(1)))
+            said = {"pullRequest": pr}
+            if issue:
+                said["issue"] = None if found is None else {"labels": {"nodes": [{"name": x} for x in found]}}
+            return 0, json.dumps(said), ""
         if a[:2] == ("issue", "view"):
             if int(a[2]) not in self.issues:
                 return 1, "", "issue not found"
@@ -482,6 +492,10 @@ class Approve(Case):
                  ("held-late", {}, {"then": {"labels": [hold]}}, f"it is labelled {hold}"),
                  ("labelled-late", {}, {"then": {"labels": [M["review_label"]]}}, "it needs a person's review"),
                  ("moved-late", {}, {"then": {"head": H2}}, f"the verifier has not passed head {H2}"),
+                 ("red-late", {}, {"then": {"ci": "FAILURE"}}, f"{M['gate_check']} has not passed on that head"),
+                 ("running-late", {}, {"then": {"more": [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None, "completedAt": None}]}},
+                  "a check is still running on that head, and a merge now would arm auto-merge"),
+                 ("many-checks", {}, {"many": True}, "it has more checks than one read lists"),
                  ("queued-late", {}, {"then": {"queue": True}},
                   "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
                  ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
@@ -497,7 +511,28 @@ class Approve(Case):
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), ["64", "64"])
+        self.assertEqual(self.merges(), ["67", "67"])
+
+    def test_a_hold_on_the_issue_seen_only_by_the_last_read_stops_the_merge(self):
+        hold = M["hold_label"]
+        self.cands = [cand(1)]
+        self.start("app-1", "t-1", "/nowhere/1")
+        self.forge.issues[1] = []
+        self.pr_open(40)
+        queue.verified(self.pol, "app-1", 40, H1, "review")
+        queue.release(self.pol, "app-1")
+        queue.approve(self.pol, "app-1")
+        real = self.forge.gh
+
+        def gh(*a, stdin=None):
+            if a[:2] == ("api", "graphql"):
+                self.forge.issues[1] = [hold]
+            return real(*a, stdin=stdin)
+        with patch.object(queue, "gh", gh):
+            self.assertEqual(queue.step(self.pol)["kept"], [{"id": "app-1", "why": f"PR 40 waits for the owner: it is labelled {hold}"}])
+        self.assertEqual(self.merges(), [])
+        self.forge.issues[1] = []
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "app-1", "why": "PR 40 merged"}])
 
     def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
         self.waiting(said="auto")

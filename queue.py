@@ -964,8 +964,10 @@ def its_pr(pol, q, it):
     return live
 
 
-FRESH = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) "
-         "{ headRefOid isDraft mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } } } }")
+FRESH = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid isDraft "
+         "mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { "
+         "contexts(first: 100) { pageInfo { hasNextPage } nodes { ... on CheckRun { name status conclusion completedAt } "
+         "... on StatusContext { context state } } } } } } } }")
 
 
 def approved_merge(pol, it, v, live):
@@ -973,22 +975,25 @@ def approved_merge(pol, it, v, live):
     if why or not it["preapproved"]:
         return why or "its thread did not merge it"
     (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
-    rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
-                      "--jq", ".data.repository.pullRequest")
+    issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
+    rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}{issue} }} }}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
+                      "--jq", ".data.repository")
     try:
-        pr = json.loads(out) if not rc else None
-    except ValueError:
-        pr = None
-    if not isinstance(pr, dict):
-        return f"it could not be read again just before the merge: {err or 'not JSON'}"
-    labels = [x["name"] for x in pr["labels"]["nodes"]]
+        got = json.loads(out) if not rc else None
+        pr, checks = got["pullRequest"], ((got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"] or
+                                          {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
+        labels = [x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else [])]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return f"it could not be read again just before the merge: {err or 'not the answer asked for'}"
     why = (f"the verifier has not passed head {pr['headRefOid']}" if pr["headRefOid"] != v["head"] else
            f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
            "it needs a person's review" if m["review_label"] in labels else
            "the PR is a draft" if pr["isDraft"] else
-           f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
-           "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
-           if pr["isMergeQueueEnabled"] else None)
+           "it has more checks than one read lists" if checks["pageInfo"]["hasNextPage"] else
+           unready(pol, {"statusCheckRollup": checks["nodes"]}) or
+           (f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
+            "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
+            if pr["isMergeQueueEnabled"] else None))
     if why:
         return why
     rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
