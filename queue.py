@@ -964,23 +964,34 @@ def its_pr(pol, q, it):
     return live
 
 
+FRESH = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) "
+         "{ headRefOid isDraft mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } } } }")
+
+
 def approved_merge(pol, it, v, live):
     why = blocked(pol, it, v, live)
     if why or not it["preapproved"]:
         return why or "its thread did not merge it"
-    if pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]:
-        return "it needs a person's review"
-    if live.get("mergeable") != "MERGEABLE":
-        return f"GitHub says it is {(live.get('mergeable') or 'unknown').lower()}, not mergeable"
-    owner, name = pol["merge"]["repo"].split("/")
-    rc, out, err = gh("api", "graphql", "-f", "query=query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) "
-                      "{ pullRequest(number: $p) { isMergeQueueEnabled } } }", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
-                      "--jq", ".data.repository.pullRequest.isMergeQueueEnabled")
-    if rc or out.strip() not in ("true", "false"):
-        return f"whether its base branch has a merge queue cannot be told: {err}"
-    if out.strip() == "true":
-        return "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
-    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--squash", "--match-head-commit", live["headRefOid"])
+    (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
+    rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
+                      "--jq", ".data.repository.pullRequest")
+    try:
+        pr = json.loads(out) if not rc else None
+    except ValueError:
+        pr = None
+    if not isinstance(pr, dict):
+        return f"it could not be read again just before the merge: {err or 'not JSON'}"
+    labels = [x["name"] for x in pr["labels"]["nodes"]]
+    why = (f"the verifier has not passed head {pr['headRefOid']}" if pr["headRefOid"] != v["head"] else
+           f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
+           "it needs a person's review" if m["review_label"] in labels else
+           "the PR is a draft" if pr["isDraft"] else
+           f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
+           "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
+           if pr["isMergeQueueEnabled"] else None)
+    if why:
+        return why
+    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
     return f"the pass could not merge it: {err}" if rc else None
 
 

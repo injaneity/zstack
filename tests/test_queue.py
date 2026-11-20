@@ -52,7 +52,11 @@ class Forge:
             return 0, "", ""
         if a[:2] == ("api", "graphql"):
             p = self.prs[int(next(x for x in a if x.startswith("p="))[2:])]
-            return (1, "", "graphql down") if p.get("queue") == "down" else (0, "true\n" if p.get("queue") else "false\n", "")
+            p.update(p.pop("then", {}))
+            if p.get("queue") == "down":
+                return 1, "", "graphql down"
+            return 0, json.dumps({"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
+                                  "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]}}), ""
         if a[:2] == ("issue", "view"):
             if int(a[2]) not in self.issues:
                 return 1, "", "issue not found"
@@ -474,7 +478,12 @@ class Approve(Case):
                  ("draft", {}, {"draft": True}, "the PR is a draft"),
                  ("queued", {}, {"queue": True},
                   "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
-                 ("unknown", {}, {"queue": "down"}, "whether its base branch has a merge queue cannot be told: graphql down"),
+                 ("unread", {}, {"queue": "down"}, "it could not be read again just before the merge: graphql down"),
+                 ("held-late", {}, {"then": {"labels": [hold]}}, f"it is labelled {hold}"),
+                 ("labelled-late", {}, {"then": {"labels": [M["review_label"]]}}, "it needs a person's review"),
+                 ("moved-late", {}, {"then": {"head": H2}}, f"the verifier has not passed head {H2}"),
+                 ("queued-late", {}, {"then": {"queue": True}},
+                  "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
                  ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
                   "the pass could not merge it: base branch policy prohibits the merge"))
         for n, (ident, made, then, _) in enumerate(cases):
@@ -488,7 +497,7 @@ class Approve(Case):
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), ["60", "60"])
+        self.assertEqual(self.merges(), ["64", "64"])
 
     def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
         self.waiting(said="auto")
