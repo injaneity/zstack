@@ -37,12 +37,19 @@ class Forge:
         if a[:2] == ("pr", "view"):
             p = self.prs[int(a[2])]
             return 0, json.dumps({"number": int(a[2]), "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isDraft": p.get("draft", False),
+                                  "mergeable": p.get("mergeable", "MERGEABLE"),
                                   "labels": [{"name": x} for x in p.get("labels", [])],
                                   "statusCheckRollup": [{"name": M["gate_check"], "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]}), ""
         if a[:2] == ("pr", "list"):
             want = a[a.index("--state") + 1]
             return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items(), reverse=True) if p.get("branch") == a[a.index("--head") + 1]
                                   and (want == "all" or p.get("state", "OPEN") == "OPEN")][:1]), ""
+        if a[:2] == ("pr", "merge"):
+            p = self.prs[int(a[2])]
+            if p.get("refuse") or a[a.index("--match-head-commit") + 1] != p["head"]:
+                return 1, "", p.get("refuse") or "head moved"
+            p["state"] = "MERGED"
+            return 0, "", ""
         if a[:2] == ("issue", "view"):
             if int(a[2]) not in self.issues:
                 return 1, "", "issue not found"
@@ -399,6 +406,77 @@ class Gate(Case):
             queue.verified(self.pol, "b", 40, H1, "auto")
 
 
+class Approve(Case):
+    def setUp(self):
+        super().setUp()
+        self.pol["run"]["threads"] = 9
+
+    def waiting(self, ident="a", pr=40, said="review", labels=()):
+        self.run_(ident, thread=f"t-{ident}")
+        self.pr_open(pr, labels=labels)
+        queue.verified(self.pol, ident, pr, H1, said)
+        got = queue.release(self.pol, ident)
+        self.assertEqual(got["state"], "waiting")
+        return got
+
+    def settle(self, ident):
+        return queue.locked(self.pol, lambda q: (queue.outcome(self.pol, q, ident, merge=True), True))
+
+    def merges(self):
+        return [a[2] for a in self.forge.calls if a[:2] == ("pr", "merge")]
+
+    def test_approve_preapproves_a_task_a_running_or_a_waiting_item_and_nothing_else(self):
+        self.run_("r", thread="t-r")
+        self.waiting("w", pr=41)
+        self.add("t")
+        for ident, part in (("t", "tasks"), ("r", "running"), ("w", "waiting")):
+            self.assertEqual(queue.approve(self.pol, ident), {"id": ident, "preapproved": part})
+            self.assertTrue(self.file()[part][ident]["preapproved"], ident)
+        with self.assertRaisesRegex(queue.Refused, "zzz is not a task, running or waiting, so there is nothing to approve"):
+            queue.approve(self.pol, "zzz")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-r"}), self.assertRaisesRegex(queue.Refused, "r's own thread"):
+            queue.approve(self.pol, "r")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-x"}):
+            queue.approve(self.pol, "r")
+
+    def test_a_pass_merges_an_approved_waiting_pr_whose_thread_ended_on_review_and_clears_it(self):
+        self.assertEqual(self.waiting()["why"], "PR 40 waits for the owner: it needs a person's review")
+        self.assertEqual((queue.step(self.pol)["cleared"], self.merges()), ([], []))
+        queue.approve(self.pol, "a")
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
+        self.assertEqual([a for a in self.forge.calls if a[:2] == ("pr", "merge")],
+                         [("pr", "merge", "40", "-R", REPO, "--squash", "--match-head-commit", H1)])
+        self.assertEqual((self.file()["waiting"], self.file()["verdicts"]), ({}, {}))
+
+    def test_a_pass_never_merges_an_approved_pr_that_is_unverified_moved_held_red_running_labelled_or_conflicting(self):
+        hold = M["hold_label"]
+        cases = (("unverified", {"said": "fail"}, {}, f"the verifier has not passed head {H1}"),
+                 ("moved", {}, {"head": H2}, f"the verifier has not passed head {H2}"),
+                 ("held", {"labels": [hold]}, {}, f"it is labelled {hold}"),
+                 ("red", {}, {"ci": "FAILURE"}, f"{M['gate_check']} has not passed on that head"),
+                 ("running", {}, {"more": [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None, "completedAt": None}]},
+                  "a check is still running on that head, and a merge now would arm auto-merge"),
+                 ("labelled", {"labels": [M["review_label"]]}, {}, "it needs a person's review"),
+                 ("conflicting", {}, {"mergeable": "CONFLICTING"}, "GitHub says it is conflicting, not mergeable"),
+                 ("draft", {}, {"draft": True}, "the PR is a draft"),
+                 ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
+                  "the pass could not merge it: base branch policy prohibits the merge"))
+        for n, (ident, made, then, _) in enumerate(cases):
+            self.waiting(ident, pr=50 + n, **made)
+            queue.approve(self.pol, ident)
+            self.forge.prs[50 + n].update(then)
+        self.assertEqual(queue.step(self.pol)["cleared"], [])
+        self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
+        for n, (ident, _, _, why) in enumerate(cases):
+            self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
+        self.assertEqual(self.merges(), ["58", "58"])
+
+    def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
+        self.waiting(said="auto")
+        self.assertEqual((queue.step(self.pol)["cleared"], self.merges()), ([], []))
+        self.assertEqual(self.settle("a"), ("waiting", "PR 40 waits for the owner: its thread did not merge it"))
+
+
 class Release(Case):
     def test_a_turn_end_frees_the_slot_keeps_an_open_pr_waiting_and_a_late_verdict_still_opens_the_gate(self):
         self.pol["run"]["threads"] = 1
@@ -665,6 +743,12 @@ class Cli(Case):
                 self.assertEqual(queue.main(gone), 2, gone)
             self.assertEqual(queue.main(["pass"]), 0)
             self.assertEqual(sorted(self.file()["running"]), ["a", "c"])
+            for bad in (["approve"], ["approve", "a", "b"]):
+                self.assertEqual(queue.main(bad), 2, bad)
+            self.assertEqual(queue.main(["approve", "c"]), 0)
+            with patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(queue.main(["approve", "zzz"]), 1)
+            self.assertEqual(err.getvalue(), "queue: zzz is not a task, running or waiting, so there is nothing to approve\n")
             self.forge.prs[40] = {"head": H1}
             for bad in (["verified", "a", "auto"], ["verified", "a", "40", H1], ["verified", "a", "40", H1, "pass", "auto"],
                         ["verified", "a", "40", H1, "extreme"], ["verified", "a", "40", H1[:7], "auto"], ["gate", "40", H1[:7]],

@@ -23,6 +23,8 @@ USAGE = (
     "                                   that died, and launch a thread for each ready item, up to the cap\n"
     "  queue.py add <id> [--priority N] [--preapproved]\n"
     "                                   a task from the orchestrator; its text on stdin\n"
+    "  queue.py approve <id>            the owner preapproves an item already a task, running or waiting: its thread may\n"
+    "                                   merge a passed head, and a pass merges its waiting PR once that head may merge\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -667,6 +669,19 @@ def add(pol, ident, said, priority, preapproved=False):
     return locked(pol, go)
 
 
+def approve(pol, ident):
+    def go(q):
+        part = next((p for p in ("tasks", "running", "waiting") if ident in q[p]), None)
+        if not part:
+            raise Refused(f"{ident} is not a task, running or waiting, so there is nothing to approve")
+        it = q[part][ident]
+        if it.get("thread") and os.environ.get(THREAD_VAR) == it["thread"]:
+            raise Refused(f"this is {ident}'s own thread: only the owner preapproves an item")
+        it["preapproved"] = True
+        return {"id": ident, "preapproved": part}, True
+    return locked(pol, go)
+
+
 BRIEF = """# {id}
 
 {task}
@@ -801,7 +816,8 @@ def run_pass(pol):
 
 
 def pr_view(pol, pr):
-    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", "state,headRefOid,labels,number,isDraft,statusCheckRollup")
+    fields = "state,headRefOid,labels,number,isDraft,mergeable,statusCheckRollup"
+    rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", fields)
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
     return json.loads(out)
@@ -947,7 +963,19 @@ def its_pr(pol, q, it):
     return live
 
 
-def outcome(pol, q, key):
+def approved_merge(pol, it, v, live):
+    why = blocked(pol, it, v, live)
+    if why or not it["preapproved"]:
+        return why or "its thread did not merge it"
+    if pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]:
+        return "it needs a person's review"
+    if live.get("mergeable") != "MERGEABLE":
+        return f"GitHub says it is {(live.get('mergeable') or 'unknown').lower()}, not mergeable"
+    rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", pol["merge"]["repo"], "--squash", "--match-head-commit", live["headRefOid"])
+    return f"the pass could not merge it: {err}" if rc else None
+
+
+def outcome(pol, q, key, merge=False):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
 
     def wait(why):
@@ -956,7 +984,11 @@ def outcome(pol, q, key):
     try:
         live = its_pr(pol, q, it)
         if live and live["state"] == "OPEN":
-            why = blocked(pol, it, q["verdicts"].get(str(it["pr"])), live) or "its thread did not merge it"
+            v = q["verdicts"].get(str(it["pr"]))
+            why = approved_merge(pol, it, v, live) if merge else blocked(pol, it, v, live) or "its thread did not merge it"
+            if not why:
+                live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
+        if live and live["state"] == "OPEN":
             tidy(pol, it, False)
             return wait(f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
@@ -1006,7 +1038,7 @@ def release(pol, ident=None, hook=False):
 def settle(pol, q):
     cleared = []
     for key in sorted(q["waiting"]):
-        state, why = outcome(pol, q, key)
+        state, why = outcome(pol, q, key, merge=True)
         if state == "done":
             cleared.append({"id": key, "why": why})
     return cleared
@@ -1225,6 +1257,8 @@ def queue_command(pol, argv, stdin):
             return add(pol, argv[1], stdin.read(), int(rest[1]) if rest else 0, "--preapproved" in argv)
     if argv == ["pass"]:
         return run_pass(pol)
+    if len(argv) == 2 and argv[0] == "approve":
+        return approve(pol, argv[1])
     if len(argv) == 5 and argv[0] == "verified" and argv[2].isdigit() and re.fullmatch(SHA, argv[3]) and argv[4] in ("auto", "review", "fail"):
         return verified(pol, argv[1], int(argv[2]), argv[3], argv[4])
     if len(argv) == 3 and argv[0] == "gate" and argv[1].isdigit() and re.fullmatch(SHA, argv[2]):

@@ -357,7 +357,7 @@ test("a coding thread reports to the queue but never moves it, and never marks a
 	const verdict = "ZSTACK_CONFIG=/c ZSTACK_REPO=acme/app python3 /pkg/zstack/queue.py verified app-1 40 abc auto";
 	const inThread = { ...host, thread: "t-9" };
 	for (const c of ["./queue.py pass", "/pkg/zstack/queue.py pass", verdict, "queue.py release app-2",
-		"python3 queue.py add x", "cd /tmp && /pkg/zstack/queue.py add y --preapproved", "python3 -I ../zstack/queue.py pass",
+		"python3 queue.py add x", "cd /tmp && /pkg/zstack/queue.py add y --preapproved", "python3 -I ../zstack/queue.py pass", "queue.py approve app-1",
 		"gh api -X POST repos/acme/app/statuses/abc -f state=success -f context=zstack/verified",
 		"gh api repos/acme/app/check-runs -f name=zstack/verified -f head_sha=abc"])
 		blocked(c, inApp);
