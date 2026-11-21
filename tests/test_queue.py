@@ -959,7 +959,8 @@ class Release(Case):
         self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
         got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct")}
         self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting"})
-        self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (f"PR 41 waits for the owner: the verifier has not passed head {sha}", 41))
+        said = f"PR 41 waits for the owner: the verifier has not passed head {sha}"
+        self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (said, 41))
         self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "
                          f"{self.root / 'wt-local'} keeps its uncommitted or unpushed work")
         self.assertEqual(got["switched"]["why"], "its thread died after it pushed, and no PR of its branch was found, so whether it "
