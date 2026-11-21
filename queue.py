@@ -965,6 +965,22 @@ def pushed(path):
     return bool(rc1 or rc2 or set(new.split()) - set(kept.split()))
 
 
+def commit_pr(pol, path):
+    rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
+    heads = sorted(set(out.split()))
+    rc2, new = git("-C", path, "rev-list", *heads, "--not", "refs/remotes/origin/HEAD") if heads and not rc else (rc, "")
+    if rc or rc2:
+        raise Refused(f"cannot read the commits its worktree {path} was on")
+    for c in sorted(set(heads) & set(new.split())):
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--state", "all", "--search", c, "--limit", "1", "--json", "number")
+        if rc:
+            raise Refused(f"cannot look up the PR of commit {c}: {err}")
+        found = json.loads(out) if out.strip() else []
+        if found:
+            return found[0]["number"]
+    return None
+
+
 def branch_pr(pol, it):
     path = listed(pol, it["worktree"])[1] if it["worktree"] else None
     if not path:
@@ -1110,6 +1126,11 @@ def outcome(pol, q, key, merge=False, died=False):
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
     try:
         live = its_pr(pol, q, it)
+        tree = died and not live and it["worktree"] and listed(pol, it["worktree"])[1]
+        found = commit_pr(pol, tree) if tree else None
+        if found:
+            move(it, found)
+            live = pr_view(pol, found)
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
             tidy(pol, it, False)
@@ -1126,10 +1147,6 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    try:
-        tree = died and not live and it["worktree"] and listed(pol, it["worktree"])[1]
-    except Refused as e:
-        return wait(str(e))
     if died and not live and not tree:
         why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
     elif died and not live and pushed(tree):

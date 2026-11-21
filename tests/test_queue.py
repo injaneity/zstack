@@ -46,6 +46,8 @@ class Forge:
                                   "mergeable": p.get("mergeable", "MERGEABLE"),
                                   "labels": [{"name": x} for x in p.get("labels", [])],
                                   "statusCheckRollup": [{"name": M["gate_check"], "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]}), ""
+        if a[:2] == ("pr", "list") and "--search" in a:
+            return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items()) if a[a.index("--search") + 1] in p.get("commits", ())][:1]), ""
         if a[:2] == ("pr", "list"):
             want = a[a.index("--state") + 1]
             return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items(), reverse=True) if p.get("branch") == a[a.index("--head") + 1]
@@ -159,7 +161,7 @@ class Case(unittest.TestCase):
 
     def trees(self):
         return patch.multiple(queue, listed=lambda pol, path: (None, path), tidy=lambda pol, it, whole: True,
-                              branch_pr=lambda pol, it: None, pushed=lambda path: False)
+                              branch_pr=lambda pol, it: None, pushed=lambda path: False, commit_pr=lambda pol, path: None)
 
 
 class Entry(Case):
@@ -948,8 +950,16 @@ class Release(Case):
         git("push", "-q", "origin", "switched", cwd=self.root / "wt-switched")
         git("checkout", "-q", "-b", "follow-up", "origin/HEAD", cwd=self.root / "wt-switched")
         self.forge.prs[40] = {"head": H1, "branch": "switched"}
-        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched")}
-        self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done"})
+        git("worktree", "add", "-q", "-b", "direct", str(self.root / "wt-direct"), cwd=clone)
+        self.run_("direct", worktree=str(self.root / "wt-direct"))
+        git("commit", "-q", "--allow-empty", "-m", "four", cwd=self.root / "wt-direct")
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root / "wt-direct", capture_output=True, text=True).stdout.strip()
+        git("push", "-q", str(up), "HEAD:published", cwd=self.root / "wt-direct")
+        git("checkout", "-q", "-b", "follow-up-2", "origin/HEAD", cwd=self.root / "wt-direct")
+        self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
+        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct")}
+        self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting"})
+        self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (f"PR 41 waits for the owner: the verifier has not passed head {sha}", 41))
         self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "
                          f"{self.root / 'wt-local'} keeps its uncommitted or unpushed work")
         self.assertEqual(got["switched"]["why"], "its thread died after it pushed, and no PR of its branch was found, so whether it "
