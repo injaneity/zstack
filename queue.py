@@ -1163,9 +1163,12 @@ def plugin(head, out):
     if f'"installLocation": "{PKG}"' not in (read_text(home) or "") or f'"gitCommitSha": "{head}"' in installed:
         return
     subprocess.run(["claude", "plugin", "marketplace", "update", "zstack"], capture_output=True)
-    ok = subprocess.run(["claude", "plugin", "update", "zstack@zstack"], capture_output=True).returncode == 0
-    print("zstack: plugin updated; new threads load it" if ok else
-          "zstack: the plugin did not update, so threads still run the old hooks: run claude plugin update zstack@zstack", file=out)
+    if subprocess.run(["claude", "plugin", "update", "zstack@zstack"], capture_output=True).returncode:
+        print("zstack: the plugin did not update, so threads still run the old hooks: run claude plugin update zstack@zstack", file=out)
+    elif (read_text(known) or "") != installed:
+        print("zstack: plugin updated; new threads load it", file=out)
+    else:
+        print("zstack: plugin unchanged; claude plugin update found nothing to update", file=out)
 
 
 def update(out=sys.stdout):
