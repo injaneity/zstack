@@ -582,16 +582,19 @@ class Approve(Case):
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
 
-    def test_a_newer_head_queued_and_dropped_between_passes_is_the_head_reported_and_never_queued_again(self):
+    def test_a_drop_after_an_entry_the_pass_did_not_add_blames_only_the_recorded_head_and_a_new_head_is_still_queued(self):
         self.waiting()
         queue.approve(self.pol, "a")
         self.forge.prs[40]["queue"] = True
         queue.step(self.pol)
-        self.forge.prs[40].update(head=H2, adds=2, inq=False, removed=["the merge group failed ci-gate"])
+        self.forge.prs[40].update(head=H2, adds=3, inq=False, removed=["the merge group failed ci-gate"] * 2)
         queue.verified(self.pol, "a", 40, H2, "review")
-        why = f"PR 40 waits for the owner: GitHub took head {H2} out of the merge queue: the merge group failed ci-gate"
-        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
-        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
+        self.wakes.clear()
+        why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: the merge group failed ci-gate; the queue also "
+               "took an entry the pass did not add, whose head it cannot tell")
+        self.assertEqual((queue.step(self.pol)["kept"], self.wakes), ([{"id": "a", "why": why}], [("blocked", f"a: {why}", 40)]))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}],
+                                                                         ["40", "40"]))
 
     def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
         self.waiting(said="auto")

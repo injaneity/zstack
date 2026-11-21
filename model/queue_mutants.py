@@ -84,6 +84,18 @@ M = [
         LIVE,
     ),
     (
+        "requeue-a-dropped-head",
+        "the pass queues again a head GitHub dropped from the merge queue",
+        [("/\\ i \\notin inq /\\ i \\notin dropped\n", "/\\ i \\notin inq\n")],
+        "NoDroppedHeadIsQueued",
+    ),
+    (
+        "a-new-head-is-blamed-for-a-drop",
+        "a drop stays charged to the PR after a push, so a new head that never entered the merge queue is never queued",
+        [("/\\ gone' = gone \\ {i} /\\ dropped' = dropped \\ {i}", "/\\ gone' = gone \\ {i} /\\ UNCHANGED dropped")],
+        "OnlyADroppedHeadIsBlocked",
+    ),
+    (
         "pass-survives-a-push",
         "a pass stays on the PR after a new push",
         [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],

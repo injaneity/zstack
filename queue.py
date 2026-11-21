@@ -1065,9 +1065,10 @@ def in_queue(pol, key, it, live):
     if not it.get("queued"):
         it["seen"] = seen
         return None
-    head = got["headRefOid"] if seen[0] > it["seen"][0] else it["queued"]
-    why = f"GitHub took head {head} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}"
-    it["dropped"], it["queued"] = {"head": head, "why": why}, None
+    why = f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}"
+    if seen[0] > it["seen"][0]:
+        why += "; the queue also took an entry the pass did not add, whose head it cannot tell"
+    it["dropped"], it["queued"] = {"head": it["queued"], "why": why}, None
     said = f"PR {pr} waits for the owner: {why}"
     wake(pol, "blocked", f"{key}: {said}", pr, it["thread"])
     return said
