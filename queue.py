@@ -965,16 +965,21 @@ def pushed(path):
     return bool(rc1 or rc2 or set(new.split()) - set(kept.split()))
 
 
+SEARCH_SHAS = 5
+
+
 def commit_pr(pol, path):
     rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
     heads = sorted(set(out.split()))
     rc2, new = git("-C", path, "rev-list", *heads, "--not", "refs/remotes/origin/HEAD") if heads and not rc else (rc, "")
     if rc or rc2:
         raise Refused(f"cannot read the commits its worktree {path} was on")
-    for c in sorted(set(heads) & set(new.split())):
-        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--state", "all", "--search", c, "--limit", "1", "--json", "number")
+    new = sorted(set(new.split()))
+    for i in range(0, len(new), SEARCH_SHAS):
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--state", "all", "--search", " OR ".join(new[i:i + SEARCH_SHAS]),
+                          "--limit", "1", "--json", "number")
         if rc:
-            raise Refused(f"cannot look up the PR of commit {c}: {err}")
+            raise Refused(f"cannot look up the PR of commit {new[i]}: {err}")
         found = json.loads(out) if out.strip() else []
         if found:
             return found[0]["number"]

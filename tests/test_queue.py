@@ -47,7 +47,8 @@ class Forge:
                                   "labels": [{"name": x} for x in p.get("labels", [])],
                                   "statusCheckRollup": [{"name": M["gate_check"], "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]}), ""
         if a[:2] == ("pr", "list") and "--search" in a:
-            return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items()) if a[a.index("--search") + 1] in p.get("commits", ())][:1]), ""
+            shas = a[a.index("--search") + 1].split(" OR ")
+            return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items()) if set(shas) & set(p.get("commits", ()))][:1]), ""
         if a[:2] == ("pr", "list"):
             want = a[a.index("--state") + 1]
             return 0, json.dumps([{"number": n} for n, p in sorted(self.prs.items(), reverse=True) if p.get("branch") == a[a.index("--head") + 1]
@@ -952,9 +953,13 @@ class Release(Case):
         self.forge.prs[40] = {"head": H1, "branch": "switched"}
         git("worktree", "add", "-q", "-b", "direct", str(self.root / "wt-direct"), cwd=clone)
         self.run_("direct", worktree=str(self.root / "wt-direct"))
-        git("commit", "-q", "--allow-empty", "-m", "four", cwd=self.root / "wt-direct")
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root / "wt-direct", capture_output=True, text=True).stdout.strip()
-        git("push", "-q", str(up), "HEAD:published", cwd=self.root / "wt-direct")
+        git("checkout", "-q", "-b", "stack", cwd=clone)
+        for n in range(7):
+            git("commit", "-q", "--allow-empty", "-m", f"stack {n}", cwd=clone)
+        sha = subprocess.run(["git", "rev-parse", "stack~3"], cwd=clone, capture_output=True, text=True).stdout.strip()
+        git("checkout", "-q", "-", cwd=clone)
+        git("merge", "-q", "--ff-only", "stack", cwd=self.root / "wt-direct")
+        git("push", "-q", str(up), f"{sha}:refs/heads/published", cwd=self.root / "wt-direct")
         git("checkout", "-q", "-b", "follow-up-2", "origin/HEAD", cwd=self.root / "wt-direct")
         self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
         got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct")}
