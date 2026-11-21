@@ -957,8 +957,9 @@ def tidy(pol, it, whole):
 
 
 def reached(path, start):
-    rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
-    heads = sorted(set(out.split()) | {git("-C", path, "rev-parse", "HEAD")[1].strip()})
+    rc, log = git("-C", path, "rev-parse", "--git-path", "logs/HEAD")
+    lines = (read_text(os.path.join(path, log.strip())) or "").splitlines()
+    heads = sorted({x for line in lines for x in line.split()[:2] if x.strip("0")} | {git("-C", path, "rev-parse", "HEAD")[1].strip()})
     if rc or not all(heads):
         raise Refused(f"cannot read the commits its worktree {path} was on")
     rc1, new = git("-C", path, "rev-list", *heads, "--not", start)
