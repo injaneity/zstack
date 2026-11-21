@@ -67,7 +67,8 @@ class Forge:
             more = {"hasNextPage": page + 1 < len(pages), "endCursor": str(page + 1) if page + 1 < len(pages) else None}
             pr = {"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
                   "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]},
-                  "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": more, "nodes": checks}}}}]}}
+                  "commits": {"nodes": [{"commit": {"statusCheckRollup": None if page and page == p.get("gone") else
+                                                    {"contexts": {"pageInfo": more, "nodes": checks}}}}]}}
             issue = re.search(r"issue\(number: (\d+)\)", next(x for x in a if x.startswith("query=")))
             found = issue and self.issues.get(int(issue.group(1)))
             said = {"pullRequest": pr}
@@ -522,6 +523,9 @@ class Approve(Case):
                  ("paged-unread", {}, {"pages": [[GATE, *green(99)], green(30)], "down": 1},
                   "it could not be read again just before the merge: graphql down"),
                  ("paged-null", {}, {"pages": [[GATE, *green(99)], [*green(10), None]]},
+                  "it could not be read again just before the merge: not the answer asked for"),
+                 ("paged-gone", {}, {"pages": [[GATE, *green(99)], [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None,
+                                                                    "completedAt": None}]], "gone": 1},
                   "it could not be read again just before the merge: not the answer asked for"),
                  ("paged-moved", {}, {"pages": [[GATE, *green(99)], green(30)], "later": {"head": H2}}, f"the verifier has not passed head {H2}"),
                  ("paged-held", {}, {"pages": [[GATE, *green(99)], green(30)], "later": {"labels": [hold]}}, f"it is labelled {hold}"),
