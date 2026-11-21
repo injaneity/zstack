@@ -1159,7 +1159,9 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                  (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
 PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
 CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|"
-                        r"extern|require|include|static|type|struct|enum|impl|async|await)\b")
+                        r"export|extern|require|include|static|type|struct|enum|impl|async|await)\b")
+ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
+                    "then than which who we you they our has have does do can will should must".split())
 LONG_LINE = 1000
 
 
@@ -1209,10 +1211,15 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
-            if prose and prose.match(text) and not CODE_SHAPE.search(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
+            if prose and prose.match(text) and self.english(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
                 continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
+
+    @staticmethod
+    def english(text):
+        words = re.findall(r"[a-z']+", text.lower())
+        return not CODE_SHAPE.search(text) and len(words) >= 4 and not ENGLISH.isdisjoint(words)
 
     @staticmethod
     def plain(text, m):

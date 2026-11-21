@@ -70,8 +70,9 @@ class PatentPush(unittest.TestCase):
         seam = "                // pairing still sends this explicitly on graceful"
         moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
         self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
-        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- teleported, teleporting rows: none"),
-                           ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.go", "// the pairing's order")):
+        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- teleported rows are not teleporting"),
+                           ("a.c", "/* the keyvaults (two) are sealed */"),
+                           ("a.ts", "// own 429s (pairing) say why in the body"), ("a.go", "// the pairing's order is kept")):
             with self.subTest(line=line):
                 self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
         for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
@@ -82,7 +83,7 @@ class PatentPush(unittest.TestCase):
                            ("a.rs", "// use pairing as transport"), ("a.py", "# from pairing import x"),
                            ("a.rs", "// start(pairing)"),
                            ("a.rs", "// foo(a, pairing)"), ("a.rs", "// x = pairing"), ("a.rs", "// return pairing"),
-                           ("a.rs", "// Start pairingbroker first"),
+                           ("a.rs", "// Start pairingbroker first"), ("a.ts", "// export default pairing"), ("a.rs", "// pairing x y z"),
                            ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
                            ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
                            ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
