@@ -165,7 +165,7 @@ M = [
     (
         "clear-a-dead-thread-with-no-pr",
         "an item whose thread died before it opened a PR is cleared as done, so it never runs again",
-        [('     ELSE Set(m, i, "none") /\\ thread\'', '     ELSE Set(m, i, "done") /\\ thread\'')],
+        [('      ELSE Set(m, i, "none") /\\ thread\'', '      ELSE Set(m, i, "done") /\\ thread\'')],
         "ADeadThreadWithNoPRIsRunAgain",
     ),
     (
