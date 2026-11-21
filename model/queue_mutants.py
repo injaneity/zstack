@@ -5,6 +5,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 LIVE = "a temporal property"
+NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -54,6 +55,7 @@ M = [
         "an approved waiting PR whose head may merge stays waiting for the owner for good, as before `queue.py approve`",
         [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ FALSE /\\ Merge")],
         LIVE,
+        NO_QUEUE,
     ),
     (
         "one-unreadable-pr-stops-the-pass",
@@ -66,6 +68,19 @@ M = [
         "a-paged-pr-is-never-read-whole",
         "an approved waiting PR whose checks run past one page of the last read waits for the owner for good",
         [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ i \\notin Paged /\\ Merge")],
+        LIVE,
+        NO_QUEUE,
+    ),
+    (
+        "a-merge-queue-base-is-stuck",
+        "an approved waiting PR whose base branch has a merge queue waits for the owner for good, since the pass only merges directly",
+        [("MergeOrQueue(i) == IF i \\in Queues THEN Enqueue(i) ELSE", "MergeOrQueue(i) == IF i \\in Queues THEN FALSE ELSE")],
+        LIVE,
+    ),
+    (
+        "a-hold-while-queued-is-ignored",
+        "a hold added to a PR the pass put in the merge queue leaves it queued, so GitHub still merges it",
+        [("Dequeue(m, i) == q[m][i] = \"waiting\" /\\ i \\in inq", "Dequeue(m, i) == q[m][i] = \"waiting\" /\\ FALSE /\\ i \\in inq")],
         LIVE,
     ),
     (

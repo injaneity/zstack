@@ -56,6 +56,26 @@ class Forge:
                 return 1, "", p.get("refuse") or "head moved"
             p["state"] = "MERGED"
             return 0, "", ""
+        if a[:2] == ("api", "graphql") and any(x.startswith("id=") for x in a):
+            n = int(next(x for x in a if x.startswith("id="))[6:])
+            p, q = self.prs[n], next(x for x in a if x.startswith("query="))
+            if p.get("refuse"):
+                return 1, "", p["refuse"]
+            if "enqueuePullRequest" in q:
+                if not p.get("queue") or next(x for x in a if x.startswith("h="))[2:] != p["head"]:
+                    return 1, "", "not queueable at that head"
+                p["inq"] = True
+            else:
+                p["inq"] = False
+            return 0, "{}", ""
+        if a[:2] == ("api", "graphql") and any("isInMergeQueue" in x and x.startswith("query=") for x in a):
+            n = int(next(x for x in a if x.startswith("p="))[2:])
+            p = self.prs[n]
+            if p.get("inq") == "down":
+                return 1, "", "graphql down"
+            gone = [{"reason": p["removed"]}] if p.get("removed") else []
+            return 0, json.dumps({"id": f"PR_{n}", "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isInMergeQueue": bool(p.get("inq")),
+                                  "timelineItems": {"nodes": gone}}), ""
         if a[:2] == ("api", "graphql"):
             p = self.prs[int(next(x for x in a if x.startswith("p="))[2:])]
             page = int(next((x[2:] for x in a if x.startswith("c=")), 0))
@@ -65,7 +85,8 @@ class Forge:
             pages = p.get("pages") or [[{"name": M["gate_check"], "status": "COMPLETED", "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]]
             checks = pages[page] + ([None] if p.get("nulls") else [])
             more = {"hasNextPage": page + 1 < len(pages), "endCursor": str(page + 1) if page + 1 < len(pages) else None}
-            pr = {"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
+            n = int(next(x for x in a if x.startswith("p="))[2:])
+            pr = {"id": f"PR_{n}", "headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
                   "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]},
                   "commits": {"nodes": [{"commit": {"statusCheckRollup": None if page and page == p.get("gone") else
                                                     {"contexts": {"pageInfo": more, "nodes": checks}}}}]}}
@@ -450,6 +471,10 @@ class Approve(Case):
     def merges(self):
         return [a[2] for a in self.forge.calls if a[:2] == ("pr", "merge")]
 
+    def queued(self, mutation="enqueuePullRequest"):
+        return [next(x[6:] for x in a if x.startswith("id=")) for a in self.forge.calls
+                if a[:2] == ("api", "graphql") and any(x.startswith("query=") and mutation in x for x in a)]
+
     def test_approve_preapproves_a_task_a_running_or_a_waiting_item_and_nothing_else(self):
         self.run_("r", thread="t-r")
         self.waiting("w", pr=41)
@@ -481,7 +506,80 @@ class Approve(Case):
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
         self.assertEqual([a for a in self.forge.calls if a[:2] == ("pr", "merge")],
                          [("pr", "merge", "40", "-R", REPO, "--squash", "--match-head-commit", H1)])
-        self.assertEqual((self.file()["waiting"], self.file()["verdicts"]), ({}, {}))
+        self.assertEqual((self.file()["waiting"], self.file()["verdicts"], self.queued()), ({}, {}, []))
+
+    def test_on_a_merge_queue_base_a_pass_queues_the_passed_head_keeps_it_in_flight_and_clears_it_once_merged(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        self.wakes.clear()
+        flight = [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}]
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), self.merges()), (flight, ["40"], []))
+        enq = next(a for a in self.forge.calls if any("enqueuePullRequest" in x for x in a))
+        self.assertEqual([x for x in enq if x.startswith(("id=", "h="))], ["id=PR_40", f"h={H1}"])
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), self.file()["waiting"]["a"]["queued"]), (flight, ["40"], H1))
+        self.assertEqual(queue.release(self.pol, "a")["why"], f"PR 40 is in the merge queue at head {H1}")
+        self.forge.prs[40].update(state="MERGED", inq=False)
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
+        self.assertEqual((self.file()["waiting"], self.wakes, self.merges()), ({}, [], []))
+
+    def test_a_hold_on_a_queued_pr_or_its_issue_takes_it_out_of_the_queue_and_a_lifted_hold_queues_it_again(self):
+        hold = M["hold_label"]
+        self.cands = [cand(1)]
+        self.start("app-1", "t-1", "/nowhere/1")
+        self.forge.issues[1] = []
+        self.pr_open(41)
+        queue.verified(self.pol, "app-1", 41, H1, "review")
+        queue.release(self.pol, "app-1")
+        self.waiting("a")
+        for ident in ("a", "app-1"):
+            queue.approve(self.pol, ident)
+        self.forge.prs[40]["queue"] = self.forge.prs[41]["queue"] = True
+        self.wakes.clear()
+        queue.step(self.pol)
+        self.assertEqual(self.queued(), ["40", "41"])
+        self.forge.prs[40]["labels"], self.forge.issues[1] = [hold], [hold]
+        self.assertEqual(queue.step(self.pol)["kept"],
+                         [{"id": "a", "why": f"PR 40 waits for the owner: it is labelled {hold}, so the pass took it out of the merge queue"},
+                          {"id": "app-1", "why": f"PR 41 waits for the owner: it is labelled {hold}, so the pass took it out of the merge queue"}])
+        self.assertEqual((self.queued("dequeuePullRequest"), self.forge.prs[40]["inq"], self.forge.prs[41]["inq"]), (["40", "41"], False, False))
+        self.assertEqual(queue.step(self.pol)["kept"][0], {"id": "a", "why": f"PR 40 waits for the owner: it is labelled {hold}"})
+        self.assertEqual((self.queued(), self.merges(), self.wakes), (["40", "41"], [], []))
+        self.forge.prs[40]["labels"], self.forge.issues[1] = [], []
+        queue.step(self.pol)
+        self.assertEqual(self.queued(), ["40", "41", "40", "41"])
+
+    def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
+        self.waiting(said="auto")
+        self.forge.prs[40].update(queue=True, inq=True)
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}])
+        self.forge.prs[40]["labels"] = [M["hold_label"]]
+        queue.step(self.pol)
+        self.assertEqual((self.queued("dequeuePullRequest"), self.queued(), self.merges()), (["40"], [], []))
+
+    def test_a_queue_entry_github_drops_is_reported_blocked_once_and_not_queued_again_until_a_new_head_passes(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        self.wakes.clear()
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed="the merge group failed ci-gate")
+        why = f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: the merge group failed ci-gate"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
+        self.assertEqual(self.wakes, [("blocked", f"a: {why}", 40)])
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), len(self.wakes)), ([{"id": "a", "why": why}], ["40"], 1))
+        self.forge.prs[40]["head"] = H2
+        queue.verified(self.pol, "a", 40, H2, "review")
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
+        self.assertEqual(self.queued(), ["40", "40"])
+
+    def test_a_queue_read_that_fails_keeps_the_pr_waiting_and_neither_merges_nor_queues_it(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40].update(queue=True, inq="down")
+        self.assertEqual(queue.step(self.pol)["kept"],
+                         [{"id": "a", "why": "PR 40: whether it is in the merge queue could not be read: graphql down"}])
+        self.assertEqual((self.queued(), self.merges(), list(self.file()["waiting"])), ([], [], ["a"]))
 
     def test_a_pass_merges_an_approved_pr_whose_green_checks_run_over_several_pages_and_reads_every_page(self):
         self.waiting()
@@ -489,11 +587,17 @@ class Approve(Case):
         self.forge.prs[40]["pages"] = [[*green(99), GATE], green(100), [*green(20), {"name": "docs", "status": "COMPLETED", "conclusion": "SKIPPED",
                                                                                     "completedAt": "t"}]]
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
-        self.assertEqual([next((x for x in a if x.startswith("c=")), None) for a in self.forge.calls if a[:2] == ("api", "graphql")],
-                         [None, "c=1", "c=2"])
+        self.assertEqual([next((x for x in a if x.startswith("c=")), None) for a in self.forge.calls if a[:2] == ("api", "graphql")
+                          and f"query={queue.FRESH} }} }}" in a], [None, "c=1", "c=2"])
         self.assertEqual(self.merges(), ["40"])
 
     def test_a_pass_never_merges_an_approved_pr_that_is_unverified_moved_held_red_running_labelled_or_conflicting(self):
+        self.never({}, "the pass could not merge it")
+
+    def test_a_pass_never_queues_an_approved_pr_on_a_merge_queue_base_that_fails_any_gate(self):
+        self.never({"queue": True}, "the pass could not put it in the merge queue")
+
+    def never(self, base, refused):
         hold = M["hold_label"]
         cases = (("unverified", {"said": "fail"}, {}, f"the verifier has not passed head {H1}"),
                  ("moved", {}, {"head": H2}, f"the verifier has not passed head {H2}"),
@@ -504,8 +608,6 @@ class Approve(Case):
                  ("labelled", {"labels": [M["review_label"]]}, {}, "it needs a person's review"),
                  ("conflicting", {}, {"mergeable": "CONFLICTING"}, "GitHub says it is conflicting, not mergeable"),
                  ("draft", {}, {"draft": True}, "the PR is a draft"),
-                 ("queued", {}, {"queue": True},
-                  "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
                  ("unread", {}, {"queue": "down"}, "it could not be read again just before the merge: graphql down"),
                  ("held-late", {}, {"then": {"labels": [hold]}}, f"it is labelled {hold}"),
                  ("labelled-late", {}, {"then": {"labels": [M["review_label"]]}}, "it needs a person's review"),
@@ -532,14 +634,11 @@ class Approve(Case):
                  ("paged-endless", {}, {"pages": [[GATE]] + [green(100)] * queue.FRESH_PAGES},
                   f"it could not be read again just before the merge: its checks run past {queue.FRESH_PAGES} pages"),
                  ("null-check", {}, {"then": {"nulls": True}}, "it could not be read again just before the merge: not the answer asked for"),
-                 ("queued-late", {}, {"then": {"queue": True}},
-                  "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
-                 ("refused", {}, {"refuse": "base branch policy prohibits the merge"},
-                  "the pass could not merge it: base branch policy prohibits the merge"))
+                 ("refused", {}, {"refuse": "base branch policy prohibits the merge"}, f"{refused}: base branch policy prohibits the merge"))
         for n, (ident, made, then, _) in enumerate(cases):
             self.waiting(ident, pr=50 + n, **made)
             queue.approve(self.pol, ident)
-            self.forge.prs[50 + n].update(then)
+            self.forge.prs[50 + n].update({**base, **then})
         got = queue.step(self.pol)
         self.assertEqual(got["cleared"], [])
         kept = sorted((c[0], f"PR {50 + n} waits for the owner: {c[3]}") for n, c in enumerate(cases))
@@ -547,7 +646,8 @@ class Approve(Case):
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), [str(50 + len(cases) - 1)] * 2)
+        tried, never = (self.queued(), self.merges()) if base else (self.merges(), self.queued())
+        self.assertEqual((tried, never), ([str(50 + len(cases) - 1)] * 2, []))
 
     def test_a_hold_on_the_issue_seen_only_by_the_last_read_stops_the_merge(self):
         hold = M["hold_label"]
