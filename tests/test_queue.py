@@ -615,6 +615,20 @@ class Approve(Case):
             self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
         self.assertEqual(self.queued(), ["40", "41"])
 
+    def test_a_replacement_pr_verified_before_any_pass_sees_it_starts_with_no_queue_record(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
+        queue.step(self.pol)
+        self.forge.prs[40]["state"] = "CLOSED"
+        self.forge.prs[41] = {"head": H1, "labels": [], "queue": True}
+        queue.verified(self.pol, "a", 41, H1, "review")
+        self.assertNotIn("dropped", self.file()["waiting"]["a"])
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
+        self.assertEqual(self.queued(), ["40", "41"])
+
     def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
         self.waiting(said="auto")
         self.forge.prs[40].update(queue=True, inq=True)

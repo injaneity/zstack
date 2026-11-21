@@ -871,6 +871,13 @@ def blocked(pol, it, v, live):
     return stopped(pol, it, v, live) or unready(pol, live)
 
 
+def move(it, pr):
+    if it["pr"] != pr:
+        for k in ("queued", "seen", "dropped"):
+            it.pop(k, None)
+    it["pr"] = pr
+
+
 def owner_of(q, pr):
     return next((v for part in ("running", "waiting") for v in q[part].values() if v["pr"] == pr), None)
 
@@ -885,7 +892,7 @@ def verified(pol, ident, pr, head, result):
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
-        it["pr"] = pr
+        move(it, pr)
         q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
         q["verdicts"][str(pr)] = {"head": head, "result": result}
         out = {"id": ident, "pr": pr, "recorded": result}
@@ -966,9 +973,8 @@ def its_pr(pol, q, it):
     other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
     if other and other != it["pr"]:
         q["verdicts"].pop(str(it["pr"]), None)
-        for k in ("queued", "seen", "dropped"):
-            it.pop(k, None)
-        it["pr"], live = other, pr_view(pol, other)
+        move(it, other)
+        live = pr_view(pol, other)
     return live
 
 
