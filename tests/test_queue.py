@@ -64,7 +64,7 @@ class Forge:
             if "enqueuePullRequest" in q:
                 if not p.get("queue") or next(x for x in a if x.startswith("h="))[2:] != p["head"]:
                     return 1, "", "not queueable at that head"
-                p["inq"] = True
+                p["inq"], p["adds"] = True, p.get("adds", 0) + 1
             else:
                 p["inq"] = False
             return 0, "{}", ""
@@ -73,9 +73,10 @@ class Forge:
             p = self.prs[n]
             if p.get("inq") == "down":
                 return 1, "", "graphql down"
-            gone = [{"reason": p["removed"], "createdAt": p.get("removed_at", "9999-01-01T00:00:00Z")}] if p.get("removed") else []
+            gone = p.get("removed", [])
             return 0, json.dumps({"id": f"PR_{n}", "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isInMergeQueue": bool(p.get("inq")),
-                                  "timelineItems": {"nodes": gone}}), ""
+                                  "added": {"filteredCount": p.get("adds", 0)},
+                                  "removed": {"filteredCount": len(gone), "nodes": [{"reason": x} for x in gone[-1:]]}}), ""
         if a[:2] == ("api", "graphql"):
             p = self.prs[int(next(x for x in a if x.startswith("p="))[2:])]
             page = int(next((x[2:] for x in a if x.startswith("c=")), 0))
@@ -571,13 +572,24 @@ class Approve(Case):
     def test_a_newer_head_queued_from_outside_is_the_one_tracked_and_a_stale_removal_gives_no_reason(self):
         self.waiting()
         queue.approve(self.pol, "a")
-        self.forge.prs[40].update(queue=True, removed="an earlier entry left", removed_at="2000-01-01T00:00:00Z")
+        self.forge.prs[40].update(queue=True, removed=["an earlier entry left"])
         queue.step(self.pol)
-        self.forge.prs[40]["head"] = H2
+        self.forge.prs[40].update(head=H2, adds=2)
         queue.verified(self.pol, "a", 40, H2, "review")
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
         self.forge.prs[40]["inq"] = False
         why = f"PR 40 waits for the owner: GitHub took head {H2} out of the merge queue: it gave no reason"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
+
+    def test_a_newer_head_queued_and_dropped_between_passes_is_the_head_reported_and_never_queued_again(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(head=H2, adds=2, inq=False, removed=["the merge group failed ci-gate"])
+        queue.verified(self.pol, "a", 40, H2, "review")
+        why = f"PR 40 waits for the owner: GitHub took head {H2} out of the merge queue: the merge group failed ci-gate"
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
 
@@ -595,7 +607,7 @@ class Approve(Case):
         self.forge.prs[40]["queue"] = True
         self.wakes.clear()
         queue.step(self.pol)
-        self.forge.prs[40].update(inq=False, removed="the merge group failed ci-gate")
+        self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
         why = f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: the merge group failed ci-gate"
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
         self.assertEqual(self.wakes, [("blocked", f"a: {why}", 40)])

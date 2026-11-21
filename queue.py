@@ -976,8 +976,9 @@ FRESH = ("query($o: String!, $n: String!, $p: Int!, $c: String) { repository(own
          "... on StatusContext { context state } } } } } } } }")
 FRESH_PAGES = 20
 QUEUED = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { id state headRefOid "
-          "isInMergeQueue timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { ... on RemovedFromMergeQueueEvent { "
-          "reason createdAt } } } } } }")
+          "isInMergeQueue added: timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT]) { filteredCount } "
+          "removed: timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { filteredCount nodes { "
+          "... on RemovedFromMergeQueueEvent { reason } } } } } }")
 ENQUEUE = ("mutation($id: ID!, $h: GitObjectID!) { enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $h}) { "
            "clientMutationId } }")
 DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
@@ -1027,7 +1028,7 @@ def approved_merge(pol, it, v, live):
         rc, _, err = gh("api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={pr['id']}", "-f", f"h={v['head']}")
         if rc:
             return f"the pass could not put it in the merge queue: {err}"
-        it["queued"], it["queued_at"] = v["head"], now()
+        it["queued"], it["seen"][0] = v["head"], it["seen"][0] + 1
         return None
     rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
     return f"the pass could not merge it: {err}" if rc else None
@@ -1039,14 +1040,15 @@ def in_queue(pol, key, it, live):
                       "--jq", ".data.repository.pullRequest")
     try:
         got = json.loads(out) if not rc else None
-        on, state, last = got["isInMergeQueue"], got["state"], (got["timelineItems"]["nodes"] or [{}])[-1]
+        on, state, seen = got["isInMergeQueue"], got["state"], [got["added"]["filteredCount"], got["removed"]["filteredCount"]]
+        reason = (got["removed"]["nodes"] or [{}])[-1].get("reason")
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         raise Refused(f"PR {pr}: whether it is in the merge queue could not be read: {err or 'not the answer asked for'}") from None
     if state != "OPEN":
         return f"PR {pr} is {state.lower()}, and the next pass finishes it"
     if on:
         if it.get("queued") != got["headRefOid"]:
-            it["queued"], it["queued_at"] = got["headRefOid"], now()
+            it["queued"], it["seen"] = got["headRefOid"], seen
         try:
             labels, m = labels_of(pol, it, live), pol["merge"]
             why = (f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
@@ -1058,13 +1060,14 @@ def in_queue(pol, key, it, live):
         rc, _, err = gh("api", "graphql", "-f", f"query={DEQUEUE}", "-f", f"id={got['id']}")
         if rc:
             return f"PR {pr} stays in the merge queue though {why}: the pass could not take it out: {err}"
-        it["queued"] = it["queued_at"] = None
+        it["queued"] = None
         return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
     if not it.get("queued"):
+        it["seen"] = seen
         return None
-    reason = last.get("reason") if (last.get("createdAt") or "") >= (it.get("queued_at") or "") else None
-    why = f"GitHub took head {it['queued']} out of the merge queue: {reason or 'it gave no reason'}"
-    it["dropped"], it["queued"], it["queued_at"] = {"head": it["queued"], "why": why}, None, None
+    head = got["headRefOid"] if seen[0] > it["seen"][0] else it["queued"]
+    why = f"GitHub took head {head} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}"
+    it["dropped"], it["queued"] = {"head": head, "why": why}, None
     said = f"PR {pr} waits for the owner: {why}"
     wake(pol, "blocked", f"{key}: {said}", pr, it["thread"])
     return said
