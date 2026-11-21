@@ -956,18 +956,19 @@ def tidy(pol, it, whole):
 
 
 def log_push(pol, url, ref, head, cwd=None):
-    top = git("rev-parse", "--show-toplevel", cwd=cwd)[1].strip() or cwd or os.getcwd()
+    top = git("rev-parse", "--show-toplevel", cwd=cwd)[1].rstrip("\n") or cwd or os.getcwd()
     os.makedirs(root(pol), exist_ok=True)
     with open(os.path.join(root(pol), "pushes.jsonl"), "a") as f:
         f.write(json.dumps({"worktree": os.path.realpath(top), "url": url, "ref": ref, "head": head, "at": now(ms=True)}) + "\n")
 
 
 def pushed_refs(pol, it):
-    path = os.path.realpath(os.path.expanduser(it["worktree"]))
+    path, log = os.path.realpath(os.path.expanduser(it["worktree"])), os.path.join(root(pol), "pushes.jsonl")
+    text = read_text(log) if os.path.lexists(log) else ""
     try:
-        rows = [json.loads(x) for x in (read_text(os.path.join(root(pol), "pushes.jsonl")) or "").splitlines()]
+        rows = [json.loads(x) for x in text.splitlines()]
         return sorted({r["ref"] for r in rows if r["worktree"] == path and r["at"] >= it["at"]})
-    except (ValueError, KeyError, TypeError):
+    except (AttributeError, ValueError, KeyError, TypeError):
         return None
 
 

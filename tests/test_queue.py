@@ -950,6 +950,16 @@ class Release(Case):
             "lost": ("done", "its thread died after it pushed refs/heads/lost, and no PR of it was found, so whether it opened one cannot be told"),
             "old": unknown, "unhooked": unknown})
         self.assertEqual((self.file()["waiting"]["pushed"]["pr"], sorted(self.file()["tasks"])), (40, ["early", "idle"]))
+        (self.root / "wt-spaced ").mkdir()
+        (self.root / "wt-unread").mkdir()
+        self.run_("unread", worktree=str(self.root / "wt-unread"), priority=5)
+        self.assertEqual(queue.pushed_refs(self.pol, {"worktree": str(self.root / "wt-spaced "), "at": ""}), [])
+        queue.log_push(self.pol, "origin", "refs/heads/spaced", H1, cwd=str(self.root / "wt-spaced "))
+        self.assertEqual(queue.pushed_refs(self.pol, {"worktree": str(self.root / "wt-spaced "), "at": ""}), ["refs/heads/spaced"])
+        (self.root / "pushes.jsonl").chmod(0)
+        self.addCleanup((self.root / "pushes.jsonl").chmod, 0o644)
+        with self.trees():
+            self.assertEqual(queue.release(self.pol, "unread", died=True)["why"], unknown[1])
 
     def test_the_hook_is_known_only_when_the_clone_links_this_package_s_pre_push(self):
         clone = self.root / "clone"
