@@ -79,7 +79,7 @@ M = [
     ),
     (
         "a-hold-while-queued-is-ignored",
-        "a hold added to a PR the pass put in the merge queue leaves it queued, so GitHub still merges it",
+        "a hold or review label added to a PR the pass put in the merge queue leaves it queued, so GitHub still merges it",
         [("Dequeue(m, i) == q[m][i] = \"waiting\" /\\ i \\in inq", "Dequeue(m, i) == q[m][i] = \"waiting\" /\\ FALSE /\\ i \\in inq")],
         LIVE,
     ),

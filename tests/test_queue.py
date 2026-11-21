@@ -73,7 +73,7 @@ class Forge:
             p = self.prs[n]
             if p.get("inq") == "down":
                 return 1, "", "graphql down"
-            gone = [{"reason": p["removed"]}] if p.get("removed") else []
+            gone = [{"reason": p["removed"], "createdAt": p.get("removed_at", "9999-01-01T00:00:00Z")}] if p.get("removed") else []
             return 0, json.dumps({"id": f"PR_{n}", "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isInMergeQueue": bool(p.get("inq")),
                                   "timelineItems": {"nodes": gone}}), ""
         if a[:2] == ("api", "graphql"):
@@ -548,6 +548,38 @@ class Approve(Case):
         self.forge.prs[40]["labels"], self.forge.issues[1] = [], []
         queue.step(self.pol)
         self.assertEqual(self.queued(), ["40", "41", "40", "41"])
+
+    def test_a_review_label_on_a_queued_pr_or_its_issue_takes_it_out_of_the_queue(self):
+        review = M["review_label"]
+        self.cands = [cand(1)]
+        self.start("app-1", "t-1", "/nowhere/1")
+        self.forge.issues[1] = []
+        self.pr_open(41)
+        queue.verified(self.pol, "app-1", 41, H1, "auto")
+        queue.release(self.pol, "app-1")
+        self.waiting("a")
+        for ident in ("a", "app-1"):
+            queue.approve(self.pol, ident)
+        self.forge.prs[40]["queue"] = self.forge.prs[41]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40]["labels"], self.forge.issues[1] = [review], [review]
+        out = "it needs a person's review, so the pass took it out of the merge queue"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 waits for the owner: {out}"},
+                                                        {"id": "app-1", "why": f"PR 41 waits for the owner: {out}"}])
+        self.assertEqual((self.queued("dequeuePullRequest"), self.merges()), (["40", "41"], []))
+
+    def test_a_newer_head_queued_from_outside_is_the_one_tracked_and_a_stale_removal_gives_no_reason(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40].update(queue=True, removed="an earlier entry left", removed_at="2000-01-01T00:00:00Z")
+        queue.step(self.pol)
+        self.forge.prs[40]["head"] = H2
+        queue.verified(self.pol, "a", 40, H2, "review")
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
+        self.forge.prs[40]["inq"] = False
+        why = f"PR 40 waits for the owner: GitHub took head {H2} out of the merge queue: it gave no reason"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
 
     def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
         self.waiting(said="auto")
