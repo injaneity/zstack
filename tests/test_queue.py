@@ -935,8 +935,11 @@ class Release(Case):
             self.run_(x, worktree=str(self.root / f"wt-{x}"))
         with patch.object(queue, "now", lambda ms=False: "2000-01-01T00:00:00.000Z"):
             queue.log_push(self.pol, "origin", "refs/heads/early", H1, cwd=str(self.root / "wt-early"))
-        for x in ("pushed", "lost", "unhooked"):
+        for x in ("pushed", "lost"):
             queue.log_push(self.pol, "origin", f"refs/heads/{x}", H1, cwd=str(self.root / f"wt-{x}"))
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-unhooked"}):
+            queue.log_push(self.pol, "origin", "refs/heads/unhooked", H1, cwd=str(self.root))
+        self.assertEqual(queue.pushed_refs(self.pol, self.file()["running"]["unhooked"]), ["refs/heads/unhooked"])
         queue.locked(self.pol, lambda q: (q["running"]["old"].pop("logged"), True))
         self.forge.prs[40] = {"head": H1, "branch": "pushed"}
         with self.trees():
