@@ -983,8 +983,10 @@ def approved_merge(pol, it, v, live):
                           *after, "--jq", ".data.repository")
         try:
             got = json.loads(out) if not rc else None
-            pr, checks = got["pullRequest"], ((got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"] or
-                                              {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
+            pr, rollup = got["pullRequest"], (got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"]
+            if rollup is None and after:
+                raise TypeError
+            checks = (rollup or {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
             labels.update(x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else []))
             more = checks["pageInfo"]["hasNextPage"]
             if not all(isinstance(c, dict) for c in checks["nodes"]) or more and not isinstance(checks["pageInfo"]["endCursor"], str):
