@@ -1005,6 +1005,29 @@ class Release(Case):
         self.assertEqual(([(self.root / f"wt-{x}").exists() for x in ("idle", "local")], sorted(self.file()["tasks"])),
                          ([False, True], ["idle", "local"]))
 
+    def test_a_dead_thread_in_a_reftable_clone_still_finds_its_pr(self):
+        def git(*a, cwd):
+            return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True,
+                                  text=True).stdout.strip()
+        up, clone, wt = self.root / "up.git", self.root / "clone", self.root / "wt-a"
+        git("init", "-q", "--bare", str(up), cwd=self.root)
+        try:
+            git("clone", "-q", "--ref-format=reftable", str(up), str(clone), cwd=self.root)
+        except subprocess.CalledProcessError:
+            self.skipTest("this git has no reftable")
+        git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
+        git("push", "-q", "origin", "HEAD", cwd=clone)
+        git("remote", "set-head", "origin", "--auto", cwd=clone)
+        self.pol["host"]["clone"], self.starts["a"] = str(clone), git("rev-parse", "HEAD", cwd=clone)
+        git("worktree", "add", "-q", "-b", "a", str(wt), cwd=clone)
+        self.run_("a", worktree=str(wt))
+        git("commit", "-q", "--allow-empty", "-m", "two", cwd=wt)
+        sha = git("rev-parse", "HEAD", cwd=wt)
+        git("push", "-q", str(up), "HEAD:refs/heads/pr-head", cwd=wt)
+        git("checkout", "-q", "-b", "back", self.starts["a"], cwd=wt)
+        self.forge.prs[44] = {"head": sha, "branch": "pr-head", "commits": [sha]}
+        self.assertEqual(queue.release(self.pol, "a", died=True)["state"], "waiting")
+
     def test_a_queue_file_from_an_older_zstack_is_refused_by_name(self):
         for old in ({"items": {}}, {"items": {}, "done": []}, {"running": {}, "waiting": {}, "tasks": {}, "done": []}):
             (self.root / "queue.json").write_text(json.dumps(old))
