@@ -21,12 +21,17 @@ REPO, M = BASE["merge"]["repo"], BASE["merge"]
 READS = (queue.candidates, queue.open_prs)
 LAUNCH, T3 = queue.launch, queue.t3
 H1, H2 = "a" * 40, "b" * 40
+GATE = {"name": M["gate_check"], "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "t"}
 
 
 def cand(n, kind="issue", author="someone", labels=(), linked=(), created="2026-01-01"):
     ident = f"app-{n}" if kind == "issue" else f"app-{n}-review-{H1[:7]}"
     return dict(id=ident, kind=kind, n=n, head=None if kind == "issue" else H1, author={"login": author}, title=f"t{n}", body="b",
                 url=f"u{n}", created=created, labels=list(labels), linked=list(linked))
+
+
+def green(n):
+    return [{"name": f"c{k}", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "t"} for k in range(n)]
 
 
 class Forge:
@@ -53,15 +58,17 @@ class Forge:
             return 0, "", ""
         if a[:2] == ("api", "graphql"):
             p = self.prs[int(next(x for x in a if x.startswith("p="))[2:])]
-            p.update(p.pop("then", {}))
-            if p.get("queue") == "down":
+            page = int(next((x[2:] for x in a if x.startswith("c=")), 0))
+            p.update(p.pop("then" if page == 0 else "later", {}))
+            if p.get("queue") == "down" or page and page == p.get("down"):
                 return 1, "", "graphql down"
-            checks = [{"name": M["gate_check"], "status": "COMPLETED", "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]
-            checks += [None] if p.get("nulls") else []
+            pages = p.get("pages") or [[{"name": M["gate_check"], "status": "COMPLETED", "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]]
+            checks = pages[page] + ([None] if p.get("nulls") else [])
+            more = {"hasNextPage": page + 1 < len(pages), "endCursor": str(page + 1) if page + 1 < len(pages) else None}
             pr = {"headRefOid": p["head"], "isDraft": p.get("draft", False), "mergeable": p.get("mergeable", "MERGEABLE"),
                   "isMergeQueueEnabled": bool(p.get("queue")), "labels": {"nodes": [{"name": x} for x in p.get("labels", [])]},
-                  "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": p.get("many", False)},
-                                                                                         "nodes": checks}}}}]}}
+                  "commits": {"nodes": [{"commit": {"statusCheckRollup": None if page and page == p.get("gone") else
+                                                    {"contexts": {"pageInfo": more, "nodes": checks}}}}]}}
             issue = re.search(r"issue\(number: (\d+)\)", next(x for x in a if x.startswith("query=")))
             found = issue and self.issues.get(int(issue.group(1)))
             said = {"pullRequest": pr}
@@ -476,6 +483,16 @@ class Approve(Case):
                          [("pr", "merge", "40", "-R", REPO, "--squash", "--match-head-commit", H1)])
         self.assertEqual((self.file()["waiting"], self.file()["verdicts"]), ({}, {}))
 
+    def test_a_pass_merges_an_approved_pr_whose_green_checks_run_over_several_pages_and_reads_every_page(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["pages"] = [[*green(99), GATE], green(100), [*green(20), {"name": "docs", "status": "COMPLETED", "conclusion": "SKIPPED",
+                                                                                    "completedAt": "t"}]]
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
+        self.assertEqual([next((x for x in a if x.startswith("c=")), None) for a in self.forge.calls if a[:2] == ("api", "graphql")],
+                         [None, "c=1", "c=2"])
+        self.assertEqual(self.merges(), ["40"])
+
     def test_a_pass_never_merges_an_approved_pr_that_is_unverified_moved_held_red_running_labelled_or_conflicting(self):
         hold = M["hold_label"]
         cases = (("unverified", {"said": "fail"}, {}, f"the verifier has not passed head {H1}"),
@@ -496,7 +513,24 @@ class Approve(Case):
                  ("red-late", {}, {"then": {"ci": "FAILURE"}}, f"{M['gate_check']} has not passed on that head"),
                  ("running-late", {}, {"then": {"more": [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None, "completedAt": None}]}},
                   "a check is still running on that head, and a merge now would arm auto-merge"),
-                 ("many-checks", {}, {"many": True}, "it has more checks than one read lists"),
+                 ("paged-red", {}, {"pages": [green(100), [*green(40), {"name": M["gate_check"], "status": "COMPLETED", "conclusion": "FAILURE"}]]},
+                  f"{M['gate_check']} has not passed on that head"),
+                 ("paged-running", {}, {"pages": [[GATE, *green(99)], [*green(20), {"name": "lint", "status": "IN_PROGRESS", "conclusion": None,
+                                                                                      "completedAt": None}]]},
+                  "a check is still running on that head, and a merge now would arm auto-merge"),
+                 ("paged-expected", {}, {"pages": [[GATE, *green(99)], [{"context": "ci/x", "state": "EXPECTED"}]]},
+                  "a check is still running on that head, and a merge now would arm auto-merge"),
+                 ("paged-unread", {}, {"pages": [[GATE, *green(99)], green(30)], "down": 1},
+                  "it could not be read again just before the merge: graphql down"),
+                 ("paged-null", {}, {"pages": [[GATE, *green(99)], [*green(10), None]]},
+                  "it could not be read again just before the merge: not the answer asked for"),
+                 ("paged-gone", {}, {"pages": [[GATE, *green(99)], [{"name": "lint", "status": "IN_PROGRESS", "conclusion": None,
+                                                                    "completedAt": None}]], "gone": 1},
+                  "it could not be read again just before the merge: not the answer asked for"),
+                 ("paged-moved", {}, {"pages": [[GATE, *green(99)], green(30)], "later": {"head": H2}}, f"the verifier has not passed head {H2}"),
+                 ("paged-held", {}, {"pages": [[GATE, *green(99)], green(30)], "later": {"labels": [hold]}}, f"it is labelled {hold}"),
+                 ("paged-endless", {}, {"pages": [[GATE]] + [green(100)] * queue.FRESH_PAGES},
+                  f"it could not be read again just before the merge: its checks run past {queue.FRESH_PAGES} pages"),
                  ("null-check", {}, {"then": {"nulls": True}}, "it could not be read again just before the merge: not the answer asked for"),
                  ("queued-late", {}, {"then": {"queue": True}},
                   "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"),
@@ -513,7 +547,7 @@ class Approve(Case):
         self.assertEqual(sorted(self.file()["waiting"]), sorted(c[0] for c in cases))
         for n, (ident, _, _, why) in enumerate(cases):
             self.assertEqual(self.settle(ident), ("waiting", f"PR {50 + n} waits for the owner: {why}"), ident)
-        self.assertEqual(self.merges(), ["68", "68"])
+        self.assertEqual(self.merges(), [str(50 + len(cases) - 1)] * 2)
 
     def test_a_hold_on_the_issue_seen_only_by_the_last_read_stops_the_merge(self):
         hold = M["hold_label"]

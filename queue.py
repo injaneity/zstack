@@ -964,10 +964,11 @@ def its_pr(pol, q, it):
     return live
 
 
-FRESH = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid isDraft "
-         "mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { "
-         "contexts(first: 100) { pageInfo { hasNextPage } nodes { ... on CheckRun { name status conclusion completedAt } "
+FRESH = ("query($o: String!, $n: String!, $p: Int!, $c: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid "
+         "isDraft mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { "
+         "contexts(first: 100, after: $c) { pageInfo { hasNextPage endCursor } nodes { ... on CheckRun { name status conclusion completedAt } "
          "... on StatusContext { context state } } } } } } } }")
+FRESH_PAGES = 20
 
 
 def approved_merge(pol, it, v, live):
@@ -976,23 +977,35 @@ def approved_merge(pol, it, v, live):
         return why or "its thread did not merge it"
     (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
     issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
-    rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}{issue} }} }}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
-                      "--jq", ".data.repository")
-    try:
-        got = json.loads(out) if not rc else None
-        pr, checks = got["pullRequest"], ((got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"] or
-                                          {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
-        labels = [x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else [])]
-        if not all(isinstance(c, dict) for c in checks["nodes"]):
-            raise TypeError
-    except (ValueError, KeyError, IndexError, TypeError):
-        return f"it could not be read again just before the merge: {err or 'not the answer asked for'}"
-    why = (f"the verifier has not passed head {pr['headRefOid']}" if pr["headRefOid"] != v["head"] else
+    heads, labels, nodes, after = set(), set(), [], ()
+    for _ in range(FRESH_PAGES):
+        rc, out, err = gh("api", "graphql", "-f", f"query={FRESH}{issue} }} }}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={it['pr']}",
+                          *after, "--jq", ".data.repository")
+        try:
+            got = json.loads(out) if not rc else None
+            pr, rollup = got["pullRequest"], (got["pullRequest"]["commits"]["nodes"] or [{}])[0]["commit"]["statusCheckRollup"]
+            if rollup is None and after:
+                raise TypeError
+            checks = (rollup or {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": []}})["contexts"]
+            labels.update(x["name"] for x in pr["labels"]["nodes"] + (got["issue"]["labels"]["nodes"] if issue else []))
+            more = checks["pageInfo"]["hasNextPage"]
+            if not all(isinstance(c, dict) for c in checks["nodes"]) or more and not isinstance(checks["pageInfo"]["endCursor"], str):
+                raise TypeError
+        except (ValueError, KeyError, IndexError, TypeError):
+            return f"it could not be read again just before the merge: {err or 'not the answer asked for'}"
+        heads.add(pr["headRefOid"])
+        nodes += checks["nodes"]
+        if not more:
+            break
+        after = ("-f", f"c={checks['pageInfo']['endCursor']}")
+    else:
+        return f"it could not be read again just before the merge: its checks run past {FRESH_PAGES} pages"
+    moved = sorted(heads - {v["head"]})
+    why = (f"the verifier has not passed head {moved[0]}" if moved else
            f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
            "it needs a person's review" if m["review_label"] in labels else
            "the PR is a draft" if pr["isDraft"] else
-           "it has more checks than one read lists" if checks["pageInfo"]["hasNextPage"] else
-           unready(pol, {"statusCheckRollup": checks["nodes"]}) or
+           unready(pol, {"statusCheckRollup": nodes}) or
            (f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
             "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
             if pr["isMergeQueueEnabled"] else None))
