@@ -1165,7 +1165,14 @@ def plugin(head, out):
     subprocess.run(["claude", "plugin", "marketplace", "update", "zstack"], capture_output=True)
     if subprocess.run(["claude", "plugin", "update", "zstack@zstack"], capture_output=True).returncode:
         print("zstack: the plugin did not update, so threads still run the old hooks: run claude plugin update zstack@zstack", file=out)
-    elif (read_text(known) or "") != installed:
+        return
+    try:
+        after = read_text(known)
+    except UnicodeDecodeError:
+        after = None
+    if after is None:
+        print("zstack: the plugin registry could not be read after claude plugin update, so whether the plugin changed is unknown", file=out)
+    elif after != installed:
         print("zstack: plugin updated; new threads load it", file=out)
     else:
         print("zstack: plugin unchanged; claude plugin update found nothing to update", file=out)

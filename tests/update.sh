@@ -59,7 +59,8 @@ printf '{"zstack": {"installLocation": "%s"}}\n' "$(cd "$tmp/pkg" && pwd -P)" > 
 installed() { printf '{"plugins": {"zstack@zstack": [{"gitCommitSha": "%s"}]}}\n' "$1" > "$plugins/installed_plugins.json"; }
 cat > "$tmp/bin/claude" <<EOF
 #!/bin/bash
-if [ "\$2" = update ] && [ -f "$tmp/next" ]; then printf '{"plugins": {"zstack@zstack": [{"gitCommitSha": "%s"}]}}\n' "\$(cat "$tmp/next")" > "$plugins/installed_plugins.json"; fi
+if [ "\$2" = update ] && [ -f "$tmp/next" ]; then cp "$tmp/next" "$plugins/installed_plugins.json"; fi
+if [ "\$2" = update ] && [ -f "$tmp/gone" ]; then rm "$plugins/installed_plugins.json"; fi
 EOF
 chmod +x "$tmp/bin/claude"
 plug() { HOME="$tmp/home" PATH="$tmp/bin:$PATH" "$tmp/pkg/queue.py" update; }
@@ -70,8 +71,18 @@ out=$(plug 2>&1); rc=$?
 check "an unchanged plugin exits 0" "$rc" 0
 lacks "an unchanged plugin is not called updated" "$out" "plugin updated"
 
-installed old; advance five; git -C "$tmp/seed" rev-parse HEAD > "$tmp/next"
+advance five; installed "$(git -C "$tmp/seed" rev-parse HEAD)"; mv "$plugins/installed_plugins.json" "$tmp/next"; installed old
 out=$(plug 2>&1); rc=$?
 check "a changed plugin exits 0" "$rc" 0
 has "a changed plugin is called updated" "$out" "zstack: plugin updated; new threads load it"
+
+installed old; advance six; printf '\377' > "$tmp/next"
+out=$(plug 2>&1); rc=$?
+check "an undecodable registry after the update exits 0" "$rc" 0
+has "an undecodable registry is not called updated" "$out" "could not be read after claude plugin update"
+
+rm "$tmp/next"; installed old; advance seven; touch "$tmp/gone"
+out=$(plug 2>&1); rc=$?
+check "a missing registry after the update exits 0" "$rc" 0
+has "a missing registry is not called updated" "$out" "could not be read after claude plugin update"
 exit $fail
