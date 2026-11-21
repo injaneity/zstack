@@ -28,7 +28,7 @@ class PatentPush(unittest.TestCase):
     def test_held_hits(self):
         self.assertEqual(pp.held_hits(["libs/app-spacesd/src/sealing.rs"], ""), ["libs/app-spacesd/src/sealing.rs"])
         self.assertTrue(pp.held_hits(["a.rs"], "+++ b/a.rs\n+let v = VaultKey::open();\n"))
-        self.assertTrue(pp.held_hits(["a.rs"], "-// skyhook the session\n"))
+        self.assertTrue(pp.held_hits(["a.rs"], "-// Skyhook the session\n"))
         self.assertEqual(pp.held_hits(["libs/app-relay/src/lib.rs"], "+relay.unregister()\n"), [])
         self.assertEqual(pp.held_hits(["src/fix.rs"], "diff --git a/src/fix.rs b/src/fix.rs\n+// resealing the cache\n"), [])
         lock = "libs/app-spacesd/tests/skyhook-e2e/Cargo.lock"
@@ -59,11 +59,29 @@ class PatentPush(unittest.TestCase):
                 self.assertEqual(pp.held_hits(["src/a.rs"], f"diff --git a/src/a.rs b/src/a.rs\n+{line}\n"), [])
         row = "diff --git a/src/bridge/README.md b/src/bridge/README.md\n+| `skyhookCode` | returns the skyhook code |\n"
         self.assertEqual(pp.held_hits(["src/bridge/README.md"], row), [])
-        for path, line in (("src/a.rs", "let mut skyhook: Vec<usize> = vec![];"), ("src/a.rs", "// skyhook the session"),
+        for path, line in (("src/a.rs", "let mut skyhook: Vec<usize> = vec![];"), ("src/a.rs", "// Skyhook the session"),
                            ("src/a.ts", "x.map(|s| skyhook(s))"), ("src/a.rs", "*ptr = skyhook();"), ("docs/a.md", "Skyhook pairs two hosts.")):
             with self.subTest(line=line):
                 self.assertTrue(pp.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(pp.held_hits(["docs/skyhook.md"], "diff --git a/docs/skyhook.md b/docs/skyhook.md\n+| a | b |\n"))
+
+    def test_a_plain_lowercase_held_word_in_a_comment_or_doc_line_is_skipped(self):
+        words = q.Patent({**pp.pol, "patent": {**pp.pol["patent"], "held_words": ["teleport", "keyvault", "pairing"]}})
+        seam = "                // pairing still sends this explicitly on graceful"
+        moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
+        self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
+        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- a teleporting row: none"),
+                           ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.md", "the pairing's order")):
+            with self.subTest(line=line):
+                self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
+        for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
+                           ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
+                           ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
+                           ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
+                           ("a.md", "the KEYVAULT rules"), ("a.md", "Pairing is new.")):
+            with self.subTest(line=line):
+                self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
+        self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
 
     def test_choose_remote(self):
         pub, stg = "https://github.com/acme/app", "https://github.com/acme/app-private.git"
@@ -188,7 +206,7 @@ class PatentPush(unittest.TestCase):
 
     def test_a_held_commit_reverted_later_in_the_push_is_still_held(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// vaultkey probe\n"}, {"a.rs": None}])
+            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "vaultkey::probe();\n"}, {"a.rs": None}])
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
@@ -209,8 +227,8 @@ class PatentPush(unittest.TestCase):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
               " +// skyhook from main\n++// resolved\n")
         self.assertEqual(pp.held_hits([], cc), [])
-        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// vaultkey in the resolution")))
-        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- skyhook removed\n"))
+        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++vaultkey::resolve();")))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n---skyhook removed\n"))
 
     def test_merging_main_that_already_has_held_work_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:

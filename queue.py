@@ -1152,6 +1152,8 @@ BUILT = re.compile(r"(^|/)(dist|bundle)/|\.(min|bundle)\.[cm]?js$")
 DOCS = re.compile(r"\.(md|mdx|markdown)$", re.I)
 DOC_ROW = re.compile(r"\s*\|")
 DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
+PROSE_COMMENT = re.compile(r"\s*(//|#(\s|$)|--\s|/\*)")
+PLAIN_TAIL = re.compile(r"[a-z]*('s)?(?=$|\s|[,;!?)]|:(?!:)|\.(\s|$))")
 LONG_LINE = 1000
 
 
@@ -1200,8 +1202,14 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
+            if (docs or PROSE_COMMENT.match(text)) and all(self.plain(text, m) for m in self.held.finditer(text)):
+                continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
+
+    @staticmethod
+    def plain(text, m):
+        return m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(") and bool(PLAIN_TAIL.match(text, m.end()))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
