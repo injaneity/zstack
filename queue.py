@@ -1095,6 +1095,9 @@ def outcome(pol, q, key, merge=False, died=False):
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
         return "waiting", why
+    if died and not it["worktree"] and it["thread"]:
+        seen = t3(pol, "show", it["thread"], "--messages", "0")
+        it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
     try:
         live = its_pr(pol, q, it)
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
@@ -1113,7 +1116,9 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if died and not live and (it["kind"] != "task" or "task" in it):
+    if died and not live and not it["worktree"]:
+        why = "its thread died with no worktree on record, so whether it opened a PR cannot be told"
+    elif died and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
             q["tasks"][key] = {**it["task"], "preapproved": it["preapproved"]}

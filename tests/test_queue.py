@@ -1011,6 +1011,20 @@ class Pass(Case):
             got = queue.run_pass(self.pol)
         self.assertEqual(([(x["released"], x["state"]) for x in got["released"]], got["launched"]), ([("a", "waiting")], []))
         self.assertEqual((sorted(self.file()["waiting"]), self.file()["tasks"]), (["a"], {}))
+        self.threads["b"] = ("t-b", None)
+        self.add("b")
+        queue.run_pass(self.pol)
+        self.pr_open(41)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-b"}), \
+                patch.object(queue, "branch_pr", lambda pol, it: 41 if it["worktree"] == "/seen/t-b" else None):
+            self.assertEqual(queue.release(self.pol, died=True)["state"], "waiting")
+        self.threads["c"] = ("t-c", None)
+        self.add("c")
+        queue.run_pass(self.pol)
+        self.status = {"t-c": "gone"}
+        got = queue.run_pass(self.pol)
+        said = "its thread died with no worktree on record, so whether it opened a PR cannot be told"
+        self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("c", "done", said)], []))
 
     def test_two_passes_never_run_at_once(self):
         self.add("a")
