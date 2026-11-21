@@ -1109,8 +1109,17 @@ def outcome(pol, q, key, merge=False):
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
+    head, v = live["headRefOid"] if live else None, q["verdicts"].get(str(it["pr"]), {})
+    ended(pol, f"{key} pr={it['pr'] or '-'} head={head or '-'} verdict={v['result'] if head and v.get('head') == head else '-'} {why}")
     q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
     return "done", why
+
+
+def ended(pol, line):
+    log = os.path.join(root(pol), "events.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "a") as f:
+        f.write(f"{now()} ended {line}".replace("\r", " ").replace("\n", " ") + "\n")
 
 
 def unverified(pol, q, it):

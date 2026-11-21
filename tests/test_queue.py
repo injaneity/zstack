@@ -792,6 +792,24 @@ class Release(Case):
         self.cands = [cand(1)]
         self.assertEqual(queue.step(self.pol)["launched"]["id"], "app-1")
 
+    def test_each_ended_item_leaves_one_events_log_line_with_its_pr_head_and_the_verdict_on_that_head(self):
+        self.pol["run"]["threads"] = 9
+        for x in ("a", "b", "c"):
+            self.run_(x, thread=f"t-{x}")
+        self.pr_open(41)
+        queue.verified(self.pol, "b", 41, H1, "auto")
+        self.forge.prs[41].update(head=H2, state="CLOSED")
+        self.pr_open(42)
+        queue.verified(self.pol, "c", 42, H1, "review")
+        self.assertEqual([queue.release(self.pol, x)["state"] for x in ("a", "b", "c")], ["done", "done", "waiting"])
+        queue.approve(self.pol, "c")
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "c", "why": "PR 42 merged"}])
+        log = (self.root / "events.log").read_text().splitlines()
+        self.assertTrue(all(re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ", x) for x in log), log)
+        self.assertEqual([x.split(" ", 1)[1] for x in log],
+                         ["ended a pr=- head=- verdict=- nothing to merge", f"ended b pr=41 head={H2} verdict=- PR 41 closed",
+                          f"ended c pr=42 head={H1} verdict=review PR 42 merged"])
+
     def test_the_hook_keeps_a_turn_going_until_its_prs_head_has_a_verdict_or_the_pr_closes(self):
         self.pol["run"]["threads"] = 9
         self.run_("a", thread="t-a")
