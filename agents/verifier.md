@@ -31,7 +31,7 @@ Never edit source, commit (beyond that scratch merge, which is never pushed), pu
 
 Answer in this order, and keep it short. Never paste full logs: quote only the failing lines, at most about ten per failure, and give the log path for the rest.
 1. What makes the change safe: the fact it rests on and whether you confirmed it.
-2. Findings by severity, each with location, trigger, impact, evidence, and the smallest fix. A failing check is a finding.
+2. Findings by severity, each with location, trigger, impact, evidence, and the smallest fix. A failing check is a finding unless the base run shows the same failure.
 3. One line the parent puts in its run report: `ran <commands>; skipped <what and why>; result <pass|fail>`. It names only what actually ran.
 4. On a pass, one line `merge: auto` or `merge: review`, the same word you recorded, and one sentence of why. Checks that have not finished are not a reason for `review`: the thread waits for them.
 5. `recorded:` and `say:`, as the queue printed them.
