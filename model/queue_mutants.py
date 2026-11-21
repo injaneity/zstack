@@ -5,6 +5,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 LIVE = "a temporal property"
+NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
+ONE_MACHINE = ('  Machines = {"mac", "linux"}\n', '  Machines = {"mac"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -67,6 +69,35 @@ M = [
         "an approved waiting PR whose checks run past one page of the last read waits for the owner for good",
         [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ i \\notin Paged /\\ Merge")],
         LIVE,
+    ),
+    (
+        "a-merge-queue-base-is-stuck",
+        "an approved waiting PR whose base branch has a merge queue waits for the owner for good, since the pass only merges directly",
+        [("MergeOrQueue(i) == IF i \\in Queues THEN Enqueue(i) ELSE", "MergeOrQueue(i) == IF i \\in Queues THEN FALSE ELSE")],
+        LIVE,
+        ONE_MACHINE,
+    ),
+    (
+        "a-hold-while-queued-is-ignored",
+        "a hold or review label added to a PR the pass put in the merge queue leaves it queued, so GitHub still merges it",
+        [("Dequeue(m, i) == q[m][i] = \"waiting\" /\\ i \\in inq", "Dequeue(m, i) == q[m][i] = \"waiting\" /\\ FALSE /\\ i \\in inq")],
+        LIVE,
+        ONE_MACHINE,
+    ),
+    (
+        "requeue-a-dropped-head",
+        "the pass queues again a head GitHub dropped from the merge queue",
+        [("/\\ i \\notin lost /\\ i \\notin dropped\n", "/\\ i \\notin lost\n")],
+        "NoDroppedHeadIsQueued",
+        ONE_MACHINE,
+    ),
+    (
+        "a-new-head-is-blamed-for-a-drop",
+        "a pass that finds an entry gone charges the drop to the PR's current head, so a head pushed since, which never entered the merge queue, "
+        "is never queued",
+        [("dropped' = dropped \\cup ({i} \\cap gone)", "dropped' = dropped \\cup {i}")],
+        "OnlyADroppedHeadIsBlocked",
+        ONE_MACHINE,
     ),
     (
         "pass-survives-a-push",
@@ -149,7 +180,10 @@ def run(checker, scratch, src, cfg, name, why, edits, rule, *conf):
     d = os.path.join(scratch, name)
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, "Queue.tla"), "w").write(s)
-    open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(*conf[0]) if conf else cfg)
+    old, new = conf[0] if conf else NO_QUEUE
+    if cfg.count(old) != 1:
+        return f"BROKEN   {name}: config line not found once: {old.strip()!r}"
+    open(os.path.join(d, "Queue.cfg"), "w").write(cfg.replace(old, new))
     for attempt in range(2):
         cmd = [checker, "-workers", "2", "-metadir", os.path.join(d, f"meta{attempt}")]
         try:

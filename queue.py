@@ -24,7 +24,8 @@ USAGE = (
     "  queue.py add <id> [--priority N] [--preapproved]\n"
     "                                   a task from the orchestrator; its text on stdin\n"
     "  queue.py approve <id>            the owner preapproves an item already a task, running or waiting: its thread may\n"
-    "                                   merge a passed head, and a pass merges its waiting PR once that head may merge\n"
+    "                                   merge a passed head, and a pass merges its waiting PR once that head may merge, or\n"
+    "                                   puts it in the base branch's merge queue when it has one\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -738,6 +739,7 @@ def launch(pol, up):
 
 def step(pol):
     def intend(q):
+        was = json.dumps(q, sort_keys=True)
         cleared, kept = settle(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
@@ -745,7 +747,8 @@ def step(pol):
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
                                       "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
-        return (up, {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}), bool(cleared or gone or up)
+        said = {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}
+        return (up, said), bool(gone or up) or json.dumps(q, sort_keys=True) != was
     up, out = locked(pol, intend)
     if not up:
         return out
@@ -830,16 +833,19 @@ def gate_green(pol, live):
                for c in live.get("statusCheckRollup") or [])
 
 
-def held(pol, it, live):
-    hold = pol["merge"]["hold_label"]
-    if hold in [x["name"] for x in live["labels"]]:
-        return True
+def labels_of(pol, it, live):
+    mine = [x["name"] for x in live["labels"]]
     if not it or it["kind"] != "issue":
-        return False
+        return mine
     rc, out, err = gh("issue", "view", str(it["n"]), "-R", pol["merge"]["repo"], "--json", "labels")
     if rc:
         raise Refused(f"cannot read issue {it['n']}, so whether it is held is unknown: {err}")
-    return hold in [x["name"] for x in json.loads(out)["labels"]]
+    return mine + [x["name"] for x in json.loads(out)["labels"]]
+
+
+def held(pol, it, live):
+    hold = pol["merge"]["hold_label"]
+    return hold in [x["name"] for x in live["labels"]] or hold in labels_of(pol, it, live)
 
 
 def stopped(pol, it, v, live):
@@ -865,6 +871,13 @@ def blocked(pol, it, v, live):
     return stopped(pol, it, v, live) or unready(pol, live)
 
 
+def move(it, pr):
+    if it["pr"] != pr:
+        for k in ("queued", "seen", "dropped"):
+            it.pop(k, None)
+    it["pr"] = pr
+
+
 def owner_of(q, pr):
     return next((v for part in ("running", "waiting") for v in q[part].values() if v["pr"] == pr), None)
 
@@ -879,7 +892,7 @@ def verified(pol, ident, pr, head, result):
         live = pr_view(pol, pr)
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
-        it["pr"] = pr
+        move(it, pr)
         q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
         q["verdicts"][str(pr)] = {"head": head, "result": result}
         out = {"id": ident, "pr": pr, "recorded": result}
@@ -960,21 +973,31 @@ def its_pr(pol, q, it):
     other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
     if other and other != it["pr"]:
         q["verdicts"].pop(str(it["pr"]), None)
-        it["pr"], live = other, pr_view(pol, other)
+        move(it, other)
+        live = pr_view(pol, other)
     return live
 
 
-FRESH = ("query($o: String!, $n: String!, $p: Int!, $c: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid "
+FRESH = ("query($o: String!, $n: String!, $p: Int!, $c: String) { repository(owner: $o, name: $n) { pullRequest(number: $p) { id headRefOid "
          "isDraft mergeable isMergeQueueEnabled labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { statusCheckRollup { "
          "contexts(first: 100, after: $c) { pageInfo { hasNextPage endCursor } nodes { ... on CheckRun { name status conclusion completedAt } "
          "... on StatusContext { context state } } } } } } } }")
 FRESH_PAGES = 20
+QUEUED = ("query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { id state headRefOid "
+          "isInMergeQueue added: timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT]) { filteredCount } "
+          "removed: timelineItems(last: 1, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) { filteredCount nodes { "
+          "... on RemovedFromMergeQueueEvent { reason } } } } } }")
+ENQUEUE = ("mutation($id: ID!, $h: GitObjectID!) { enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $h}) { "
+           "clientMutationId } }")
+DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMutationId } }"
 
 
 def approved_merge(pol, it, v, live):
     why = blocked(pol, it, v, live)
     if why or not it["preapproved"]:
         return why or "its thread did not merge it"
+    if (it.get("dropped") or {}).get("head") == v["head"]:
+        return it["dropped"]["why"]
     (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
     issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
     heads, labels, nodes, after = set(), set(), [], ()
@@ -1006,13 +1029,57 @@ def approved_merge(pol, it, v, live):
            "it needs a person's review" if m["review_label"] in labels else
            "the PR is a draft" if pr["isDraft"] else
            unready(pol, {"statusCheckRollup": nodes}) or
-           (f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else
-            "its base branch has a merge queue, where a merge only queues it and a hold or review label added later would not stop it"
-            if pr["isMergeQueueEnabled"] else None))
+           (f"GitHub says it is {(pr['mergeable'] or 'unknown').lower()}, not mergeable" if pr["mergeable"] != "MERGEABLE" else None))
     if why:
         return why
+    if pr["isMergeQueueEnabled"]:
+        rc, _, err = gh("api", "graphql", "-f", f"query={ENQUEUE}", "-f", f"id={pr['id']}", "-f", f"h={v['head']}")
+        if rc:
+            return f"the pass could not put it in the merge queue: {err}"
+        it["queued"], it["seen"][0] = v["head"], it["seen"][0] + 1
+        return None
     rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
     return f"the pass could not merge it: {err}" if rc else None
+
+
+def in_queue(pol, key, it, live):
+    (owner, name), pr = pol["merge"]["repo"].split("/"), it["pr"]
+    rc, out, err = gh("api", "graphql", "-f", f"query={QUEUED}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={pr}",
+                      "--jq", ".data.repository.pullRequest")
+    try:
+        got = json.loads(out) if not rc else None
+        on, state, seen = got["isInMergeQueue"], got["state"], [got["added"]["filteredCount"], got["removed"]["filteredCount"]]
+        reason = (got["removed"]["nodes"] or [{}])[-1].get("reason")
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        raise Refused(f"PR {pr}: whether it is in the merge queue could not be read: {err or 'not the answer asked for'}") from None
+    if state != "OPEN":
+        return f"PR {pr} is {state.lower()}, and the next pass finishes it"
+    if on:
+        if it.get("queued") != got["headRefOid"]:
+            it["queued"], it["seen"] = got["headRefOid"], seen
+        try:
+            labels, m = labels_of(pol, it, live), pol["merge"]
+            why = (f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
+                   "it needs a person's review" if m["review_label"] in labels else None)
+        except Refused as e:
+            why = str(e)
+        if not why:
+            return f"PR {pr} is in the merge queue at head {it['queued']}"
+        rc, _, err = gh("api", "graphql", "-f", f"query={DEQUEUE}", "-f", f"id={got['id']}")
+        if rc:
+            return f"PR {pr} stays in the merge queue though {why}: the pass could not take it out: {err}"
+        it["queued"] = None
+        return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
+    if not it.get("queued"):
+        it["seen"] = seen
+        return None
+    why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
+           "cannot be told" if seen[0] > it["seen"][0] else
+           f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
+    it["dropped"], it["queued"] = {"head": it["queued"], "why": why}, None
+    said = f"PR {pr} waits for the owner: {why}"
+    wake(pol, "blocked", f"{key}: {said}", pr, it["thread"])
+    return said
 
 
 def outcome(pol, q, key, merge=False):
@@ -1023,6 +1090,10 @@ def outcome(pol, q, key, merge=False):
         return "waiting", why
     try:
         live = its_pr(pol, q, it)
+        said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
+        if said:
+            tidy(pol, it, False)
+            return wait(said)
         if live and live["state"] == "OPEN":
             v = q["verdicts"].get(str(it["pr"]))
             why = approved_merge(pol, it, v, live) if merge else blocked(pol, it, v, live) or "its thread did not merge it"
@@ -1030,7 +1101,8 @@ def outcome(pol, q, key, merge=False):
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
             tidy(pol, it, False)
-            return wait(f"PR {it['pr']} waits for the owner: {why}")
+            return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
+                        f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
