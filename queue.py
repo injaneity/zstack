@@ -1157,7 +1157,7 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                  (re.compile(r"(\.(py|sh|bash|zsh|rb|ya?ml|toml|nix|ps1|cmake|tf)|(^|/)(Dockerfile|Makefile))$"),
                   re.compile(r"\s*#(\s|$)")),
                  (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
-PLAIN_TAIL = re.compile(r"[a-z]*('s)?(?=$|\s|[,;!?)]|:(?!:)|\.(\s|$))")
+PLAIN_TAIL = re.compile(r"[a-z]*('s)?[,;:!?).]*(?=\s|$)")
 LONG_LINE = 1000
 
 
@@ -1195,7 +1195,7 @@ class Patent:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
                 skip, docs, cols, hunk = bool(self.lockfile.search(path) or BUILT.search(path)), bool(DOCS.search(path)), 1, False
-                prose = next((c for ext, c in PROSE_COMMENT if ext.search(path)), None)
+                prose = next((c for ext, c in PROSE_COMMENT if ext.search(path.rstrip('"'))), None)
                 continue
             if line.startswith("@@"):
                 cols, hunk = len(line) - len(line.lstrip("@")) - 1, True

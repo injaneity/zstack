@@ -74,7 +74,7 @@ class PatentPush(unittest.TestCase):
                            ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.go", "// the pairing's order")):
             with self.subTest(line=line):
                 self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
-        for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
+        for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"), ("a.rs", "// See pairing!() for it."), ("a.rs", "// pairing.,x"),
                            ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
                            ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
                            ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
@@ -84,6 +84,8 @@ class PatentPush(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
+        quoted = 'diff --git "a/caf\\303\\251.rs" "b/caf\\303\\251.rs"\n+// pairing is the default.\n'
+        self.assertEqual(words.held_hits([], quoted), [])
 
     def test_choose_remote(self):
         pub, stg = "https://github.com/acme/app", "https://github.com/acme/app-private.git"
