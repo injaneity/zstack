@@ -966,9 +966,14 @@ def reached(path, start):
         raise Refused(f"cannot read the commits its worktree {path} was on")
     rc1, new = git("-C", path, "rev-list", *heads, "--not", start)
     rc2, kept = git("-C", path, "rev-list", *heads, "--not", start, "--remotes")
-    if rc1 or rc2:
+    rc3, trunk = git("-C", path, "symbolic-ref", "refs/remotes/origin/HEAD")
+    rc4, refs = git("-C", path, "for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes")
+    if rc1 or rc2 or rc3 or rc4:
         raise Refused(f"cannot read the commits its worktree {path} was on")
-    return sorted(set(new.split())), set(new.split()) - set(kept.split())
+    old = set(heads) | {start}
+    on = {sha for sha, ref in (x.split() for x in refs.splitlines()) if sha in old and ref not in ("refs/remotes/origin/HEAD", trunk.strip())
+          and "update by push" in git("-C", path, "log", "-g", "--format=%gs", ref)[1]}
+    return sorted(set(new.split())), set(new.split()) - set(kept.split()) | on
 
 
 SEARCH_SHAS = 5

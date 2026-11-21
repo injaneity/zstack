@@ -943,7 +943,7 @@ class Release(Case):
         git("remote", "set-head", "origin", "--auto", cwd=clone)
         main = subprocess.run(["git", "branch", "--show-current"], cwd=clone, capture_output=True, text=True).stdout.strip()
         one = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, capture_output=True, text=True).stdout.strip()
-        self.starts = {x: one for x in ("idle", "local", "switched", "direct", "landed", "expired", "moved")}
+        self.starts = {x: one for x in ("idle", "local", "switched", "direct", "landed", "expired", "moved", "backport")}
         self.pol["host"]["clone"] = str(clone)
         self.pol["run"]["threads"] = 9
         for x in ("idle", "local", "switched"):
@@ -991,17 +991,27 @@ class Release(Case):
         git("checkout", "-q", "-b", "fresh-2", one, cwd=self.root / "wt-moved")
         self.forge.prs[44] = {"head": far, "branch": "moved-pub", "commits": [far]}
         git("push", "-q", "origin", f"{sha}:refs/heads/{main}", cwd=clone)
+        git("branch", "gh-readonly-queue/stale", one, cwd=up)
         git("fetch", "-q", "origin", cwd=clone)
         self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
         got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct", "landed", "expired", "moved")}
         self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting",
                                                                     "landed": "waiting", "expired": "waiting", "moved": "waiting"})
+        git("worktree", "add", "-q", "-b", "backport", str(self.root / "wt-backport"), one, cwd=clone)
+        self.run_("backport", worktree=str(self.root / "wt-backport"), priority=5)
+        git("push", "-q", "origin", "HEAD:backport", cwd=self.root / "wt-backport")
+        git("checkout", "-q", "-b", "follow-up-3", cwd=self.root / "wt-backport")
+        self.forge.prs[45] = {"head": one, "branch": "backport", "commits": [one]}
+        got["backport"] = queue.release(self.pol, "backport", died=True)
+        self.assertEqual(got["backport"]["state"], "done")
+
         said = f"PR 41 waits for the owner: the verifier has not passed head {sha}"
         self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (said, 41))
         self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "
                          f"{self.root / 'wt-local'} keeps its uncommitted or unpushed work")
-        self.assertEqual(got["switched"]["why"], "its thread died after it pushed, and no PR of its branch was found, so whether it "
-                         "opened one cannot be told")
+        for x in ("switched", "backport"):
+            self.assertEqual(got[x]["why"], "its thread died after it pushed, and no PR of its branch was found, so whether it "
+                             "opened one cannot be told")
         self.assertEqual(([(self.root / f"wt-{x}").exists() for x in ("idle", "local")], sorted(self.file()["tasks"])),
                          ([False, True], ["idle", "local"]))
 
