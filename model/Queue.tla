@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged
 
 VARIABLES q, held, pre, unread, up, pr, status, stale, merged, by, okAtMerge, thread, pending, startedHeld, jumped, crowded, endedUnverified, twoThreads
 
@@ -9,7 +9,7 @@ vars == <<q, held, pre, unread, up, pr, status, stale, merged, by, okAtMerge, th
 States == {"none", "running", "waiting", "done"}
 
 TypeOK ==
-  /\ q \in [Machines -> [Items -> States]]
+  /\ q \in [Machines -> [Items -> States]] /\ Paged \subseteq Items
   /\ held \subseteq Items /\ pre \subseteq Items /\ unread \subseteq Garbles /\ up \in BOOLEAN /\ pr \subseteq Items /\ stale \subseteq Items /\ merged \subseteq Items
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]

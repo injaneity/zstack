@@ -63,6 +63,12 @@ M = [
         ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n', '  Machines = {"mac"}\n  Garbles = {"i3"}\n  NoTree = {}\n'),
     ),
     (
+        "a-paged-pr-is-never-read-whole",
+        "an approved waiting PR whose checks run past one page of the last read waits for the owner for good",
+        [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ i \\notin Paged /\\ Merge")],
+        LIVE,
+    ),
+    (
         "pass-survives-a-push",
         "a pass stays on the PR after a new push",
         [('pr\' = pr \\cup {i} /\\ status\' = [status EXCEPT ![i] = "none"]', 'pr\' = pr \\cup {i} /\\ status\' = status')],
