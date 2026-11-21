@@ -1116,8 +1116,12 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if died and not live and not it["worktree"]:
-        why = "its thread died with no worktree on record, so whether it opened a PR cannot be told"
+    try:
+        tree = died and not live and it["worktree"] and listed(pol, it["worktree"])[1]
+    except Refused as e:
+        return wait(str(e))
+    if died and not live and not tree:
+        why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
     elif died and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":

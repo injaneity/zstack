@@ -157,6 +157,10 @@ class Case(unittest.TestCase):
     def pr_open(self, pr, head=H1, labels=()):
         self.forge.prs[pr] = {"head": head, "labels": list(labels)}
 
+    def trees(self):
+        return patch.multiple(queue, listed=lambda pol, path: (None, path), tidy=lambda pol, it, whole: True,
+                              branch_pr=lambda pol, it: None)
+
 
 class Entry(Case):
     def test_a_step_reads_the_repo_launches_the_first_and_counts_why_it_passed_over_the_rest(self):
@@ -844,25 +848,33 @@ class Release(Case):
         row = self.file()["tasks"]["a"]
         self.start("a")
         queue.approve(self.pol, "a")
-        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}), self.trees():
             got = queue.release(self.pol, died=True)
         said = "its thread died with no PR, so it goes back to tasks to run again"
         self.assertEqual((got["state"], got["why"], self.wakes), ("tasks", said, [("blocked", f"a: {said}", None)]))
         self.assertEqual((self.file()["tasks"], self.file()["done"]), ({"a": {**row, "preapproved": True}}, []))
         self.status = {"t-app-1": "failed"}
-        got = queue.run_pass(self.pol)
+        with self.trees():
+            got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"], x["why"]) for x in got["released"]], [("app-1", "tasks", said)])
         self.assertEqual(([x["id"] for x in got["launched"]], [x["task"] for x in self.briefed[-2:-1]]), (["a", "app-1"], ["take over PR 40"]))
         self.assertEqual((sorted(self.file()["running"]), self.file()["tasks"], self.file()["done"]), (["a", "app-1"], {}, []))
         with patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
             self.assertEqual(queue.release(self.pol, "a", died=True)["state"], "waiting")
         self.status = {"t-app-1": "completed"}
-        got = queue.run_pass(self.pol)
+        with self.trees():
+            got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("app-1", "done")])
         self.assertEqual((got["cleared"], [x["id"] for x in got["launched"]]), ([{"id": "a", "why": said}], ["a"]))
         self.assertEqual((sorted(self.file()["running"]), self.file()["waiting"], self.file()["done"]), (["a"], {}, ["app-1"]))
         queue.locked(self.pol, lambda q: (q["running"]["a"].pop("task"), True))
-        self.assertEqual(queue.release(self.pol, "a", died=True)["why"], "nothing to merge")
+        with self.trees():
+            self.assertEqual(queue.release(self.pol, "a", died=True)["why"], "nothing to merge")
+        self.run_("gone")
+        self.status = {"t-gone": "failed"}
+        got = queue.run_pass(self.pol)
+        why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
+        self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("gone", "done", why)], []))
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
@@ -972,7 +984,8 @@ class Pass(Case):
         for said in queue.DEAD:
             self.run_(said)
             self.status = {f"t-{said}": said, "t-c": "waiting", "t-b": "queued"}
-            got = queue.run_pass(self.pol)
+            with self.trees():
+                got = queue.run_pass(self.pol)
             self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [(said, "tasks" if said in queue.DIED else "done")])
             self.assertEqual([x["id"] for x in got["launched"]], [said] if said in queue.DIED else [])
             self.status = {}
@@ -990,7 +1003,8 @@ class Pass(Case):
         got = queue.run_pass(self.pol)
         self.assertEqual((got["released"], got["launched"], got["waiting"]), ([], [], "the machine is at its thread cap"))
         self.listing = []
-        got = queue.run_pass(self.pol)
+        with self.trees():
+            got = queue.run_pass(self.pol)
         self.assertEqual(([x["released"] for x in got["released"]], [x["id"] for x in got["launched"]]), (["a"], ["a"]))
         self.assertEqual(sorted(self.file()["tasks"]), ["b"])
 
@@ -1007,7 +1021,7 @@ class Pass(Case):
         queue.run_pass(self.pol)
         self.pr_open(40)
         self.status = {"t-a": "failed"}
-        with patch.object(queue, "branch_pr", lambda pol, it: 40 if it["worktree"] == "/seen/t-a" else None):
+        with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: 40 if it["worktree"] == "/seen/t-a" else None):
             got = queue.run_pass(self.pol)
         self.assertEqual(([(x["released"], x["state"]) for x in got["released"]], got["launched"]), ([("a", "waiting")], []))
         self.assertEqual((sorted(self.file()["waiting"]), self.file()["tasks"]), (["a"], {}))
@@ -1015,7 +1029,7 @@ class Pass(Case):
         self.add("b")
         queue.run_pass(self.pol)
         self.pr_open(41)
-        with patch.dict(os.environ, {queue.THREAD_VAR: "t-b"}), \
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-b"}), self.trees(), \
                 patch.object(queue, "branch_pr", lambda pol, it: 41 if it["worktree"] == "/seen/t-b" else None):
             self.assertEqual(queue.release(self.pol, died=True)["state"], "waiting")
         self.threads["c"] = ("t-c", None)
@@ -1023,7 +1037,7 @@ class Pass(Case):
         queue.run_pass(self.pol)
         self.status = {"t-c": "gone"}
         got = queue.run_pass(self.pol)
-        said = "its thread died with no worktree on record, so whether it opened a PR cannot be told"
+        said = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("c", "done", said)], []))
 
     def test_two_passes_never_run_at_once(self):
