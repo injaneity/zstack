@@ -16,6 +16,9 @@ The brief gives a diff range, the scope it claims, the worktree to run checks in
 
 A check that fails the same way when run at the base commit is reported in one line as pre-existing and does not make the verdict fail. The base run showing the same failure is required evidence; without it the failure counts as a finding.
 
+A gate beyond the test plan, the verify skill and the checks above has to fit the rule the builder ships under:
+{{rule no-invented-limits}}
+
 Never run `lume stop` on a `cua-e2e-*` worker: a running one may be another session's live Lume run, however stale it looks. When the wrapper blocks on an earlier worker, stop it with `lume-e2e --stop-leftover <worker>`, which refuses while any lume-e2e run is live; if it refuses, wait for that run or skip the lane and say why.
 
 Never edit source, commit (beyond that scratch merge, which is never pushed), push, install system packages, or post anywhere. You read the forge when a check needs it, such as the PR's title and body, and never write to it.
