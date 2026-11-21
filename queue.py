@@ -622,11 +622,18 @@ def locked(pol, fn):
         if set(q) != set(KEYS):
             raise Refused(f"{path} was written by an older zstack: move it aside, and the queue starts empty")
         out, changed = fn(q)
+        rows = q.pop("ended", [])
         if changed:
             with open(path + ".tmp", "w") as f:
                 json.dump(q, f, indent=1, sort_keys=True)
                 f.write("\n")
             os.replace(path + ".tmp", path)
+        if rows:
+            try:
+                with open(os.path.join(base, "events.log"), "a") as f:
+                    f.writelines(rows)
+            except OSError as e:
+                print(f"zstack: events.log was not written ({e}): " + "".join(rows), end="", file=sys.stderr)
         return out
 
 
@@ -1110,16 +1117,10 @@ def outcome(pol, q, key, merge=False):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
     head, v = live["headRefOid"] if live else None, q["verdicts"].get(str(it["pr"]), {})
-    ended(pol, f"{key} pr={it['pr'] or '-'} head={head or '-'} verdict={v['result'] if head and v.get('head') == head else '-'} {why}")
+    row = f"{now()} ended {key} pr={it['pr'] or '-'} head={head or '-'} verdict={v['result'] if head and v.get('head') == head else '-'} {why}"
+    q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
     q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
     return "done", why
-
-
-def ended(pol, line):
-    log = os.path.join(root(pol), "events.log")
-    os.makedirs(os.path.dirname(log), exist_ok=True)
-    with open(log, "a") as f:
-        f.write(f"{now()} ended {line}".replace("\r", " ").replace("\n", " ") + "\n")
 
 
 def unverified(pol, q, it):

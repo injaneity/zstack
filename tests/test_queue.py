@@ -810,6 +810,23 @@ class Release(Case):
                          ["ended a pr=- head=- verdict=- nothing to merge", f"ended b pr=41 head={H2} verdict=- PR 41 closed",
                           f"ended c pr=42 head={H1} verdict=review PR 42 merged"])
 
+    def test_an_unwritable_events_log_still_ends_the_item_and_a_failed_save_logs_nothing_until_the_retry(self):
+        self.pol["run"]["threads"] = 9
+        self.run_("a")
+        (self.root / "events.log").mkdir()
+        err = io.StringIO()
+        with patch("sys.stderr", err):
+            self.assertEqual(queue.release(self.pol, "a")["state"], "done")
+        self.assertEqual((self.file()["done"], "ended a pr=- head=- verdict=- nothing to merge" in err.getvalue()), (["a"], True))
+        (self.root / "events.log").rmdir()
+        self.run_("b")
+        with patch.object(queue.os, "replace", side_effect=PermissionError("busy")), self.assertRaises(PermissionError):
+            queue.release(self.pol, "b")
+        self.assertFalse((self.root / "events.log").exists())
+        self.assertEqual(queue.release(self.pol, "b")["state"], "done")
+        self.assertEqual([x.split(" ", 1)[1] for x in (self.root / "events.log").read_text().splitlines()],
+                         ["ended b pr=- head=- verdict=- nothing to merge"])
+
     def test_the_hook_keeps_a_turn_going_until_its_prs_head_has_a_verdict_or_the_pr_closes(self):
         self.pol["run"]["threads"] = 9
         self.run_("a", thread="t-a")
