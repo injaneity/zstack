@@ -122,6 +122,14 @@ class PatentPush(unittest.TestCase):
             self.assertNotIn('"kind": "blocked"', g.stdout + g.stderr)
             self.assertEqual(len(Path(f"{root}/events.log").read_text().splitlines()), 1)
 
+    def test_a_ref_with_unicode_space_or_line_separator_is_still_checked(self):
+        for branch in ("onigiri/x\u00a0y", "onigiri/x\u2028y"):
+            with tempfile.TemporaryDirectory() as tmp:
+                r, remote, _ = self.push(tmp, branch, "src/sealing.rs", "fn pair() {}\n")
+                self.assertNotEqual(r.returncode, 0, branch)
+                self.assertIn("patent hold", r.stderr)
+                self.assertEqual(remote, "")
+
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
             there = q.Patent({**pp.pol, "host": {**pp.pol["host"], "root": root}})
