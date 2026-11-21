@@ -1001,6 +1001,17 @@ class Pass(Case):
         queue.run_pass(self.pol)
         self.assertEqual(self.file()["running"]["a"]["worktree"], "/seen/t-a")
 
+    def test_a_dead_thread_whose_worktree_the_launch_could_not_read_still_finds_its_pr(self):
+        self.threads["a"] = ("t-a", None)
+        self.add("a")
+        queue.run_pass(self.pol)
+        self.pr_open(40)
+        self.status = {"t-a": "failed"}
+        with patch.object(queue, "branch_pr", lambda pol, it: 40 if it["worktree"] == "/seen/t-a" else None):
+            got = queue.run_pass(self.pol)
+        self.assertEqual(([(x["released"], x["state"]) for x in got["released"]], got["launched"]), ([("a", "waiting")], []))
+        self.assertEqual((sorted(self.file()["waiting"]), self.file()["tasks"]), (["a"], {}))
+
     def test_two_passes_never_run_at_once(self):
         self.add("a")
         with open(self.root / "pass.lock", "w") as held:

@@ -794,10 +794,11 @@ def reconcile(pol):
             if not isinstance(seen, dict):
                 rows = listing() if rows is None else rows
                 dead += [(key, True)] if it["thread"] not in [r["threadId"] for r in rows] else []
-            elif seen["thread"]["status"] in DEAD:
-                dead.append((key, seen["thread"]["status"] in DIED))
-            elif not it["worktree"] and seen["thread"]["worktreePath"]:
+                continue
+            if not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
+            if seen["thread"]["status"] in DEAD:
+                dead.append((key, seen["thread"]["status"] in DIED))
         return dead, changed
     return locked(pol, go)
 
