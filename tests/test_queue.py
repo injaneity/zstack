@@ -159,7 +159,7 @@ class Case(unittest.TestCase):
 
     def trees(self):
         return patch.multiple(queue, listed=lambda pol, path: (None, path), tidy=lambda pol, it, whole: True,
-                              branch_pr=lambda pol, it: None)
+                              branch_pr=lambda pol, it: None, pushed=lambda path: False)
 
 
 class Entry(Case):
@@ -928,6 +928,34 @@ class Release(Case):
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "dirty", "why": "nothing to merge"}, {"id": "open", "why": "PR 52 merged"}])
         left = [(self.root / "wt-open").exists(), (self.root / "wt-dirty").exists()]
         self.assertEqual((sorted(self.file()["waiting"]), left), (["ahead", "loose"], [False, False]))
+
+    def test_a_dead_thread_goes_back_to_tasks_only_when_nothing_it_was_on_reached_the_remote(self):
+        def git(*a, cwd):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+        up, clone = self.root / "up.git", self.root / "clone"
+        git("init", "-q", "--bare", str(up), cwd=self.root)
+        git("clone", "-q", str(up), str(clone), cwd=self.root)
+        git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
+        git("push", "-q", "origin", "HEAD", cwd=clone)
+        git("remote", "set-head", "origin", "--auto", cwd=clone)
+        self.pol["host"]["clone"] = str(clone)
+        self.pol["run"]["threads"] = 9
+        for x in ("idle", "local", "switched"):
+            git("worktree", "add", "-q", "-b", x, str(self.root / f"wt-{x}"), cwd=clone)
+            self.run_(x, worktree=str(self.root / f"wt-{x}"))
+        git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.root / "wt-local")
+        git("commit", "-q", "--allow-empty", "-m", "three", cwd=self.root / "wt-switched")
+        git("push", "-q", "origin", "switched", cwd=self.root / "wt-switched")
+        git("checkout", "-q", "-b", "follow-up", "origin/HEAD", cwd=self.root / "wt-switched")
+        self.forge.prs[40] = {"head": H1, "branch": "switched"}
+        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched")}
+        self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done"})
+        self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "
+                         f"{self.root / 'wt-local'} keeps its uncommitted or unpushed work")
+        self.assertEqual(got["switched"]["why"], "its thread died after it pushed, and no PR of its branch was found, so whether it "
+                         "opened one cannot be told")
+        self.assertEqual(([(self.root / f"wt-{x}").exists() for x in ("idle", "local")], sorted(self.file()["tasks"])),
+                         ([False, True], ["idle", "local"]))
 
     def test_a_queue_file_from_an_older_zstack_is_refused_by_name(self):
         for old in ({"items": {}}, {"items": {}, "done": []}, {"running": {}, "waiting": {}, "tasks": {}, "done": []}):

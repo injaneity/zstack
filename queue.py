@@ -955,6 +955,16 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
+def pushed(path):
+    rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
+    heads = sorted(set(out.split()))
+    if rc or not heads:
+        return bool(rc)
+    rc1, new = git("-C", path, "rev-list", *heads, "--not", "refs/remotes/origin/HEAD")
+    rc2, kept = git("-C", path, "rev-list", *heads, "--not", "--remotes")
+    return bool(rc1 or rc2 or set(new.split()) - set(kept.split()))
+
+
 def branch_pr(pol, it):
     path = listed(pol, it["worktree"])[1] if it["worktree"] else None
     if not path:
@@ -1122,6 +1132,8 @@ def outcome(pol, q, key, merge=False, died=False):
         return wait(str(e))
     if died and not live and not tree:
         why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
+    elif died and not live and pushed(tree):
+        why = "its thread died after it pushed, and no PR of its branch was found, so whether it opened one cannot be told"
     elif died and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
