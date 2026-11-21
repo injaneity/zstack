@@ -1158,6 +1158,8 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                   re.compile(r"\s*#(\s|$)")),
                  (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
 PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
+CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|"
+                        r"extern|require|include|static|type|struct|enum|impl|async|await)\b")
 LONG_LINE = 1000
 
 
@@ -1207,7 +1209,7 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
-            if prose and prose.match(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
+            if prose and prose.match(text) and not CODE_SHAPE.search(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
                 continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
@@ -1215,7 +1217,7 @@ class Patent:
     @staticmethod
     def plain(text, m):
         return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and "`" not in text and bool(PLAIN_TAIL.match(text, m.end())))
+                and bool(PLAIN_TAIL.match(text, m.end())))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
