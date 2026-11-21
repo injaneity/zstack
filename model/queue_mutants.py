@@ -86,13 +86,14 @@ M = [
     (
         "requeue-a-dropped-head",
         "the pass queues again a head GitHub dropped from the merge queue",
-        [("/\\ i \\notin inq /\\ i \\notin dropped\n", "/\\ i \\notin inq\n")],
+        [("/\\ i \\notin lost /\\ i \\notin dropped\n", "/\\ i \\notin lost\n")],
         "NoDroppedHeadIsQueued",
     ),
     (
         "a-new-head-is-blamed-for-a-drop",
-        "a drop stays charged to the PR after a push, so a new head that never entered the merge queue is never queued",
-        [("/\\ gone' = gone \\ {i} /\\ dropped' = dropped \\ {i}", "/\\ gone' = gone \\ {i} /\\ UNCHANGED dropped")],
+        "a pass that finds an entry gone charges the drop to the PR's current head, so a head pushed since, which never entered the merge queue, "
+        "is never queued",
+        [("dropped' = dropped \\cup ({i} \\cap gone)", "dropped' = dropped \\cup {i}")],
         "OnlyADroppedHeadIsBlocked",
     ),
     (

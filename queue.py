@@ -966,6 +966,8 @@ def its_pr(pol, q, it):
     other = branch_pr(pol, it) if live and live["state"] != "OPEN" else None
     if other and other != it["pr"]:
         q["verdicts"].pop(str(it["pr"]), None)
+        for k in ("queued", "seen", "dropped"):
+            it.pop(k, None)
         it["pr"], live = other, pr_view(pol, other)
     return live
 
@@ -1065,9 +1067,9 @@ def in_queue(pol, key, it, live):
     if not it.get("queued"):
         it["seen"] = seen
         return None
-    why = f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}"
-    if seen[0] > it["seen"][0]:
-        why += "; the queue also took an entry the pass did not add, whose head it cannot tell"
+    why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
+           "cannot be told" if seen[0] > it["seen"][0] else
+           f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
     it["dropped"], it["queued"] = {"head": it["queued"], "why": why}, None
     said = f"PR {pr} waits for the owner: {why}"
     wake(pol, "blocked", f"{key}: {said}", pr, it["thread"])

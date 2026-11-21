@@ -590,11 +590,30 @@ class Approve(Case):
         self.forge.prs[40].update(head=H2, adds=3, inq=False, removed=["the merge group failed ci-gate"] * 2)
         queue.verified(self.pol, "a", 40, H2, "review")
         self.wakes.clear()
-        why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: the merge group failed ci-gate; the queue also "
-               "took an entry the pass did not add, whose head it cannot tell")
+        why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue, and an entry the pass did not add since, so whose "
+               "reason is whose cannot be told")
         self.assertEqual((queue.step(self.pol)["kept"], self.wakes), ([{"id": "a", "why": why}], [("blocked", f"a: {why}", 40)]))
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}],
                                                                          ["40", "40"]))
+
+    def test_a_replacement_pr_starts_with_no_queue_record_from_the_pr_it_replaced(self):
+        self.run_("a", thread="t-a", worktree="/nowhere/wt-a")
+        self.pr_open(40)
+        self.forge.prs[40].update(branch="b", queue=True)
+        queue.verified(self.pol, "a", 40, H1, "review")
+        queue.approve(self.pol, "a")
+        with patch.object(queue, "listed", lambda pol, path: (None, path)), patch.object(queue, "git", lambda *a, cwd=None: (0, "b\n")):
+            queue.release(self.pol, "a")
+            queue.step(self.pol)
+            self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
+            queue.step(self.pol)
+            self.assertEqual(self.file()["waiting"]["a"]["dropped"]["head"], H1)
+            self.forge.prs[40]["state"] = "CLOSED"
+            self.forge.prs[41] = {"head": H1, "labels": [], "branch": "b", "queue": True}
+            queue.step(self.pol)
+            queue.verified(self.pol, "a", 41, H1, "review")
+            self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
+        self.assertEqual(self.queued(), ["40", "41"])
 
     def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
         self.waiting(said="auto")
