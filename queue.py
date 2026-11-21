@@ -731,14 +731,13 @@ def launch(pol, up):
     rc, base = git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     if rc:
         raise Refused(f"{clone} has no origin/HEAD, so its default branch is unknown: run `git remote set-head origin --auto` there")
-    start = git("-C", clone, "rev-parse", "refs/remotes/origin/HEAD")[1].strip() or None
     provider, model = model_for("coding", pol)
     got = t3(pol, "start", clone, "-", "--title", up["id"], "--provider", provider, "--model", model, "--worktree", base.strip(),
              stdin=brief(pol, up))
     if not isinstance(got, dict):
         raise Refused(f"no thread started for {up['id']}: {got}")
     seen = t3(pol, "show", got["threadId"], "--messages", "0")
-    return got["threadId"], seen["thread"]["worktreePath"] if isinstance(seen, dict) else None, start
+    return got["threadId"], seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
 
 
 def step(pol):
@@ -750,7 +749,7 @@ def step(pol):
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
-                                      "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
+                                      "thread": None, "worktree": None, "pr": None, "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
         said = {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}
@@ -759,13 +758,13 @@ def step(pol):
     if not up:
         return out
     try:
-        thread, worktree, start = launch(pol, up)
+        thread, worktree = launch(pol, up)
     except Refused as e:
         return dict(out, waiting=f"{e}; a later pass takes the thread if one did start, and launches {up['id']} again if none shows")
 
     def record(q):
         q["tasks"].pop(up["id"], None)
-        q["running"][up["id"]].update(thread=thread, worktree=worktree, start=start)
+        q["running"][up["id"]].update(thread=thread, worktree=worktree)
         return dict(out, launched={"id": up["id"], "thread": thread, "worktree": worktree}), True
     return locked(pol, record)
 
@@ -956,35 +955,34 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
-def reached(path, start):
-    rc, log = git("-C", path, "rev-parse", "--git-path", "logs/HEAD")
-    rc1, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
-    lines = (read_text(os.path.join(path, log.strip())) or "").splitlines()
-    heads = {x for line in lines for x in line.split()[:2] if x.strip("0")} | set(out.split())
-    heads = sorted(heads | {git("-C", path, "rev-parse", "HEAD")[1].strip()})
-    if rc or rc1 or not all(heads):
-        raise Refused(f"cannot read the commits its worktree {path} was on")
-    rc1, new = git("-C", path, "rev-list", *heads, "--not", start)
-    rc2, kept = git("-C", path, "rev-list", *heads, "--not", start, "--remotes")
-    rc3, trunk = git("-C", path, "symbolic-ref", "refs/remotes/origin/HEAD")
-    rc4, refs = git("-C", path, "for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes")
-    if rc1 or rc2 or rc3 or rc4:
-        raise Refused(f"cannot read the commits its worktree {path} was on")
-    old = set(heads) | {start}
-    on = {sha for sha, ref in (x.split() for x in refs.splitlines()) if sha in old and ref not in ("refs/remotes/origin/HEAD", trunk.strip())
-          and "update by push" in git("-C", path, "log", "-g", "--format=%gs", ref)[1]}
-    return sorted(set(new.split())), set(new.split()) - set(kept.split()) | on
+def log_push(pol, url, ref, head, cwd=None):
+    top = git("rev-parse", "--show-toplevel", cwd=cwd)[1].strip() or cwd or os.getcwd()
+    os.makedirs(root(pol), exist_ok=True)
+    with open(os.path.join(root(pol), "pushes.jsonl"), "a") as f:
+        f.write(json.dumps({"worktree": os.path.realpath(top), "url": url, "ref": ref, "head": head, "at": now(ms=True)}) + "\n")
 
 
-SEARCH_SHAS = 5
+def pushed_refs(pol, it):
+    path = os.path.realpath(os.path.expanduser(it["worktree"]))
+    try:
+        rows = [json.loads(x) for x in (read_text(os.path.join(root(pol), "pushes.jsonl")) or "").splitlines()]
+        return sorted({r["ref"] for r in rows if r["worktree"] == path and r["at"] >= it["at"]})
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
-def commit_pr(pol, new):
-    for i in range(0, len(new), SEARCH_SHAS):
-        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--state", "all", "--search", " OR ".join(new[i:i + SEARCH_SHAS]),
+def hooked(pol):
+    clone = os.path.expanduser(pol["host"]["clone"])
+    rc, hook = git("-C", clone, "rev-parse", "--git-path", "hooks/pre-push")
+    return not rc and os.path.realpath(os.path.join(clone, hook.strip())) == os.path.realpath(os.path.join(PKG, "hooks", "pre-push"))
+
+
+def head_pr(pol, refs):
+    for ref in refs:
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", ref.removeprefix("refs/heads/"), "--state", "all",
                           "--limit", "1", "--json", "number")
         if rc:
-            raise Refused(f"cannot look up the PR of commit {new[i]}: {err}")
+            raise Refused(f"cannot look up the PR of {ref}: {err}")
         found = json.loads(out) if out.strip() else []
         if found:
             return found[0]["number"]
@@ -1136,9 +1134,8 @@ def outcome(pol, q, key, merge=False, died=False):
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
     try:
         live = its_pr(pol, q, it)
-        tree = died and not live and it["worktree"] and it.get("start") and listed(pol, it["worktree"])[1]
-        new, published = reached(tree, it["start"]) if tree else ([], set())
-        found = commit_pr(pol, new)
+        refs = pushed_refs(pol, it) if died and not live and it.get("logged") and it["worktree"] and hooked(pol) else None
+        found = head_pr(pol, refs or [])
         if found:
             move(it, found)
             live = pr_view(pol, found)
@@ -1158,10 +1155,10 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if died and not live and not tree:
-        why = "its thread died, and without its worktree and the commit it started from, whether it opened a PR cannot be told"
-    elif died and not live and published:
-        why = "its thread died after it pushed, and no PR of its branch was found, so whether it opened one cannot be told"
+    if died and not live and refs is None:
+        why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
+    elif died and not live and refs:
+        why = f"its thread died after it pushed {', '.join(refs)}, and no PR of it was found, so whether it opened one cannot be told"
     elif died and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
@@ -1382,7 +1379,7 @@ class Patent:
         return status.startswith(sent)
 
     def main(self, argv, stdin, cwd=None, staging_ok=None, out=sys.stderr):
-        url, owner, refuse = argv[1] if len(argv) > 1 else "", self.pol["people"]["owner"], 0
+        url, owner, refuse, pushed = argv[1] if len(argv) > 1 else "", self.pol["people"]["owner"], 0, []
         for line in stdin.read().splitlines():
             f = line.split()
             if len(f) != 4 or f[1] == ZERO:
@@ -1397,9 +1394,11 @@ class Patent:
             hits = self.diff_hits(head, cwd) if self.on else []
             act = self.choose_remote(url, hits, staging_ok or self.staging_push_ok)
             if act == "push":
+                pushed.append((remote_ref, head))
                 continue
             refuse = 1
             if act == "staging" and git("push", f"https://github.com/{self.staging}", f"{head}:refs/heads/{branch}", cwd=cwd)[0] == 0:
+                log_push(self.pol, f"https://github.com/{self.staging}", f"refs/heads/{branch}", head, cwd)
                 out.write(f"patent hold: {branch} touches {self.words}, so it was pushed to the private "
                           f"repo {self.staging}, not to {url}. Open or update its PR there: gh pr create -R {self.staging} "
                           f"--head {branch}. Never push it to {self.public}.\n")
@@ -1408,6 +1407,8 @@ class Patent:
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
                       f"{self.public}. It stays local, and {woke}. Do not retry the push, push "
                       f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")
+        for ref, head in [] if refuse else pushed:
+            log_push(self.pol, url, ref, head, cwd)
         return refuse
 
 
