@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" release > /dev/null 2>&1; exit 0",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/queue.py\" release --died > /dev/null 2>&1; exit 0",
             "timeout": 60
           }
         ]
