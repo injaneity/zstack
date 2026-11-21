@@ -951,6 +951,10 @@ class Release(Case):
             "old": unknown, "unhooked": unknown})
         self.assertEqual((self.file()["waiting"]["pushed"]["pr"], sorted(self.file()["tasks"])), (40, ["early", "idle"]))
         (self.root / "wt-spaced ").mkdir()
+        (self.root / "wt-line\n").mkdir()
+        with patch.object(queue.os, "getcwd", lambda: str(self.root / "wt-line\n")):
+            queue.log_push(self.pol, "origin", "refs/heads/line", H1)
+        self.assertEqual(queue.pushed_refs(self.pol, {"worktree": str(self.root / "wt-line\n"), "at": ""}), ["refs/heads/line"])
         (self.root / "wt-unread").mkdir()
         self.run_("unread", worktree=str(self.root / "wt-unread"), priority=5)
         self.assertEqual(queue.pushed_refs(self.pol, {"worktree": str(self.root / "wt-spaced "), "at": ""}), [])

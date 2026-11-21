@@ -956,7 +956,7 @@ def tidy(pol, it, whole):
 
 
 def log_push(pol, url, ref, head, cwd=None):
-    top = git("rev-parse", "--show-toplevel", cwd=cwd)[1].rstrip("\n") or cwd or os.getcwd()
+    top = cwd or os.getcwd()
     os.makedirs(root(pol), exist_ok=True)
     with open(os.path.join(root(pol), "pushes.jsonl"), "a") as f:
         f.write(json.dumps({"worktree": os.path.realpath(top), "url": url, "ref": ref, "head": head, "at": now(ms=True)}) + "\n")
