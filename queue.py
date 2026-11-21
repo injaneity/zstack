@@ -1384,7 +1384,7 @@ class Patent:
     def main(self, argv, stdin, cwd=None, staging_ok=None, out=sys.stderr):
         url, owner, refuse, pushed = argv[1] if len(argv) > 1 else "", self.pol["people"]["owner"], 0, []
         for line in stdin.read().split("\n"):
-            f = line.split(" ")
+            f = line.rsplit(" ", 3)
             if len(f) != 4 or f[1] == ZERO:
                 continue
             _, head, remote_ref, _ = f

@@ -130,6 +130,18 @@ class PatentPush(unittest.TestCase):
                 self.assertIn("patent hold", r.stderr)
                 self.assertEqual(remote, "")
 
+    def test_a_source_with_spaces_is_still_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            g, pub, work, _ = self.repo(tmp)
+            Path(work, "src").mkdir()
+            Path(work, "src/sealing.rs").write_text("fn pair() {}\n")
+            g("add", ".", cwd=work)
+            g("commit", "-qm", "x", cwd=work)
+            r = subprocess.run(["git", "push", "origin", "HEAD@{0 seconds ago}:refs/heads/onigiri/x"], cwd=work, capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("patent hold", r.stderr)
+            self.assertEqual(g("ls-remote", pub, "refs/heads/onigiri/x"), "")
+
     def test_a_patent_wake_that_failed_is_sent_again_on_the_next_push(self):
         with tempfile.TemporaryDirectory() as root:
             there = q.Patent({**pp.pol, "host": {**pp.pol["host"], "root": root}})
