@@ -556,12 +556,12 @@ class Approve(Case):
         self.start("app-1", "t-1", "/nowhere/1")
         self.forge.issues[1] = []
         self.pr_open(41)
+        self.forge.prs[41]["queue"] = True
         queue.verified(self.pol, "app-1", 41, H1, "auto")
         queue.release(self.pol, "app-1")
         self.waiting("a")
-        for ident in ("a", "app-1"):
-            queue.approve(self.pol, ident)
-        self.forge.prs[40]["queue"] = self.forge.prs[41]["queue"] = True
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
         queue.step(self.pol)
         self.forge.prs[40]["labels"], self.forge.issues[1] = [review], [review]
         out = "it needs a person's review, so the pass took it out of the merge queue"
@@ -677,7 +677,7 @@ class Approve(Case):
     def test_a_pass_never_queues_an_approved_pr_on_a_merge_queue_base_that_fails_any_gate(self):
         self.never({"queue": True}, "the pass could not put it in the merge queue")
 
-    def never(self, base, refused):
+    def never(self, base, refused, approve=True):
         hold = M["hold_label"]
         cases = (("unverified", {"said": "fail"}, {}, f"the verifier has not passed head {H1}"),
                  ("moved", {}, {"head": H2}, f"the verifier has not passed head {H2}"),
@@ -716,8 +716,9 @@ class Approve(Case):
                  ("null-check", {}, {"then": {"nulls": True}}, "it could not be read again just before the merge: not the answer asked for"),
                  ("refused", {}, {"refuse": "base branch policy prohibits the merge"}, f"{refused}: base branch policy prohibits the merge"))
         for n, (ident, made, then, _) in enumerate(cases):
-            self.waiting(ident, pr=50 + n, **made)
-            queue.approve(self.pol, ident)
+            self.waiting(ident, pr=50 + n, **{"said": "review" if approve else "auto", **made})
+            if approve:
+                queue.approve(self.pol, ident)
             self.forge.prs[50 + n].update({**base, **then})
         got = queue.step(self.pol)
         self.assertEqual(got["cleared"], [])
@@ -750,10 +751,23 @@ class Approve(Case):
         self.forge.issues[1] = []
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "app-1", "why": "PR 40 merged"}])
 
-    def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
+    def test_a_pass_merges_an_unapproved_waiting_pr_whose_head_passed_as_auto_and_leaves_a_review_pass_for_its_owner(self):
+        self.waiting("b", pr=41)
         self.waiting(said="auto")
-        self.assertEqual((queue.step(self.pol)["cleared"], self.merges()), ([], []))
-        self.assertEqual(self.settle("a"), ("waiting", "PR 40 waits for the owner: its thread did not merge it"))
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": "PR 40 merged"}])
+        self.assertEqual((self.merges(), self.settle("b")), (["40"], ("waiting", "PR 41 waits for the owner: it needs a person's review")))
+
+    def test_on_a_merge_queue_base_a_pass_queues_an_unapproved_waiting_pr_whose_head_passed_as_auto(self):
+        self.waiting(said="auto")
+        self.forge.prs[40]["queue"] = True
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}])
+        self.assertEqual((self.queued(), self.merges()), (["40"], []))
+
+    def test_a_pass_never_merges_an_unapproved_auto_pr_that_fails_any_gate(self):
+        self.never({}, "the pass could not merge it", approve=False)
+
+    def test_a_pass_never_queues_an_unapproved_auto_pr_on_a_merge_queue_base_that_fails_any_gate(self):
+        self.never({"queue": True}, "the pass could not put it in the merge queue", approve=False)
 
 
 class Release(Case):
@@ -1043,7 +1057,7 @@ class Cli(Case):
             with patch("sys.stderr", io.StringIO()) as err:
                 self.assertEqual(queue.main(["pass"]), 1)
             self.assertEqual(err.getvalue(), "queue: T3 Code does not answer, so no thread can be read or launched: connection refused\n")
-        self.assertEqual(sorted(self.file()["waiting"]), ["a"])
+        self.assertEqual((self.file()["waiting"], [a[2] for a in self.forge.calls if a[:2] == ("pr", "merge")]), ({}, ["40"]))
 
 
 if __name__ == "__main__":
