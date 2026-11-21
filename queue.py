@@ -1215,7 +1215,7 @@ class Patent:
     @staticmethod
     def plain(text, m):
         return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and text.count("`", 0, m.start()) % 2 == 0 and bool(PLAIN_TAIL.match(text, m.end())))
+                and "`" not in text and bool(PLAIN_TAIL.match(text, m.end())))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
