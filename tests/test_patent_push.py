@@ -65,20 +65,22 @@ class PatentPush(unittest.TestCase):
                 self.assertTrue(pp.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(pp.held_hits(["docs/skyhook.md"], "diff --git a/docs/skyhook.md b/docs/skyhook.md\n+| a | b |\n"))
 
-    def test_a_plain_lowercase_held_word_in_a_comment_or_doc_line_is_skipped(self):
+    def test_a_plain_lowercase_held_word_in_a_code_comment_is_skipped(self):
         words = q.Patent({**pp.pol, "patent": {**pp.pol["patent"], "held_words": ["teleport", "keyvault", "pairing"]}})
         seam = "                // pairing still sends this explicitly on graceful"
         moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
         self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
         for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- a teleporting row: none"),
-                           ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.md", "the pairing's order")):
+                           ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.go", "// the pairing's order")):
             with self.subTest(line=line):
                 self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
         for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
                            ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
                            ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
                            ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
-                           ("a.md", "the KEYVAULT rules"), ("a.md", "Pairing is new.")):
+                           ("a.rs", "// the KEYVAULT rules"), ("a.rs", "// Pairing is new."), ("a.md", "the pairing is new"),
+                           ("a.md", "let mut pairing = vec![];"), ("a.md", "[Setup](pairing)"), ("a.c", "/* Reset state. */ pairing = 0;"),
+                           ("a.ts", "-- pairing;"), ("a.rs", "# pairing"), ("a.py", "// pairing"), ("a.txt", "# pairing")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
@@ -225,10 +227,10 @@ class PatentPush(unittest.TestCase):
 
     def test_a_combined_diff_counts_only_the_merges_own_lines(self):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
-              " +// skyhook from main\n++// resolved\n")
+              " +// Skyhook from main\n++// resolved\n")
         self.assertEqual(pp.held_hits([], cc), [])
-        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++vaultkey::resolve();")))
-        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n---skyhook removed\n"))
+        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// Vaultkey in the resolution")))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- Skyhook removed\n"))
 
     def test_merging_main_that_already_has_held_work_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:

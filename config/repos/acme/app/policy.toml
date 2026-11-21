@@ -15,7 +15,7 @@ skip = ["app/app-agents"]
 # whole section out, and that invariant, for a repo with no private twin. A change
 # whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
 # no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines. In a whole-line code
-# comment or a markdown line, a word that is plain lowercase prose does not count; a capitalised, quoted or joined one
+# comment, in that file's comment syntax, a word that is plain lowercase prose does not count; a capitalised, quoted or joined one
 # (`Skyhook`, `skyhookCode`, `skyhook_id`, `app-skyhook`, `skyhook.rs`) still does.
 [patent]
 held_words = ["skyhook", "vaultkey", "sealing"]

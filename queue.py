@@ -1152,7 +1152,11 @@ BUILT = re.compile(r"(^|/)(dist|bundle)/|\.(min|bundle)\.[cm]?js$")
 DOCS = re.compile(r"\.(md|mdx|markdown)$", re.I)
 DOC_ROW = re.compile(r"\s*\|")
 DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
-PROSE_COMMENT = re.compile(r"\s*(//|#(\s|$)|--\s|/\*)")
+PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swift|cs|mm?|scala|dart|zig|proto)$"),
+                  re.compile(r"\s*(//|/\*(?!.*\*/\s*\S))")),
+                 (re.compile(r"(\.(py|sh|bash|zsh|rb|ya?ml|toml|nix|ps1|cmake|tf)|(^|/)(Dockerfile|Makefile))$"),
+                  re.compile(r"\s*#(\s|$)")),
+                 (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
 PLAIN_TAIL = re.compile(r"[a-z]*('s)?(?=$|\s|[,;!?)]|:(?!:)|\.(\s|$))")
 LONG_LINE = 1000
 
@@ -1183,7 +1187,7 @@ class Patent:
 
     def held_hits(self, paths, diff):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
-        skip, docs, cols, hunk, lines = False, False, 1, False, []
+        skip, docs, cols, hunk, lines, prose = False, False, 1, False, [], None
         for line in (diff or "").splitlines() + ["@@"]:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
                 hits += unmatched(lines)
@@ -1191,6 +1195,7 @@ class Patent:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
                 skip, docs, cols, hunk = bool(self.lockfile.search(path) or BUILT.search(path)), bool(DOCS.search(path)), 1, False
+                prose = next((c for ext, c in PROSE_COMMENT if ext.search(path)), None)
                 continue
             if line.startswith("@@"):
                 cols, hunk = len(line) - len(line.lstrip("@")) - 1, True
@@ -1202,7 +1207,7 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
-            if (docs or PROSE_COMMENT.match(text)) and all(self.plain(text, m) for m in self.held.finditer(text)):
+            if prose and prose.match(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
                 continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
