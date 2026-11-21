@@ -1157,7 +1157,7 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                  (re.compile(r"(\.(py|sh|bash|zsh|rb|ya?ml|toml|nix|ps1|cmake|tf)|(^|/)(Dockerfile|Makefile))$"),
                   re.compile(r"\s*#(\s|$)")),
                  (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
-PLAIN_TAIL = re.compile(r"[a-z]*('s)?(?!::)[,;:!?).]*(?=\s|$)")
+PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
 LONG_LINE = 1000
 
 
@@ -1214,7 +1214,8 @@ class Patent:
 
     @staticmethod
     def plain(text, m):
-        return m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(") and bool(PLAIN_TAIL.match(text, m.end()))
+        return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
+                and text.count("`", 0, m.start()) % 2 == 0 and bool(PLAIN_TAIL.match(text, m.end())))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):

@@ -70,13 +70,14 @@ class PatentPush(unittest.TestCase):
         seam = "                // pairing still sends this explicitly on graceful"
         moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
         self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
-        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- a teleporting row: none"),
+        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- teleported, teleporting rows: none"),
                            ("a.c", "/* keyvaults (two) */"), ("a.ts", "// own 429s (pairing) say why"), ("a.go", "// the pairing's order")):
             with self.subTest(line=line):
                 self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
         for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
                            ("a.rs", "// from pairing::"),
                            ("a.rs", "// See pairing!() for it."), ("a.rs", "// pairing.,x"),
+                           ("a.rs", "// Import with `use pairing as transport;`"), ("a.rs", "// Start pairingbroker first"),
                            ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
                            ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
                            ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
