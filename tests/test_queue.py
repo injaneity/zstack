@@ -162,7 +162,7 @@ class Case(unittest.TestCase):
 
     def trees(self):
         return patch.multiple(queue, listed=lambda pol, path: (None, path), tidy=lambda pol, it, whole: True,
-                              branch_pr=lambda pol, it: None, pushed=lambda path: False, commit_pr=lambda pol, path: None)
+                              branch_pr=lambda pol, it: None, reached=lambda path: ([], set()), commit_pr=lambda pol, new: None)
 
 
 class Entry(Case):
@@ -941,6 +941,7 @@ class Release(Case):
         git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
         git("push", "-q", "origin", "HEAD", cwd=clone)
         git("remote", "set-head", "origin", "--auto", cwd=clone)
+        main = subprocess.run(["git", "branch", "--show-current"], cwd=clone, capture_output=True, text=True).stdout.strip()
         self.pol["host"]["clone"] = str(clone)
         self.pol["run"]["threads"] = 9
         for x in ("idle", "local", "switched"):
@@ -961,9 +962,17 @@ class Release(Case):
         git("merge", "-q", "--ff-only", "stack", cwd=self.root / "wt-direct")
         git("push", "-q", str(up), f"{sha}:refs/heads/published", cwd=self.root / "wt-direct")
         git("checkout", "-q", "-b", "follow-up-2", "origin/HEAD", cwd=self.root / "wt-direct")
+        git("worktree", "add", "-q", "-b", "landed", str(self.root / "wt-landed"), cwd=clone)
+        self.run_("landed", worktree=str(self.root / "wt-landed"))
+        git("merge", "-q", "--ff-only", "stack", cwd=self.root / "wt-landed")
+        git("push", "-q", str(up), f"{sha}:refs/heads/release-fix", cwd=self.root / "wt-landed")
+        git("checkout", "-q", "-b", "away", "stack~6", cwd=self.root / "wt-landed")
+        git("push", "-q", "origin", f"{sha}:refs/heads/{main}", cwd=clone)
+        git("fetch", "-q", "origin", cwd=clone)
         self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
-        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct")}
-        self.assertEqual({x: v["state"] for x, v in got.items()}, {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting"})
+        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct", "landed")}
+        self.assertEqual({x: v["state"] for x, v in got.items()},
+                         {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting", "landed": "waiting"})
         said = f"PR 41 waits for the owner: the verifier has not passed head {sha}"
         self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (said, 41))
         self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "

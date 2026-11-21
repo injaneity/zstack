@@ -955,26 +955,22 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
-def pushed(path):
+def reached(path):
     rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
-    heads = sorted(set(out.split()))
+    heads = out.split()
     if rc or not heads:
-        return bool(rc)
-    rc1, new = git("-C", path, "rev-list", *heads, "--not", "refs/remotes/origin/HEAD")
-    rc2, kept = git("-C", path, "rev-list", *heads, "--not", "--remotes")
-    return bool(rc1 or rc2 or set(new.split()) - set(kept.split()))
+        raise Refused(f"cannot read the commits its worktree {path} was on")
+    rc1, new = git("-C", path, "rev-list", *sorted(set(heads)), "--not", heads[-1])
+    rc2, kept = git("-C", path, "rev-list", *sorted(set(heads)), "--not", heads[-1], "--remotes")
+    if rc1 or rc2:
+        raise Refused(f"cannot read the commits its worktree {path} was on")
+    return sorted(set(new.split())), set(new.split()) - set(kept.split())
 
 
 SEARCH_SHAS = 5
 
 
-def commit_pr(pol, path):
-    rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
-    heads = sorted(set(out.split()))
-    rc2, new = git("-C", path, "rev-list", *heads, "--not", "refs/remotes/origin/HEAD") if heads and not rc else (rc, "")
-    if rc or rc2:
-        raise Refused(f"cannot read the commits its worktree {path} was on")
-    new = sorted(set(new.split()))
+def commit_pr(pol, new):
     for i in range(0, len(new), SEARCH_SHAS):
         rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--state", "all", "--search", " OR ".join(new[i:i + SEARCH_SHAS]),
                           "--limit", "1", "--json", "number")
@@ -1132,7 +1128,8 @@ def outcome(pol, q, key, merge=False, died=False):
     try:
         live = its_pr(pol, q, it)
         tree = died and not live and it["worktree"] and listed(pol, it["worktree"])[1]
-        found = commit_pr(pol, tree) if tree else None
+        new, published = reached(tree) if tree else ([], set())
+        found = commit_pr(pol, new)
         if found:
             move(it, found)
             live = pr_view(pol, found)
@@ -1154,7 +1151,7 @@ def outcome(pol, q, key, merge=False, died=False):
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
     if died and not live and not tree:
         why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
-    elif died and not live and pushed(tree):
+    elif died and not live and published:
         why = "its thread died after it pushed, and no PR of its branch was found, so whether it opened one cannot be told"
     elif died and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
