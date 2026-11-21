@@ -52,4 +52,26 @@ git -C "$tmp/pkg" remote set-url origin "$tmp/missing.git"
 out=$(ens 2>&1 >/dev/null); rc=$?
 check "failed fetch exits 1" "$rc" 1
 has "failed fetch names the failure" "$out" "fetch origin main failed"
+
+git -C "$tmp/pkg" remote set-url origin "$tmp/origin.git"
+plugins="$tmp/home/.claude/plugins"; mkdir -p "$plugins" "$tmp/bin"
+printf '{"zstack": {"installLocation": "%s"}}\n' "$(cd "$tmp/pkg" && pwd -P)" > "$plugins/known_marketplaces.json"
+installed() { printf '{"plugins": {"zstack@zstack": [{"gitCommitSha": "%s"}]}}\n' "$1" > "$plugins/installed_plugins.json"; }
+cat > "$tmp/bin/claude" <<EOF
+#!/bin/bash
+if [ "\$2" = update ] && [ -f "$tmp/next" ]; then printf '{"plugins": {"zstack@zstack": [{"gitCommitSha": "%s"}]}}\n' "\$(cat "$tmp/next")" > "$plugins/installed_plugins.json"; fi
+EOF
+chmod +x "$tmp/bin/claude"
+plug() { HOME="$tmp/home" PATH="$tmp/bin:$PATH" "$tmp/pkg/queue.py" update; }
+lacks() { case "$2" in *"$3"*) echo "FAIL  $1: '$2' has '$3'"; fail=1;; *) echo "ok    $1";; esac; }
+
+installed old; advance four
+out=$(plug 2>&1); rc=$?
+check "an unchanged plugin exits 0" "$rc" 0
+lacks "an unchanged plugin is not called updated" "$out" "plugin updated"
+
+installed old; advance five; git -C "$tmp/seed" rev-parse HEAD > "$tmp/next"
+out=$(plug 2>&1); rc=$?
+check "a changed plugin exits 0" "$rc" 0
+has "a changed plugin is called updated" "$out" "zstack: plugin updated; new threads load it"
 exit $fail
