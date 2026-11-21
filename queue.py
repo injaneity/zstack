@@ -30,10 +30,12 @@ USAGE = (
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
     "  queue.py gate <pr> <head>        may that head of that PR merge now; exits 1 with the reason when it may not\n"
-    "  queue.py release [<id>|--hook]   the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
+    "  queue.py release [<id>|--hook|--died]\n"
+    "                                   the thread's turn ended: free its slot and tell the orchestrator the outcome.\n"
     "                                   An item whose PR is still open waits on it and keeps its worktree; a finished\n"
     "                                   one is forgotten. With no id, the item of the thread that runs it. With --hook,\n"
-    "                                   exit 3 and free nothing while its open PR's head has no verdict\n"
+    "                                   exit 3 and free nothing while its open PR's head has no verdict. With --died,\n"
+    "                                   the turn failed, so an item with no PR goes back to tasks to run again\n"
     "  queue.py list                    what this machine holds: running, waiting, tasks, verdicts, done\n"
     "The config:\n"
     "  queue.py check                   parse and validate the machine file, each repo it works on and the invariants\n"
@@ -710,6 +712,7 @@ def brief(pol, it):
 
 
 DEAD = ("completed", "failed", "interrupted", "cancelled")
+DIED = ("failed", "interrupted", "cancelled")
 
 
 def t3(pol, *args, stdin=None):
@@ -747,6 +750,8 @@ def step(pol):
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
                                       "thread": None, "worktree": None, "pr": None, "at": now(ms=True)}
+            if up["kind"] == "task":
+                q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
         said = {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}
         return (up, said), bool(gone or up) or json.dumps(q, sort_keys=True) != was
     up, out = locked(pol, intend)
@@ -788,9 +793,9 @@ def reconcile(pol):
             seen = t3(pol, "show", it["thread"], "--messages", "0")
             if not isinstance(seen, dict):
                 rows = listing() if rows is None else rows
-                dead += [key] if it["thread"] not in [r["threadId"] for r in rows] else []
+                dead += [(key, True)] if it["thread"] not in [r["threadId"] for r in rows] else []
             elif seen["thread"]["status"] in DEAD:
-                dead.append(key)
+                dead.append((key, seen["thread"]["status"] in DIED))
             elif not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
         return dead, changed
@@ -805,9 +810,9 @@ def run_pass(pol):
         except OSError:
             raise Refused("another pass is running on this machine") from None
         out = {"released": [], "launched": [], "cleared": [], "kept": []}
-        for key in reconcile(pol):
+        for key, died in reconcile(pol):
             try:
-                out["released"].append(release(pol, key))
+                out["released"].append(release(pol, key, died=died))
             except Refused:
                 pass
         while True:
@@ -1082,11 +1087,12 @@ def in_queue(pol, key, it, live):
     return said
 
 
-def outcome(pol, q, key, merge=False):
+def outcome(pol, q, key, merge=False, died=False):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
+    died = died or it.pop("died", False)
 
     def wait(why):
-        q["waiting"][key] = it
+        q["waiting"][key] = {**it, "died": True} if died else it
         return "waiting", why
     try:
         live = its_pr(pol, q, it)
@@ -1106,6 +1112,12 @@ def outcome(pol, q, key, merge=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
+    if died and not live and (it["kind"] != "task" or "task" in it):
+        kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
+        if it["kind"] == "task":
+            q["tasks"][key] = {**it["task"], "preapproved": it["preapproved"]}
+        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
+        return "tasks", f"its thread died with no PR, so it goes back to tasks to run again{kept}"
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
@@ -1124,7 +1136,7 @@ def unverified(pol, q, it):
     return None
 
 
-def release(pol, ident=None, hook=False):
+def release(pol, ident=None, hook=False, died=False):
     thread = os.environ.get(THREAD_VAR)
 
     def go(q):
@@ -1138,7 +1150,7 @@ def release(pol, ident=None, hook=False):
         if held_back:
             return Unfinished(held_back), False
         it = q[was][key]
-        state, why = outcome(pol, q, key)
+        state, why = outcome(pol, q, key, died=died)
         said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
         return {"released": key, "state": state, "why": why, "wake": said}, True
     out = locked(pol, go)
@@ -1151,7 +1163,7 @@ def settle(pol, q):
     cleared, kept = [], []
     for key in sorted(q["waiting"]):
         state, why = outcome(pol, q, key, merge=True)
-        (cleared if state == "done" else kept).append({"id": key, "why": why})
+        (kept if state == "waiting" else cleared).append({"id": key, "why": why})
     return cleared, kept
 
 
@@ -1376,6 +1388,8 @@ def queue_command(pol, argv, stdin):
         return gate(pol, int(argv[1]), argv[2])
     if argv == ["release", "--hook"]:
         return release(pol, hook=True)
+    if argv == ["release", "--died"]:
+        return release(pol, died=True)
     if argv[:1] == ["release"] and len(argv) <= 2:
         return release(pol, argv[1] if len(argv) == 2 else None)
     if argv == ["list"]:

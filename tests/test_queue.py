@@ -836,6 +836,34 @@ class Release(Case):
             with self.assertRaisesRegex(queue.Refused, f"{bad} is not running or waiting on its PR"):
                 queue.release(self.pol, bad)
 
+    def test_a_thread_that_dies_with_no_pr_goes_back_to_tasks_and_runs_again(self):
+        self.pol["run"]["threads"] = 9
+        self.cands = [cand(1)]
+        self.start("app-1")
+        self.add("a", "take over PR 40", priority=3)
+        row = self.file()["tasks"]["a"]
+        self.start("a")
+        queue.approve(self.pol, "a")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+            got = queue.release(self.pol, died=True)
+        said = "its thread died with no PR, so it goes back to tasks to run again"
+        self.assertEqual((got["state"], got["why"], self.wakes), ("tasks", said, [("blocked", f"a: {said}", None)]))
+        self.assertEqual((self.file()["tasks"], self.file()["done"]), ({"a": {**row, "preapproved": True}}, []))
+        self.status = {"t-app-1": "failed"}
+        got = queue.run_pass(self.pol)
+        self.assertEqual([(x["released"], x["state"], x["why"]) for x in got["released"]], [("app-1", "tasks", said)])
+        self.assertEqual(([x["id"] for x in got["launched"]], [x["task"] for x in self.briefed[-2:-1]]), (["a", "app-1"], ["take over PR 40"]))
+        self.assertEqual((sorted(self.file()["running"]), self.file()["tasks"], self.file()["done"]), (["a", "app-1"], {}, []))
+        with patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
+            self.assertEqual(queue.release(self.pol, "a", died=True)["state"], "waiting")
+        self.status = {"t-app-1": "completed"}
+        got = queue.run_pass(self.pol)
+        self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("app-1", "done")])
+        self.assertEqual((got["cleared"], [x["id"] for x in got["launched"]]), ([{"id": "a", "why": said}], ["a"]))
+        self.assertEqual((sorted(self.file()["running"]), self.file()["waiting"], self.file()["done"]), (["a"], {}, ["app-1"]))
+        queue.locked(self.pol, lambda q: (q["running"]["a"].pop("task"), True))
+        self.assertEqual(queue.release(self.pol, "a", died=True)["why"], "nothing to merge")
+
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
         with patch.object(queue, "branch_pr", side_effect=queue.Refused("cannot look up the PR of branch a: gh down")):
@@ -934,7 +962,7 @@ class Pass(Case):
             self.run_(x)
         for x in ("c", "d"):
             self.add(x)
-        self.status = {"t-a": "interrupted"}
+        self.status = {"t-a": "completed"}
         got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("a", "done")])
         self.assertEqual(([x["id"] for x in got["launched"]], got["waiting"]), (["c"], "the machine is at its thread cap"))
@@ -944,8 +972,11 @@ class Pass(Case):
         for said in queue.DEAD:
             self.run_(said)
             self.status = {f"t-{said}": said, "t-c": "waiting", "t-b": "queued"}
-            self.assertEqual([x["released"] for x in queue.run_pass(self.pol)["released"]], [said])
-        self.assertEqual(sorted(self.file()["running"]), ["b", "c", "d"])
+            got = queue.run_pass(self.pol)
+            self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [(said, "tasks" if said in queue.DIED else "done")])
+            self.assertEqual([x["id"] for x in got["launched"]], [said] if said in queue.DIED else [])
+            self.status = {}
+        self.assertEqual(sorted(self.file()["running"]), ["b", "c", "cancelled", "d", "failed", "interrupted"])
 
     def test_only_a_thread_t3_no_longer_lists_is_freed_and_a_t3_that_does_not_answer_frees_and_launches_nothing(self):
         self.pol["run"]["threads"] = 1
@@ -960,7 +991,8 @@ class Pass(Case):
         self.assertEqual((got["released"], got["launched"], got["waiting"]), ([], [], "the machine is at its thread cap"))
         self.listing = []
         got = queue.run_pass(self.pol)
-        self.assertEqual(([x["released"] for x in got["released"]], [x["id"] for x in got["launched"]]), (["a"], ["b"]))
+        self.assertEqual(([x["released"] for x in got["released"]], [x["id"] for x in got["launched"]]), (["a"], ["a"]))
+        self.assertEqual(sorted(self.file()["tasks"]), ["b"])
 
     def test_a_worktree_the_launch_could_not_read_is_filled_in_by_the_next_pass(self):
         self.threads["a"] = ("t-a", None)
@@ -1037,7 +1069,7 @@ class Cli(Case):
                 self.assertEqual(queue.main(["gate", "40", H1]), 1)
             self.assertEqual(err.getvalue(), f"queue: PR 40 does not merge: the verifier has not passed head {H1}\n")
             self.assertEqual(queue.main(["verified", "a", "40", H1, "auto"]), 0)
-            for ok in (["gate", "40", H1], ["release", "--hook"], ["release", "a"], ["release"], ["list"], ["pass"]):
+            for ok in (["gate", "40", H1], ["release", "--hook"], ["release", "--died"], ["release", "a"], ["release"], ["list"], ["pass"]):
                 self.assertEqual(queue.main(ok), 0, ok)
             self.t3_down = True
             with patch("sys.stderr", io.StringIO()) as err:

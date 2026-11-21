@@ -163,6 +163,12 @@ M = [
         "NothingUnfinishedIsCleared",
     ),
     (
+        "clear-a-dead-thread-with-no-pr",
+        "an item whose thread died before it opened a PR is cleared as done, so it never runs again",
+        [('     ELSE Set(m, i, "none") /\\ thread\'', '     ELSE Set(m, i, "done") /\\ thread\'')],
+        "ADeadThreadWithNoPRIsRunAgain",
+    ),
+    (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
         [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],
