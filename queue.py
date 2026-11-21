@@ -1157,7 +1157,7 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                  (re.compile(r"(\.(py|sh|bash|zsh|rb|ya?ml|toml|nix|ps1|cmake|tf)|(^|/)(Dockerfile|Makefile))$"),
                   re.compile(r"\s*#(\s|$)")),
                  (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
-PLAIN_TAIL = re.compile(r"[a-z]*('s)?[,;:!?).]*(?=\s|$)")
+PLAIN_TAIL = re.compile(r"[a-z]*('s)?(?!::)[,;:!?).]*(?=\s|$)")
 LONG_LINE = 1000
 
 
