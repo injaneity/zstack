@@ -70,7 +70,7 @@ class PatentPush(unittest.TestCase):
         seam = "                // pairing still sends this explicitly on graceful"
         moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
         self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
-        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.sql", "-- teleported rows are not teleporting"),
+        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.yml", "# teleported rows are not teleporting"),
                            ("a.c", "/* the keyvaults (two) are sealed */"),
                            ("a.ts", "// own 429s (pairing) say why in the body"), ("a.go", "// the pairing's order is kept")):
             with self.subTest(line=line):
@@ -89,7 +89,9 @@ class PatentPush(unittest.TestCase):
                            ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
                            ("a.rs", "// the KEYVAULT rules"), ("a.rs", "// Pairing is new."), ("a.md", "the pairing is new"),
                            ("a.md", "let mut pairing = vec![];"), ("a.md", "[Setup](pairing)"), ("a.c", "/* Reset state. */ pairing = 0;"),
-                           ("a.ts", "-- pairing;"), ("a.rs", "# pairing"), ("a.py", "// pairing"), ("a.txt", "# pairing")):
+                           ("a.ts", "-- pairing;"), ("a.rs", "# pairing"), ("a.sh", "# cp the pairing to it"),
+                           ("a.sql", "-- select id from pairing where id is not null"), ("a.py", "# cp -a pairing to the backup"),
+                           ("a.py", "# copy the pairing to /tmp"), ("a.py", "// pairing"), ("a.txt", "# pairing")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))

@@ -1154,11 +1154,9 @@ DOC_ROW = re.compile(r"\s*\|")
 DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
 PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swift|cs|mm?|scala|dart|zig|proto)$"),
                   re.compile(r"\s*(//|/\*(?!.*\*/\s*\S))")),
-                 (re.compile(r"(\.(py|sh|bash|zsh|rb|ya?ml|toml|nix|ps1|cmake|tf)|(^|/)(Dockerfile|Makefile))$"),
-                  re.compile(r"\s*#(\s|$)")),
-                 (re.compile(r"\.(sql|lua|hs)$"), re.compile(r"\s*--(\s|$)"))]
+                 (re.compile(r"\.(py|ya?ml|toml)$"), re.compile(r"\s*#(\s|$)"))]
 PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
-CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|"
+CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|\w/|/\w|(^|\s)-\w|^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|"
                         r"export|extern|require|include|static|type|struct|enum|impl|async|await)\b")
 ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
                     "then than which who we you they our has have does do can will should must".split())
