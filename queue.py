@@ -731,13 +731,14 @@ def launch(pol, up):
     rc, base = git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     if rc:
         raise Refused(f"{clone} has no origin/HEAD, so its default branch is unknown: run `git remote set-head origin --auto` there")
+    start = git("-C", clone, "rev-parse", "refs/remotes/origin/HEAD")[1].strip() or None
     provider, model = model_for("coding", pol)
     got = t3(pol, "start", clone, "-", "--title", up["id"], "--provider", provider, "--model", model, "--worktree", base.strip(),
              stdin=brief(pol, up))
     if not isinstance(got, dict):
         raise Refused(f"no thread started for {up['id']}: {got}")
     seen = t3(pol, "show", got["threadId"], "--messages", "0")
-    return got["threadId"], seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
+    return got["threadId"], seen["thread"]["worktreePath"] if isinstance(seen, dict) else None, start
 
 
 def step(pol):
@@ -758,13 +759,13 @@ def step(pol):
     if not up:
         return out
     try:
-        thread, worktree = launch(pol, up)
+        thread, worktree, start = launch(pol, up)
     except Refused as e:
         return dict(out, waiting=f"{e}; a later pass takes the thread if one did start, and launches {up['id']} again if none shows")
 
     def record(q):
         q["tasks"].pop(up["id"], None)
-        q["running"][up["id"]].update(thread=thread, worktree=worktree)
+        q["running"][up["id"]].update(thread=thread, worktree=worktree, start=start)
         return dict(out, launched={"id": up["id"], "thread": thread, "worktree": worktree}), True
     return locked(pol, record)
 
@@ -955,13 +956,13 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
-def reached(path):
+def reached(path, start):
     rc, out = git("-C", path, "log", "-g", "--format=%H", "HEAD")
-    heads = out.split()
-    if rc or not heads:
+    heads = sorted(set(out.split()) | {git("-C", path, "rev-parse", "HEAD")[1].strip()})
+    if rc or not all(heads):
         raise Refused(f"cannot read the commits its worktree {path} was on")
-    rc1, new = git("-C", path, "rev-list", *sorted(set(heads)), "--not", heads[-1])
-    rc2, kept = git("-C", path, "rev-list", *sorted(set(heads)), "--not", heads[-1], "--remotes")
+    rc1, new = git("-C", path, "rev-list", *heads, "--not", start)
+    rc2, kept = git("-C", path, "rev-list", *heads, "--not", start, "--remotes")
     if rc1 or rc2:
         raise Refused(f"cannot read the commits its worktree {path} was on")
     return sorted(set(new.split())), set(new.split()) - set(kept.split())
@@ -1127,8 +1128,8 @@ def outcome(pol, q, key, merge=False, died=False):
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
     try:
         live = its_pr(pol, q, it)
-        tree = died and not live and it["worktree"] and listed(pol, it["worktree"])[1]
-        new, published = reached(tree) if tree else ([], set())
+        tree = died and not live and it["worktree"] and it.get("start") and listed(pol, it["worktree"])[1]
+        new, published = reached(tree, it["start"]) if tree else ([], set())
         found = commit_pr(pol, new)
         if found:
             move(it, found)
@@ -1150,7 +1151,7 @@ def outcome(pol, q, key, merge=False, died=False):
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
     if died and not live and not tree:
-        why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
+        why = "its thread died, and without its worktree and the commit it started from, whether it opened a PR cannot be told"
     elif died and not live and published:
         why = "its thread died after it pushed, and no PR of its branch was found, so whether it opened one cannot be told"
     elif died and not live and (it["kind"] != "task" or "task" in it):

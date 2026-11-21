@@ -116,7 +116,7 @@ class Case(unittest.TestCase):
         self.pol["host"]["root"] = str(self.root)
         self.pol["run"]["threads"] = 2
         self.forge, self.cands, self.open, self.wakes, self.woken = Forge(), [], {}, [], []
-        self.threads, self.briefed, self.status, self.t3_down, self.listing = {}, [], {}, False, []
+        self.threads, self.briefed, self.status, self.t3_down, self.listing, self.starts = {}, [], {}, False, [], {}
         for p in (patch.object(queue, "gh", self.forge.gh),
                   patch.object(queue, "candidates", lambda errors, pol: list(self.cands)),
                   patch.object(queue, "open_prs", lambda errors, name: dict(self.open)),
@@ -131,7 +131,7 @@ class Case(unittest.TestCase):
 
     def launch(self, pol, up):
         self.briefed.append(up)
-        return self.threads.get(up["id"], (f"t-{up['id']}", f"/nowhere/wt-{up['id']}"))
+        return (*self.threads.get(up["id"], (f"t-{up['id']}", f"/nowhere/wt-{up['id']}")), self.starts.get(up["id"], "0" * 40))
 
     def t3(self, pol, *args, stdin=None):
         if self.t3_down:
@@ -162,7 +162,7 @@ class Case(unittest.TestCase):
 
     def trees(self):
         return patch.multiple(queue, listed=lambda pol, path: (None, path), tidy=lambda pol, it, whole: True,
-                              branch_pr=lambda pol, it: None, reached=lambda path: ([], set()), commit_pr=lambda pol, new: None)
+                              branch_pr=lambda pol, it: None, reached=lambda path, start: ([], set()), commit_pr=lambda pol, new: None)
 
 
 class Entry(Case):
@@ -502,7 +502,7 @@ class Approve(Case):
 
         def launch(pol, up):
             self.assertEqual(queue.approve(self.pol, "a"), {"id": "a", "preapproved": "running"})
-            return "t-a", "/nowhere/wt-a"
+            return "t-a", "/nowhere/wt-a", "0" * 40
         with patch.object(queue, "launch", launch):
             self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
         self.assertEqual((self.file()["tasks"], self.file()["running"]["a"]["preapproved"]), ({}, True))
@@ -876,7 +876,7 @@ class Release(Case):
         self.run_("gone")
         self.status = {"t-gone": "failed"}
         got = queue.run_pass(self.pol)
-        why = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
+        why = "its thread died, and without its worktree and the commit it started from, whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("gone", "done", why)], []))
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
@@ -942,6 +942,8 @@ class Release(Case):
         git("push", "-q", "origin", "HEAD", cwd=clone)
         git("remote", "set-head", "origin", "--auto", cwd=clone)
         main = subprocess.run(["git", "branch", "--show-current"], cwd=clone, capture_output=True, text=True).stdout.strip()
+        one = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, capture_output=True, text=True).stdout.strip()
+        self.starts = {x: one for x in ("idle", "local", "switched", "direct", "landed", "expired")}
         self.pol["host"]["clone"] = str(clone)
         self.pol["run"]["threads"] = 9
         for x in ("idle", "local", "switched"):
@@ -967,12 +969,23 @@ class Release(Case):
         git("merge", "-q", "--ff-only", "stack", cwd=self.root / "wt-landed")
         git("push", "-q", str(up), f"{sha}:refs/heads/release-fix", cwd=self.root / "wt-landed")
         git("checkout", "-q", "-b", "away", "stack~6", cwd=self.root / "wt-landed")
+        git("worktree", "add", "-q", "-b", "expired", str(self.root / "wt-expired"), cwd=clone)
+        self.run_("expired", worktree=str(self.root / "wt-expired"))
+        log = Path(subprocess.run(["git", "rev-parse", "--git-dir"], cwd=self.root / "wt-expired", capture_output=True, text=True).stdout.strip())
+        log = (self.root / "wt-expired" / log if not log.is_absolute() else log) / "logs" / "HEAD"
+        log.write_text(re.sub(r"> \d+ ", "> 1000000000 ", log.read_text()))
+        git("commit", "-q", "--allow-empty", "-m", "expired", cwd=self.root / "wt-expired")
+        late = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root / "wt-expired", capture_output=True, text=True).stdout.strip()
+        git("push", "-q", "origin", "HEAD:pr-expired", cwd=self.root / "wt-expired")
+        git("checkout", "-q", "-b", "fresh", one, cwd=self.root / "wt-expired")
+        git("reflog", "expire", "--expire=90.days.ago", "--expire-unreachable=30.days.ago", "HEAD", cwd=self.root / "wt-expired")
+        self.forge.prs[43] = {"head": late, "branch": "pr-expired", "commits": [late]}
         git("push", "-q", "origin", f"{sha}:refs/heads/{main}", cwd=clone)
         git("fetch", "-q", "origin", cwd=clone)
         self.forge.prs[41] = {"head": sha, "branch": "published", "commits": [sha]}
-        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct", "landed")}
+        got = {x: queue.release(self.pol, x, died=True) for x in ("idle", "local", "switched", "direct", "landed", "expired")}
         self.assertEqual({x: v["state"] for x, v in got.items()},
-                         {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting", "landed": "waiting"})
+                         {"idle": "tasks", "local": "tasks", "switched": "done", "direct": "waiting", "landed": "waiting", "expired": "waiting"})
         said = f"PR 41 waits for the owner: the verifier has not passed head {sha}"
         self.assertEqual((got["direct"]["why"], self.file()["waiting"]["direct"]["pr"]), (said, 41))
         self.assertEqual(got["local"]["why"], "its thread died with no PR, so it goes back to tasks to run again, and its old worktree "
@@ -1090,7 +1103,7 @@ class Pass(Case):
         queue.run_pass(self.pol)
         self.status = {"t-c": "gone"}
         got = queue.run_pass(self.pol)
-        said = "its thread died with no worktree of it left, so whether it opened a PR cannot be told"
+        said = "its thread died, and without its worktree and the commit it started from, whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("c", "done", said)], []))
 
     def test_two_passes_never_run_at_once(self):
@@ -1115,7 +1128,8 @@ class Pass(Case):
         self.pol["host"]["clone"], self.pol["run"]["t3"] = str(clone), str(fake)
         up = {"id": "a", "task": "Fix the parser"}
         with patch.object(queue, "t3", T3):
-            self.assertEqual(LAUNCH(self.pol, up), ("mcp:1", "/wt/1"))
+            trunk = subprocess.run(["git", "rev-parse", "HEAD"], cwd=seed, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(LAUNCH(self.pol, up), ("mcp:1", "/wt/1", trunk))
             calls = [json.loads(x) for x in (self.root / "calls").read_text().splitlines()]
             provider, model = queue.model_for("coding", self.pol)
             self.assertEqual(calls[0]["argv"], ["thread", "start", str(clone), "-", "--title", "a", "--provider", provider, "--model", model,
@@ -1123,7 +1137,7 @@ class Pass(Case):
             self.assertEqual(calls[0]["stdin"], queue.brief(self.pol, up))
             self.assertEqual(calls[1]["argv"], ["thread", "show", "mcp:1", "--messages", "0", "--json"])
             (self.root / "mode").write_text("no-show")
-            self.assertEqual(LAUNCH(self.pol, up), ("mcp:1", None))
+            self.assertEqual(LAUNCH(self.pol, up), ("mcp:1", None, trunk))
             (self.root / "mode").write_text("no-start")
             with self.assertRaisesRegex(queue.Refused, "no thread started for a: the server is not running"):
                 LAUNCH(self.pol, up)
