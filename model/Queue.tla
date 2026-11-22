@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Woken
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Woken, Resumes
 
 VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, by, okAtMerge, thread, pending, startedHeld, jumped, crowded, endedUnverified, twoThreads, diedCleared
 
@@ -11,7 +11,7 @@ States == {"none", "running", "waiting", "done"}
 TypeOK ==
   /\ q \in [Machines -> [Items -> States]] /\ Paged \subseteq Items
   /\ held \subseteq Items /\ pre \subseteq Items /\ unread \subseteq Garbles /\ up \in BOOLEAN /\ pr \subseteq Items /\ stale \subseteq Items /\ merged \subseteq Items
-  /\ Queues \subseteq Items /\ Woken \subseteq Items /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN
+  /\ Queues \subseteq Items /\ Woken \subseteq Items /\ Resumes \subseteq Items /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
   /\ thread \subseteq Items /\ pending \subseteq Items /\ twoThreads \in BOOLEAN /\ diedCleared \in BOOLEAN
@@ -90,7 +90,7 @@ Lost(i) == i \in pending /\ pending' = pending \ {i}
   /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, thread, twoThreads, diedCleared>>
 Abort(m, i) == q[m][i] = "running" /\ i \notin thread /\ i \notin pending /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>
-Stuck(m, i) == q[m][i] = "waiting" /\ i \notin thread /\ i \in pr /\ i \notin merged /\ i \notin held /\ i \notin inq
+Stuck(m, i) == i \in Resumes /\ q[m][i] = "waiting" /\ i \notin thread /\ i \in pr /\ i \notin merged /\ i \notin held /\ i \notin inq
   /\ (status[i] = "none" \/ i \in dropped)
 Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
 Wake(m, i) == i \in Woken /\ q[m][i] = "waiting" /\ i \notin thread /\ thread' = thread \cup {i}

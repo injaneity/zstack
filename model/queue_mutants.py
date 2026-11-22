@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Machines = {"mac", "linux"}\n', '  Machines = {"mac"}\n')
+RESUMES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Woken = {}\n  Resumes = {}\n',
+           '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Woken = {"i1"}\n  Resumes = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -173,13 +175,23 @@ M = [
         "a waiting PR whose thread has ended, and whose head needs that thread's work, waits on the ended thread for good",
         [('Resume(m, i) == Stuck(m, i) /\\ Set', 'Resume(m, i) == Stuck(m, i) /\\ FALSE /\\ Set')],
         LIVE,
+        RESUMES,
+    ),
+    (
+        "resume-forgets-a-drop",
+        "an item sent back to tasks loses its merge-queue drop record, so the pass queues the dropped head again",
+        [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ UNCHANGED <<held, work, history>>',
+          'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ dropped\' = dropped \\ {i}\n'
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, by, okAtMerge, history>>')],
+        "NoDroppedHeadIsQueued",
+        RESUMES,
     ),
     (
         "resume-a-live-thread",
         "a waiting PR whose thread was woken again goes back to tasks, so a second thread starts beside it",
-        [('Stuck(m, i) == q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Stuck(m, i) == q[m][i] = "waiting" /\\ i')],
+        [('Resumes /\\ q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Resumes /\\ q[m][i] = "waiting" /\\ i')],
         "OneThreadPerItem",
-        ('  Queues = {"i1"}\n  Woken = {}\n', '  Queues = {}\n  Woken = {"i1"}\n'),
+        RESUMES,
     ),
     (
         "keep-a-merged-item",
