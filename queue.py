@@ -759,6 +759,11 @@ def step(pol):
     up, out = locked(pol, intend)
     if not up:
         return out
+    if up.get("threads") and not ended(pol, {"thread": None, "threads": up["threads"]}):
+        def back(q):
+            q["running"].pop(up["id"], None)
+            return dict(out, waiting=f"{up['id']}: a thread that ran it before is live again, so no second one starts"), True
+        return locked(pol, back)
     try:
         thread, worktree = launch(pol, up)
     except Refused as e:
@@ -1223,7 +1228,9 @@ def outcome(pol, q, key, merge=False, died=False):
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
             stops = (f"it is labelled {pol['merge']['hold_label']}", "it needs a person's review", "the PR is a draft")
-            need = needs(pol, it, v, live) if merge and not it.get("queued") and why not in stops else []
+            stale = why.startswith("it could not be read again") or why.startswith("the verifier has not passed head ") and \
+                not why.endswith(live["headRefOid"])
+            need = needs(pol, it, v, live) if merge and not it.get("queued") and why not in stops and not stale else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
