@@ -724,26 +724,8 @@ def t3(pol, *args, stdin=None):
         return f"{type(e).__name__}: {e}"[:200]
 
 
-def ordinal(run):
-    m = re.search(r":ordinal:(\d+)$", run or "")
-    return int(m.group(1)) if m else None
-
-
-def ran(seen, run):
-    return not seen["thread"].get("activeRunId") and (ordinal(seen["thread"].get("latestRunId")) or 0) >= ordinal(run)
-
-
 def launch(pol, up):
     clone = os.path.expanduser(pol["host"]["clone"])
-    if up.get("wake"):
-        seen = t3(pol, "show", up["wake"], "--messages", "0")
-        if not isinstance(seen, dict):
-            raise Refused(f"thread {up['wake']} of {up['id']} cannot be read, so nothing was sent to it: {seen}")
-        got = t3(pol, "send", up["wake"], "-", stdin=brief(pol, up))
-        if not isinstance(got, dict) or not ordinal(got.get("runId")):
-            raise Refused(f"no message reached thread {up['wake']} of {up['id']}: {got}")
-        up["run"] = got["runId"]
-        return up["wake"], seen["thread"]["worktreePath"] or up.get("worktree")
     if git("-C", clone, "fetch", "--quiet", "origin")[0]:
         raise Refused(f"git fetch origin failed in {clone}; not launching on an old tree")
     rc, base = (0, up["base"]) if up.get("base") else git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
@@ -784,7 +766,7 @@ def step(pol):
 
     def record(q):
         q["tasks"].pop(up["id"], None)
-        q["running"][up["id"]].update(thread=thread, worktree=worktree, **{k: up[k] for k in ("run",) if k in up})
+        q["running"][up["id"]].update(thread=thread, worktree=worktree)
         return dict(out, launched={"id": up["id"], "thread": thread, "worktree": worktree}), True
     return locked(pol, record)
 
@@ -817,9 +799,7 @@ def reconcile(pol):
                 continue
             if not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
-            asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-            done = not it.get("run") or ran(seen, it["run"]) or (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60
-            if seen["thread"]["status"] in DEAD and done:
+            if seen["thread"]["status"] in DEAD:
                 dead.append((key, seen["thread"]["status"] in DIED))
         return dead, changed
     return locked(pol, go)
@@ -1141,8 +1121,7 @@ def in_queue(pol, key, it, live):
         return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
     if not it.get("queued"):
         it["seen"] = seen
-        moved = got["headRefOid"] != live["headRefOid"]
-        return f"PR {pr} moved to head {got['headRefOid']} while the pass read it, and the next pass reads it again" if moved else None
+        return None
     why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
            "cannot be told" if seen[0] > it["seen"][0] else
            f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
@@ -1181,16 +1160,14 @@ def needs(pol, it, v, live):
     return out
 
 
-def thread_state(pol, thread):
-    seen = t3(pol, "show", thread, "--messages", "0")
-    if isinstance(seen, dict):
-        return "ended" if seen["thread"]["status"] in DEAD else "live"
-    rows = t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
-    return None if not isinstance(rows, list) else "live" if thread in [r["threadId"] for r in rows] else "gone"
-
-
 def ended(pol, it):
-    return not it["thread"] or thread_state(pol, it["thread"]) in ("ended", "gone")
+    if not it["thread"]:
+        return True
+    seen = t3(pol, "show", it["thread"], "--messages", "0")
+    if isinstance(seen, dict):
+        return seen["thread"]["status"] in DEAD
+    rows = t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
+    return isinstance(rows, list) and it["thread"] not in [r["threadId"] for r in rows]
 
 
 def shared(pol, q, it):
@@ -1200,28 +1177,21 @@ def shared(pol, q, it):
         any(on(x) and (x.get("resumed") or not ended(pol, x)) for x in q["waiting"].values())
 
 
-def resume(pol, q, key, it, live, need, state):
+def resume(pol, q, key, it, live, need):
     repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
     was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
     keep = {k: it[k] for k in ("dropped", "seen", "queued") if k in it}
     common = {"was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)), "preapproved": it["preapproved"],
               "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr, **keep}
-    why = f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
-    if state == "ended":
-        said = (f"{was}\n\nThis thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. The PR waits on this thread's own work, "
-                f"so the queue sends the item back to it:\n" + "".join(f"- {x[1]}\n" for x in need) +
-                f"Work on {shlex.quote(branch)}, the PR's head branch, and push to it, so the commits land on PR #{pr}; open no new PR.")
-        q["tasks"][key] = {"task": said, **common, "wake": it["thread"], "worktree": it["worktree"]}
-        return "tasks", why
     kept = [x for x in it.get("kept", []) if listed(pol, x)[1]] + ([] if tidy(pol, it, True) else [it["worktree"]])
     told = "".join(f"\nAn old thread's worktree {x} still holds work that is not on the remote: read it with `git -C {shlex.quote(x)} status` and "
                    f"`git -C {shlex.quote(x)} log --branches --not --remotes`, and take what belongs to PR #{pr}." for x in kept)
-    said = (f"{was}\n\nThis item ran before, and its thread, which T3 no longer has, ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. "
+    said = (f"{was}\n\nThis item ran before, and its thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. "
             f"The PR waits on this item's own work, so it runs again in a fresh thread:\n" + "".join(f"- {x[1]}\n" for x in need) +
             f"Your worktree starts at origin/{branch}, the PR's head branch, on a branch of its own: push with "
             f"`git push origin {shlex.quote('HEAD:' + branch)}`, so the commits land on PR #{pr}, and open no new PR.{told}")
     q["tasks"][key] = {"task": said, **common, "base": f"origin/{branch}", "kept": kept}
-    return "tasks", why
+    return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
 
 
 def outcome(pol, q, key, merge=False, died=False):
@@ -1251,13 +1221,9 @@ def outcome(pol, q, key, merge=False, died=False):
             if not why:
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
-            stops = (f"it is labelled {pol['merge']['hold_label']}", "it needs a person's review", "the PR is a draft")
-            stale = why.startswith("it could not be read again") or why.startswith("the verifier has not passed head ") and \
-                not why.endswith(live["headRefOid"])
-            need = needs(pol, it, v, live) if merge and not it.get("queued") and why not in stops and not stale else []
-            state = (thread_state(pol, it["thread"]) if it["thread"] else "gone") if need else None
-            if state in ("ended", "gone") and not shared(pol, q, it):
-                return resume(pol, q, key, it, live, need, state)
+            need = needs(pol, it, v, live) if merge and not it.get("queued") else []
+            if need and ended(pol, it) and not shared(pol, q, it):
+                return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
@@ -1305,11 +1271,6 @@ def release(pol, ident=None, hook=False, died=False):
         held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
         if held_back:
             return Unfinished(held_back), False
-        if not ident and was == "running" and q["running"][key].get("run"):
-            seen = t3(pol, "show", thread, "--messages", "0")
-            active = seen["thread"].get("activeRunId") if isinstance(seen, dict) else None
-            if (ordinal(active) or 0) < ordinal(q["running"][key]["run"]):
-                return {"released": None}, False
         it = q[was][key]
         state, why = outcome(pol, q, key, died=died)
         said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
@@ -1324,7 +1285,7 @@ def unresume(q):
     for key, row in sorted(q["tasks"].items()):
         if row.get("pr") and key not in q["running"]:
             q["waiting"][key] = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority", "at")}, "readonly": False,
-                                 "thread": row.get("wake"), "worktree": row.get("worktree"), "resumed": True,
+                                 "thread": None, "worktree": None, "resumed": True,
                                  **{k: row[k] for k in ("dropped", "seen", "queued", "kept") if k in row},
                                  **({"task": row} if row["kind"] == "task" else {})}
             del q["tasks"][key]
