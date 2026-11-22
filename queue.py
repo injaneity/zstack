@@ -37,7 +37,10 @@ USAGE = (
     "                                   An item whose PR is still open waits on it and keeps its worktree; a finished\n"
     "                                   one is forgotten. With no id, the item of the thread that runs it. With --hook,\n"
     "                                   exit 3 and free nothing while its open PR's head has no verdict. With --died,\n"
-    "                                   the turn failed, so an item with no PR goes back to tasks to run again\n"
+    "                                   the turn failed, so an item with no PR goes back to tasks to run again, as does\n"
+    "                                   one whose turn ended with no PR and that was never marked complete\n"
+    "  queue.py complete <id>           the item's own thread made its deliverable, so its release with no PR clears it\n"
+    "                                   as done instead of sending it back to tasks\n"
     "  queue.py list                    what this machine holds: running, waiting, tasks, verdicts, done\n"
     "The config:\n"
     "  queue.py check                   parse and validate the machine file, each repo it works on and the invariants\n"
@@ -710,6 +713,7 @@ Follow onigiri-mode and the invariants, which are already in your context. Nothi
 When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do.
 The queue answers that command with what it recorded and one line under `say`, and the verifier gives you both. That line decides what you do, whatever else the verifier wrote: fix the findings, push and have the new head checked; or merge with the command it names, waiting first for the checks it names; or do not merge, for the reason it gives. The guard lets the merge through only when the queue would; when it refuses, read its reason, and do not try another way. When you think the change needs a person whatever the queue says, do not merge: say why in your report.
 When your turn ends, the queue frees your slot and tells the orchestrator what happened, so finish everything before you stop. A turn that tries to end while your open PR's head has no verdict is sent back to get one.
+A turn that ends with no PR sends this item back to tasks to run again, unless you mark it complete first with `{env} {queue} complete {id}`. Run that only once the deliverable exists, such as the answer in your final report or the file the task asks for, never while work it waits on still runs.
 
 End with a final report: the PR URLs, then
 follow-ups:
@@ -1213,19 +1217,35 @@ def resume(pol, q, key, it, live, need):
     return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
 
 
+def complete(pol, ident):
+    thread = os.environ.get(THREAD_VAR)
+
+    def go(q):
+        it = q["running"].get(ident)
+        if not it:
+            raise Refused(f"{ident} is not running, so there is no turn of it to mark complete")
+        if thread and it["thread"] != thread:
+            raise Refused(f"this is not {ident}'s own thread: only the thread that made its deliverable marks it complete")
+        it["complete"] = True
+        return {"complete": ident}, True
+    return locked(pol, go)
+
+
 def outcome(pol, q, key, merge=False, died=False):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     died = died or it.pop("died", False)
+    back = died or not it.get("complete")
+    ended_as = "its thread died" if died else "its thread ended, not marked complete,"
 
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
         return "waiting", why
-    if died and not it["worktree"] and it["thread"]:
+    if back and not it["worktree"] and it["thread"]:
         seen = t3(pol, "show", it["thread"], "--messages", "0")
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
     try:
         live = its_pr(pol, q, it)
-        refs = pushed_refs(pol, it) if died and not live and it.get("logged") and it["worktree"] and hooked(pol) else None
+        refs = pushed_refs(pol, it) if back and not live and it.get("logged") and it["worktree"] and hooked(pol) else None
         found = head_pr(pol, refs or [])
         if found:
             move(it, found)
@@ -1254,16 +1274,16 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if died and not live and refs is None:
-        why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
-    elif died and not live and refs:
-        why = f"its thread died after it pushed {', '.join(refs)}, and no PR of it was found, so whether it opened one cannot be told"
-    elif died and not live and (it["kind"] != "task" or "task" in it):
+    if back and not live and refs is None:
+        why = f"{ended_as} with no record of its pushes, so whether it opened a PR cannot be told"
+    elif back and not live and refs:
+        why = f"{ended_as} after it pushed {', '.join(refs)}, and no PR of it was found, so whether it opened one cannot be told"
+    elif back and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
             q["tasks"][key] = {**it["task"], "preapproved": it["preapproved"]}
         q["verdicts"] = {k: v for k, v in q["verdicts"].items() if held_pr(q, int(k))}
-        return "tasks", f"its thread died with no PR, so it goes back to tasks to run again{kept}"
+        return "tasks", f"{ended_as} with no PR, so it goes back to tasks to run again{kept}"
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
@@ -1569,6 +1589,8 @@ def queue_command(pol, argv, stdin):
         return release(pol, hook=True)
     if argv == ["release", "--died"]:
         return release(pol, died=True)
+    if len(argv) == 2 and argv[0] == "complete":
+        return complete(pol, argv[1])
     if argv[:1] == ["release"] and len(argv) <= 2:
         return release(pol, argv[1] if len(argv) == 2 else None)
     if argv == ["list"]:

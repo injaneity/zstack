@@ -155,6 +155,11 @@ class Case(unittest.TestCase):
         self.add(ident, **task)
         return self.start(ident, thread, worktree)
 
+    def complete(self, *idents):
+        with patch.dict(os.environ, {queue.THREAD_VAR: ""}):
+            for x in idents:
+                queue.complete(self.pol, x)
+
     def pr_open(self, pr, head=H1, labels=()):
         self.forge.prs[pr] = {"head": head, "labels": list(labels)}
 
@@ -314,7 +319,7 @@ class Launch(Case):
         self.add("a", "Fix the parser")
         queue.step(self.pol)
         said = queue.brief(self.pol, self.briefed[0])
-        for want in ("# a", "Fix the parser", f"{PKG}/queue.py verified a <pr number> <head sha> auto",
+        for want in ("# a", "Fix the parser", f"{PKG}/queue.py verified a <pr number> <head sha> auto", f"{PKG}/queue.py complete a`",
                      "one line under `say`", "That line decides what you do, whatever else the verifier wrote", "ZSTACK_REPO=acme/app ",
                      "they are yours to judge:\n- You write the code and a short test plan",
                      "\n- No invented limits: a restriction must trace to Robin's words", "\n- Never revert a PR, except"):
@@ -981,6 +986,7 @@ class Release(Case):
         self.start("app-2", "t-2", "/nowhere/2")
         self.pr_open(40)
         self.forge.prs[40]["state"] = "MERGED"
+        self.complete("app-1")
         with patch.object(queue, "branch_pr", side_effect=[None, 40, 40]):
             got = [queue.release(self.pol, x) for x in ("app-1", "app-2")]
         self.assertEqual([(x["state"], x["why"]) for x in got], [("done", "nothing to merge"), ("done", "PR 40 merged")])
@@ -1003,6 +1009,7 @@ class Release(Case):
         self.forge.prs[41].update(head=H2, state="CLOSED")
         self.pr_open(42)
         queue.verified(self.pol, "c", 42, H1, "review")
+        self.complete("a")
         self.assertEqual([queue.release(self.pol, x)["state"] for x in ("a", "b", "c")], ["done", "done", "waiting"])
         queue.approve(self.pol, "c")
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "c", "why": "PR 42 merged"}])
@@ -1016,12 +1023,14 @@ class Release(Case):
         self.pol["run"]["threads"] = 9
         self.run_("a")
         (self.root / "events.log").mkdir()
+        self.complete("a")
         err = io.StringIO()
         with patch("sys.stderr", err):
             self.assertEqual(queue.release(self.pol, "a")["state"], "done")
         self.assertEqual((self.file()["done"], "ended a pr=- head=- verdict=- nothing to merge" in err.getvalue()), (["a"], True))
         (self.root / "events.log").rmdir()
         self.run_("b")
+        self.complete("b")
         with patch.object(queue.os, "replace", side_effect=PermissionError("busy")), self.assertRaises(PermissionError):
             queue.release(self.pol, "b")
         self.assertFalse((self.root / "events.log").exists())
@@ -1060,6 +1069,7 @@ class Release(Case):
             self.assertEqual(queue.release(self.pol, hook=True)["why"], "PR 41 closed")
         self.run_("c", thread="t-c")
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-c"}):
+            queue.complete(self.pol, "c")
             self.assertEqual(queue.release(self.pol, hook=True)["why"], "nothing to merge")
 
     def test_a_session_that_runs_no_item_releases_nothing_and_an_id_releases_that_item(self):
@@ -1095,6 +1105,7 @@ class Release(Case):
         with patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
             self.assertEqual(queue.release(self.pol, "a", died=True)["state"], "waiting")
         self.status = {"t-app-1": "completed"}
+        self.complete("app-1")
         with self.trees():
             got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("app-1", "done")])
@@ -1109,8 +1120,50 @@ class Release(Case):
         why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("gone", "done", why)], []))
 
+    def test_a_turn_that_ends_with_no_pr_goes_back_to_tasks_unless_its_thread_marked_it_complete(self):
+        self.pol["run"]["threads"] = 9
+        for x in ("ended", "marked", "died", "open"):
+            self.add(x, f"do {x}")
+            self.start(x)
+        rows = {x: self.file()["running"][x]["task"] for x in ("ended", "died")}
+        self.pr_open(40)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-marked"}):
+            with self.assertRaisesRegex(queue.Refused, "this is not ended's own thread"):
+                queue.complete(self.pol, "ended")
+            self.assertEqual(queue.complete(self.pol, "marked"), {"complete": "marked"})
+        with self.assertRaisesRegex(queue.Refused, "nobody is not running"):
+            queue.complete(self.pol, "nobody")
+        with self.trees():
+            with patch.dict(os.environ, {queue.THREAD_VAR: "t-ended"}):
+                ended = queue.release(self.pol, hook=True)
+            marked = queue.release(self.pol, "marked")
+            died = queue.release(self.pol, "died", died=True)
+            with patch.object(queue, "branch_pr", lambda pol, it: 40):
+                opened = queue.release(self.pol, "open")
+        said = "its thread ended, not marked complete, with no PR, so it goes back to tasks to run again"
+        self.assertEqual([(x["state"], x["why"]) for x in (ended, marked, died, opened)], [
+            ("tasks", said), ("done", "nothing to merge"), ("tasks", "its thread died with no PR, so it goes back to tasks to run again"),
+            ("waiting", f"PR 40 waits for the owner: the verifier has not passed head {H1}")])
+        self.assertEqual(self.wakes[0], ("blocked", f"ended: {said}", None))
+        got = self.file()
+        self.assertEqual((sorted(got["tasks"]), got["done"], sorted(got["waiting"])), (["died", "ended"], ["marked"], ["open"]))
+        self.assertEqual({x: self.file()["tasks"][x]["task"] for x in rows}, {x: r["task"] for x, r in rows.items()})
+        self.status = {"t-ended": "completed"}
+        with self.trees():
+            got = queue.run_pass(self.pol)
+        self.assertEqual(sorted(x["id"] for x in got["launched"]), ["died", "ended"])
+        self.assertNotIn("complete", self.file()["running"]["ended"])
+        with self.trees():
+            self.assertEqual(queue.run_pass(self.pol)["released"][0]["state"], "tasks")
+        self.complete("ended")
+        self.status = {"t-ended": "completed"}
+        with self.trees():
+            got = queue.run_pass(self.pol)
+        self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("ended", "done")])
+
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
+        self.complete("a")
         with patch.object(queue, "branch_pr", side_effect=queue.Refused("cannot look up the PR of branch a: gh down")):
             got = queue.release(self.pol, "a")
         self.assertEqual((got["state"], got["why"]), ("waiting", "cannot look up the PR of branch a: gh down"))
@@ -1142,6 +1195,7 @@ class Release(Case):
         self.forge.prs[51] = {"head": H2, "branch": "open", "state": "CLOSED"}
         git("worktree", "add", "-q", "--detach", str(self.root / "wt-loose"), cwd=clone)
         self.run_("loose", worktree=str(self.root / "wt-loose"))
+        self.complete("clean", "dirty", "ahead", "gone", "open", "loose")
         loose = queue.release(self.pol, "loose")
         self.assertEqual((loose["state"], "is on no branch" in loose["why"], (self.root / "wt-loose").exists()), ("waiting", True, True))
         with patch.object(queue, "git", lambda *a, **k: (1, "")):
@@ -1256,6 +1310,7 @@ class Pass(Case):
         for x in ("c", "d"):
             self.add(x)
         self.status = {"t-a": "completed"}
+        self.complete("a")
         got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("a", "done")])
         self.assertEqual(([x["id"] for x in got["launched"]], got["waiting"]), (["c"], "the machine is at its thread cap"))
@@ -1264,6 +1319,7 @@ class Pass(Case):
         queue.run_pass(self.pol)
         for said in queue.DEAD:
             self.run_(said)
+            self.complete(*[said] if said not in queue.DIED else [])
             self.status = {f"t-{said}": said, "t-c": "waiting", "t-b": "queued"}
             with self.trees():
                 got = queue.run_pass(self.pol)
@@ -1384,8 +1440,11 @@ class Cli(Case):
             self.forge.prs[40] = {"head": H1}
             for bad in (["verified", "a", "auto"], ["verified", "a", "40", H1], ["verified", "a", "40", H1, "pass", "auto"],
                         ["verified", "a", "40", H1, "extreme"], ["verified", "a", "40", H1[:7], "auto"], ["gate", "40", H1[:7]],
-                        ["release", "a", "b"]):
+                        ["release", "a", "b"], ["complete"], ["complete", "a", "b"]):
                 self.assertEqual(queue.main(bad), 2, bad)
+            with patch("sys.stderr", io.StringIO()) as err:
+                self.assertEqual(queue.main(["complete", "zzz"]), 1)
+            self.assertEqual(err.getvalue(), "queue: zzz is not running, so there is no turn of it to mark complete\n")
             with patch("sys.stderr", io.StringIO()) as err:
                 self.assertEqual(queue.main(["gate", "40", H1]), 1)
             self.assertEqual(err.getvalue(), f"queue: PR 40 does not merge: the verifier has not passed head {H1}\n")

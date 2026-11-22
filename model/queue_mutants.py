@@ -161,7 +161,7 @@ M = [
     (
         "clear-an-open-pr",
         "an item leaves the queue at its turn end though its passed PR is still open",
-        [('  /\\ \\/ Finished(i) /\\ Set(m, i, "done")', '  /\\ \\/ Set(m, i, "done")')],
+        [('ELSE \\/ Finished(i) /\\ Set(m, i, "done")', 'ELSE \\/ Set(m, i, "done")')],
         "NothingUnfinishedIsCleared",
     ),
     (
@@ -169,6 +169,12 @@ M = [
         "an item whose thread died before it opened a PR is cleared as done, so it never runs again",
         [('      ELSE Set(m, i, "none") /\\ thread\'', '      ELSE Set(m, i, "done") /\\ thread\'')],
         "ADeadThreadWithNoPRIsRunAgain",
+    ),
+    (
+        "clear-an-unmarked-turn-with-no-pr",
+        "an item whose thread ended its turn with no PR and never ran `queue.py complete` is cleared as done, so it never runs again",
+        [("IF i \\notin pr /\\ i \\notin marked THEN", "IF FALSE THEN")],
+        "AnUnmarkedTurnWithNoPRIsRunAgain",
     ),
     (
         "an-ended-wait-is-stuck",
