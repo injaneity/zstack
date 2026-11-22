@@ -73,7 +73,7 @@ class PatentPush(unittest.TestCase):
         self.assertEqual(pp.choose_remote(pub, ["src/sealing.rs"], lambda: True), "staging")
         self.assertEqual(pp.choose_remote(stg, ["src/sealing.rs"], lambda: False), "push")
 
-    def repo(self, tmp):
+    def repo(self, tmp, base=None):
         def g(*a, cwd=None):
             return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
         pub, work, root = f"{tmp}/public.git", f"{tmp}/work", f"{tmp}/root"
@@ -82,7 +82,9 @@ class PatentPush(unittest.TestCase):
         g("init", "-q", "-b", "main", work)
         for k, v in (("user.name", "t"), ("user.email", "t@t"), ("commit.gpgsign", "false")):
             g("config", k, v, cwd=work)
-        Path(work, "README").write_text("x\n")
+        for name, text in {"README": "x\n", **(base or {})}.items():
+            Path(work, name).parent.mkdir(parents=True, exist_ok=True)
+            Path(work, name).write_text(text)
         g("add", ".", cwd=work)
         g("commit", "-qm", "base", cwd=work)
         g("remote", "add", "origin", pub, cwd=work)
@@ -191,8 +193,8 @@ class PatentPush(unittest.TestCase):
         pushes = [json.loads(x) for x in Path(f"{tmp}/zstack/acme/app/pushes.jsonl").read_text().splitlines()]
         self.assertEqual([(x["worktree"], x["ref"]) for x in pushes], [(os.path.realpath(work), "refs/heads/onigiri/ok")])
 
-    def commits(self, tmp, branch, steps):
-        g, pub, work, root = self.repo(tmp)
+    def commits(self, tmp, branch, steps, base=None):
+        g, pub, work, root = self.repo(tmp, base)
         g("checkout", "-qb", branch, cwd=work)
         for i, step in enumerate(steps):
             if isinstance(step, tuple):
@@ -215,6 +217,84 @@ class PatentPush(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
+
+    def test_a_held_line_already_on_the_public_main_is_pushed(self):
+        line = "// skyhook still sends this explicitly on graceful\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/moved", [{"src/serve.rs": "fn a() {}\n", "src/ipc.rs": f"fn b() {{\n        {line}}}\n"}],
+                                     base={"src/serve.rs": f"fn a() {{}}\n    {line}"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/new", [{"src/ipc.rs": f"{line}// skyhook is available from the store\n"}],
+                                     base={"src/serve.rs": line})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("skyhook is available", r.stderr)
+            self.assertEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/space", [{"src/serve.rs": "// skyhook  still sends this\n"}],
+                                     base={"src/serve.rs": "// skyhook still sends this\n"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(remote, "")
+        self.assertEqual(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: t == "// Skyhook the session"), [])
+        self.assertTrue(pp.held_hits([], "+// Skyhook the session\r secret\n", public=lambda t: t == "// Skyhook the session"))
+        self.assertTrue(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: False))
+
+    def test_a_carriage_return_does_not_split_a_public_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/cr", [{"src/ipc.rs": "// skyhook still sends this\rsecret\n"}],
+                                     base={"src/serve.rs": "// skyhook still sends this\n"})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertEqual(remote, "")
+        cr = "diff --git a/x b/x\n@@ -0,0 +1 @@\n+a\r@@@ b\r++skyhook\n"
+        self.assertTrue(pp.held_hits([], cr, public=lambda t: True))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1,2 @@\n+a\r@@@ -1 +1 @@@\n++// skyhook\n", public=lambda t: True))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\x0b\n", public=lambda t: True))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\r\n", public=lambda t: True))
+        crlf = "// skyhook " + "x" * (q.LONG_LINE - 11)
+        for name, text in (("crlf", f"{crlf}\r\n"), ("tail", "// skyhook x\r" + "y" * q.LONG_LINE + "\n")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                r, remote = self.commits(tmp, f"onigiri/{name}", [{"src/serve.rs": text}])
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            g, _, work, _ = self.repo(tmp, {"src/serve.rs": "// skyhook x\rsecret\n"})
+            for key in ("grep.lineNumber", "grep.column"):
+                g("config", key, "true", cwd=work)
+            self.assertFalse(q.Patent.in_tree("// skyhook x", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("1:1:// skyhook x secret", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook x secret", "origin/main", cwd=work))
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, work, _ = self.repo(tmp, {"src/a.rs": "// skyhook\r\r\n", "src/b.rs": "// skyhook y\r\n", "src/c.rs": "// skyhook z\r"})
+            for text in ("// skyhook", "// skyhook y", "// skyhook z"):
+                self.assertFalse(q.Patent.in_tree(text, "origin/main", cwd=work))
+            Path(work, "d.rs").write_bytes(b"\xff x\n")
+            with self.assertRaises(UnicodeDecodeError):
+                q.git("diff", "--no-index", "-U0", os.devnull, "d.rs", cwd=work, raw=True)
+            with self.assertRaises(UnicodeDecodeError):
+                q.git("-c", "alias.e=!printf '\\377' >&2", "e", cwd=work, raw=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            g, _, work, _ = self.repo(tmp, {"src/a.rs": "// skyhook a\n"})
+            Path(work, "fake").write_text("// skyhook secret\n")
+            g("replace", g("rev-parse", "origin/main:src/a.rs", cwd=work).strip(), g("hash-object", "-w", "fake", cwd=work).strip(), cwd=work)
+            self.assertTrue(q.Patent.in_tree("// skyhook a", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook secret", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook\0a", "origin/main", cwd=work))
+        with tempfile.TemporaryDirectory() as tmp:
+            def g(*a, cwd):
+                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", *a],
+                                      cwd=cwd, check=True, capture_output=True, text=True).stdout
+            sub, top = f"{tmp}/sub", f"{tmp}/top"
+            for d in (sub, top):
+                g("init", "-q", d, cwd=tmp)
+            Path(sub, "p.rs").write_text("// skyhook private\n")
+            g("add", ".", cwd=sub)
+            g("commit", "-qm", "p", cwd=sub)
+            g("submodule", "add", "-q", sub, "sub", cwd=top)
+            g("commit", "-qm", "base", cwd=top)
+            key = "submodule.recurse"
+            g("config", key, "true", cwd=top)
+            self.assertFalse(q.Patent.in_tree("// skyhook private", "HEAD", cwd=top))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:

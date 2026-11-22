@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import ctypes
 import fcntl
+import functools
 import json
+import locale
 import os
 import re
 import shlex
@@ -944,8 +946,12 @@ def gate(pol, pr, head):
     return locked(pol, go)
 
 
-def git(*args, cwd=None):
-    p = subprocess.run(["git", *args], capture_output=True, text=True, env=ENV, cwd=cwd, timeout=300)
+def git(*args, cwd=None, raw=False):
+    p = subprocess.run(["git", *args], capture_output=True, text=not raw, env=ENV, cwd=cwd, timeout=300)
+    if raw:
+        enc = locale.getpreferredencoding(False)
+        out, _ = p.stdout.decode(enc), p.stderr.decode(enc)
+        return p.returncode, out
     return p.returncode, p.stdout
 
 
@@ -1392,6 +1398,10 @@ DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
 LONG_LINE = 1000
 
 
+def one_line(text):
+    return text.splitlines() == [text]
+
+
 def unmatched(lines):
     same = Counter(n for s, n, _ in lines if s == "-") & Counter(n for s, n, _ in lines if s == "+")
     left = {"-": Counter(same), "+": Counter(same)}
@@ -1400,7 +1410,7 @@ def unmatched(lines):
         if left[s][n]:
             left[s][n] -= 1
         else:
-            out.append(raw)
+            out.append((n, raw))
     return out
 
 
@@ -1416,12 +1426,14 @@ class Patent:
     def is_staging(self, url):
         return bool(re.search(rf"github\.com[:/]{re.escape(self.staging)}(\.git)?/?$", url or ""))
 
-    def held_hits(self, paths, diff):
+    def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
         skip, docs, cols, hunk, lines = False, False, 1, False, []
-        for line in (diff or "").splitlines() + ["@@"]:
+        fulls = (diff or "").split("\n")
+        clean = all(one_line(full) for full in fulls if full)
+        for line in [line for full in fulls for line in full.replace("\r\n", "\n").replace("\r", "\n").splitlines()] + ["@@"]:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
-                hits += unmatched(lines)
+                hits += [raw for n, raw in unmatched(lines) if not (clean and public(n))]
                 lines = []
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
@@ -1451,18 +1463,28 @@ class Patent:
         if not base:
             return ["no merge base with origin/main (diff unreadable)"]
         rc1, paths = git("diff", "--name-status", "--find-renames", "--no-color", base, head, cwd=cwd)
-        rc2, diff = git("diff", "-U0", "--find-renames", "--no-color", base, head, cwd=cwd)
+        rc2, diff = git("diff", "-U0", "--find-renames", "--no-color", base, head, cwd=cwd, raw=True)
         rc3, revs = git("rev-list", "--reverse", head, "--not", "refs/remotes/origin/main", cwd=cwd)
         if rc1 or rc2 or rc3:
             return ["diff unreadable"]
-        hits = self.held_hits(status_paths(paths), diff)
+        public = functools.cache(lambda text: self.in_tree(text, base, cwd))
+        hits = self.held_hits(status_paths(paths), diff, public)
         for c in revs.split():
             rc1, paths = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "--name-status", "--find-renames", c, cwd=cwd)
-            rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd)
+            rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd, raw=True)
             if rc1 or rc2:
                 return hits + [f"commit {c[:12]} diff unreadable"]
-            hits += [f"{c[:12]}: {h}" for h in self.held_hits(status_paths(paths), diff)]
+            hits += [f"{c[:12]}: {h}" for h in self.held_hits(status_paths(paths), diff, public)]
         return list(dict.fromkeys(hits))[:5]
+
+    @staticmethod
+    def in_tree(text, tree, cwd=None):
+        try:
+            rc, out = git("--no-replace-objects", "grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color",
+                          "--no-recurse-submodules", "--no-textconv", "-e", max(text.split(), key=len), tree, cwd=cwd, raw=True)
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            return False
+        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if one_line(x)}
 
     def staging_push_ok(self):
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
