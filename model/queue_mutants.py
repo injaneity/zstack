@@ -180,10 +180,25 @@ M = [
     (
         "resume-forgets-a-drop",
         "an item sent back to tasks loses its merge-queue drop record, so the pass queues the dropped head again",
-        [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ UNCHANGED <<held, work, history>>',
-          'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ dropped\' = dropped \\ {i}\n'
-          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, by, okAtMerge, history>>')],
+        [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
+          '  /\\ UNCHANGED <<held, work, ',
+          'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, broken, by, okAtMerge, ')],
         "NoDroppedHeadIsQueued",
+        RESUMES,
+    ),
+    (
+        "resume-a-wait-for-a-person",
+        "a waiting PR whose head waits on a person's review, or carries the review label, goes back to tasks once its thread has ended",
+        [('  /\\ ~NeedsPerson(i) /\\ (status[i] = "none"', '  /\\ (status[i] = "none"')],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
+        "a-broken-passed-head-is-stuck",
+        "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
+        [(' \\/ i \\in dropped \\/ i \\in broken)\nResume', ' \\/ i \\in dropped)\nResume')],
+        LIVE,
         RESUMES,
     ),
     (
