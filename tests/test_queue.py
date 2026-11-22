@@ -822,6 +822,19 @@ class Approve(Case):
         queue.step(self.pol)
         self.assertEqual(self.file()["tasks"]["app-7"]["priority"], 100)
 
+    def test_a_preapproved_issue_whose_issue_carries_the_review_label_stays_waiting_when_its_thread_ends(self):
+        self.cands = [cand(7)]
+        self.start("app-7", "t-7")
+        self.cands = []
+        self.pr_open(47)
+        self.forge.prs[47]["mergeable"] = "CONFLICTING"
+        self.forge.issues[7] = [M["review_label"]]
+        queue.verified(self.pol, "app-7", 47, H1, "auto")
+        queue.release(self.pol, "app-7")
+        queue.approve(self.pol, "app-7")
+        self.status, self.pol["run"]["threads"] = {"t-7": "completed"}, 0
+        self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["waiting"])), ([], ["app-7"]))
+
     def test_a_resumed_task_keeps_its_verdict_waits_out_a_hold_names_every_kept_worktree_and_never_doubles_a_pr(self):
         self.waiting("a", pr=40, said="fail")
         self.forge.prs[40]["branch"] = "fix/parser(v2)"
@@ -854,6 +867,7 @@ class Approve(Case):
         cases = (("live", "fail", {}, "running"), ("person", "review", {"mergeable": "CONFLICTING"}, "completed"),
                  ("labelled", "auto", {"labels": [M["review_label"]], "ci": "FAILURE"}, "cancelled"),
                  ("held", "fail", {"labels": [hold]}, "completed"), ("flagged", "fail", {"labels": [M["review_label"]]}, "completed"),
+                 ("approved-flagged", "auto", {"labels": [M["review_label"]], "mergeable": "CONFLICTING"}, "completed"),
                  ("draft", "fail", {"draft": True}, "failed"),
                  ("green", "auto", {}, "completed"), ("fork", "fail", {"fork": True}, "completed"),
                  ("red", "auto", {"ci": "FAILURE"}, "completed"), ("unverified", "fail", {}, "interrupted"),
@@ -861,6 +875,7 @@ class Approve(Case):
         for n, (ident, said, pr, _) in enumerate(cases):
             self.waiting(ident, pr=60 + n, said=said)
             self.forge.prs[60 + n].update(pr)
+        queue.approve(self.pol, "approved-flagged")
         self.status, self.pol["run"]["threads"] = {f"t-{c[0]}": c[3] for c in cases}, 0
         got = queue.step(self.pol)
         work = {"red": f"{M['gate_check']} red", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
