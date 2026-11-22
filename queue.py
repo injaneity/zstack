@@ -1393,6 +1393,11 @@ DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
 LONG_LINE = 1000
 
 
+def one_line(text):
+    text = text[:-1] if text.endswith("\r") else text
+    return text.splitlines() == [text]
+
+
 def unmatched(lines):
     same = Counter(e[1] for e in lines if e[0] == "-") & Counter(e[1] for e in lines if e[0] == "+")
     left = {"-": Counter(same), "+": Counter(same)}
@@ -1420,8 +1425,8 @@ class Patent:
     def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
         skip, docs, cols, hunk, lines = False, False, 1, False, []
-        parts = (full.replace("\r\n", "\n").replace("\r", "\n").splitlines() for full in (diff or "").split("\n") + ["@@"])
-        for one, line in ((len(part) == 1, line) for part in parts for line in part):
+        fulls = (diff or "").split("\n") + ["@@"]
+        for one, line in ((one_line(full), line) for full in fulls for line in full.replace("\r\n", "\n").replace("\r", "\n").splitlines()):
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
                 hits += [raw for _, n, raw, whole in unmatched(lines) if not (whole and public(n))]
                 lines = []
@@ -1471,7 +1476,7 @@ class Patent:
     def in_tree(text, tree, cwd=None):
         rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
                       cwd=cwd, raw=True)
-        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if len(x.rstrip("\r").splitlines()) <= 1}
+        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if one_line(x)}
 
     def staging_push_ok(self):
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
