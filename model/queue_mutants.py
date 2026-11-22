@@ -173,7 +173,7 @@ M = [
     (
         "clear-an-unmarked-turn-with-no-pr",
         "an item whose thread ended its turn with no PR and never ran `queue.py complete` is cleared as done, so it never runs again",
-        [("IF i \\notin pr /\\ i \\notin marked THEN", "IF FALSE THEN")],
+        [("IF i \\notin pr /\\ ~marked THEN", "IF FALSE THEN")],
         "AnUnmarkedTurnWithNoPRIsRunAgain",
     ),
     (

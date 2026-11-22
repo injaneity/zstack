@@ -1224,7 +1224,7 @@ def complete(pol, ident):
         it = q["running"].get(ident)
         if not it:
             raise Refused(f"{ident} is not running, so there is no turn of it to mark complete")
-        if thread and it["thread"] != thread:
+        if not thread or it["thread"] != thread:
             raise Refused(f"this is not {ident}'s own thread: only the thread that made its deliverable marks it complete")
         it["complete"] = True
         return {"complete": ident}, True

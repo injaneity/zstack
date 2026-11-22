@@ -156,8 +156,8 @@ class Case(unittest.TestCase):
         return self.start(ident, thread, worktree)
 
     def complete(self, *idents):
-        with patch.dict(os.environ, {queue.THREAD_VAR: ""}):
-            for x in idents:
+        for x in idents:
+            with patch.dict(os.environ, {queue.THREAD_VAR: self.file()["running"][x]["thread"]}):
                 queue.complete(self.pol, x)
 
     def pr_open(self, pr, head=H1, labels=()):
@@ -1131,6 +1131,11 @@ class Release(Case):
             with self.assertRaisesRegex(queue.Refused, "this is not ended's own thread"):
                 queue.complete(self.pol, "ended")
             self.assertEqual(queue.complete(self.pol, "marked"), {"complete": "marked"})
+        for thread in ("", None):
+            with patch.dict(os.environ, {queue.THREAD_VAR: thread or ""}), self.assertRaisesRegex(queue.Refused, "this is not ended's own thread"):
+                if thread is None:
+                    del os.environ[queue.THREAD_VAR]
+                queue.complete(self.pol, "ended")
         with self.assertRaisesRegex(queue.Refused, "nobody is not running"):
             queue.complete(self.pol, "nobody")
         with self.trees():
@@ -1282,7 +1287,7 @@ class Release(Case):
 
     def test_the_states_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
-        for name, to in (("Launch(m, i)", "running"), ("Leave(m, i)", "waiting"), ("Leave(m, i)", "done"), ("Settle(m, i)", "done")):
+        for name, to in (("Launch(m, i)", "running"), ("Leave(m, i, marked)", "waiting"), ("Leave(m, i, marked)", "done"), ("Settle(m, i)", "done")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0].split("\nSettle")[name == "Settle(m, i)"], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
         self.assertEqual(states - {"none"}, set(queue.KEYS) - {"tasks", "verdicts"})
