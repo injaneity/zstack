@@ -780,6 +780,36 @@ class Approve(Case):
         self.assertEqual((self.briefed[-1]["base"], self.briefed[-1]["task"], self.file()["tasks"]), ("origin/fix-parser", row["task"], {}))
         running = self.file()["running"]["a"]
         self.assertEqual({k: running[k] for k in ("pr", "priority", "preapproved")}, {"pr": 40, "priority": 5, "preapproved": True})
+        self.assertEqual(running["dropped"]["head"], H1)
+        queue.release(self.pol, "a")
+        self.status = {}
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}], ["40"]))
+
+    def test_a_resumed_task_keeps_its_verdict_waits_out_a_hold_names_every_kept_worktree_and_never_doubles_a_pr(self):
+        self.waiting("a", pr=40, said="fail")
+        self.forge.prs[40]["branch"] = "fix/parser(v2)"
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        trees = patch.multiple(queue, tidy=lambda pol, it, whole: False, listed=lambda pol, path: (None, path))
+        with trees:
+            queue.step(self.pol)
+        row = self.file()["tasks"]["a"]
+        self.assertEqual(row["kept"], ["/nowhere/wt-a"])
+        self.assertIn("git push origin 'HEAD:fix/parser(v2)'", row["task"])
+        self.assertIn("`git -C /nowhere/wt-a status`", row["task"])
+        self.open, self.pol["run"]["threads"] = {40: [M["hold_label"]]}, 9
+        self.run_("b")
+        self.pr_open(41)
+        queue.verified(self.pol, "b", 41, H1, "auto")
+        self.assertEqual(sorted(self.file()["verdicts"]), ["40", "41"])
+        got = queue.step(self.pol)
+        self.assertEqual((got["launched"], got["skipped"], sorted(self.file()["tasks"])), (None, {"held": 1}, ["a"]))
+        self.open, self.threads["a"] = {40: []}, ("t-a2", "/nowhere/wt-a2")
+        self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
+        queue.release(self.pol, "a")
+        self.status, self.pol["run"]["threads"] = {"t-a2": "completed"}, 0
+        with trees:
+            queue.step(self.pol)
+        self.assertEqual(self.file()["tasks"]["a"]["kept"], ["/nowhere/wt-a", "/nowhere/wt-a2"])
 
     def test_only_a_wait_whose_thread_ended_and_whose_pr_needs_that_thread_goes_back_to_tasks(self):
         hold = M["hold_label"]
@@ -815,6 +845,14 @@ class Approve(Case):
         self.status["t-b"] = "cancelled"
         self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["waiting"])), (["a"], ["b"]))
         self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["tasks"])), ([], ["a"]))
+
+    def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
+        self.cands = [cand(50, kind="review")]
+        self.start(f"app-50-review-{H1[:7]}")
+        self.cands = []
+        self.waiting("c", pr=50, said="fail")
+        self.status, self.pol["run"]["threads"] = {"t-c": "completed"}, 0
+        self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["waiting"])), ([], ["c"]))
 
     def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
         self.waiting(said="auto")
