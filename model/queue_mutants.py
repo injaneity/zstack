@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Machines = {"mac", "linux"}\n', '  Machines = {"mac"}\n')
+RESUMES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
+           '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -167,6 +169,58 @@ M = [
         "an item whose thread died before it opened a PR is cleared as done, so it never runs again",
         [('      ELSE Set(m, i, "none") /\\ thread\'', '      ELSE Set(m, i, "done") /\\ thread\'')],
         "ADeadThreadWithNoPRIsRunAgain",
+    ),
+    (
+        "an-ended-wait-is-stuck",
+        "a waiting PR whose thread has ended, and whose head needs that thread's work, waits on the ended thread for good",
+        [('Resume(m, i) == Stuck(m, i) /\\ Set', 'Resume(m, i) == Stuck(m, i) /\\ FALSE /\\ Set')],
+        LIVE,
+        RESUMES,
+    ),
+    (
+        "resume-forgets-a-drop",
+        "an item sent back to tasks loses its merge-queue drop record, so the pass queues the dropped head again",
+        [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
+          '  /\\ UNCHANGED <<held, work, ',
+          'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, broken, by, okAtMerge, ')],
+        "NoDroppedHeadIsQueued",
+        RESUMES,
+    ),
+    (
+        "resume-a-wait-for-a-person",
+        "a waiting PR whose head waits on a person's review, or carries the review label, goes back to tasks once its thread has ended",
+        [('  /\\ ~NeedsPerson(i) /\\ i \\notin Review /\\ (status[i] = "none"', '  /\\ (status[i] = "none"')],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
+        "a-broken-passed-head-is-stuck",
+        "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
+        [(' \\/ i \\in dropped \\/ i \\in broken)\nResume', ' \\/ i \\in dropped)\nResume')],
+        LIVE,
+        RESUMES,
+    ),
+    (
+        "merge-a-broken-head",
+        "the gate or the pass merges a passed head that conflicts with its base or has a red ci-gate",
+        [('/\\ i \\notin held /\\ i \\notin broken\n', '/\\ i \\notin held\n')],
+        "OnlyAVerifiedAllowedHeadMerges",
+        RESUMES,
+    ),
+    (
+        "thread-merges-a-dropped-head",
+        "the gate lets a thread merge a head GitHub dropped from the merge queue",
+        [('ThreadMerge(m, i) == Takes(m, i) /\\ Open(i) /\\ i \\notin dropped', 'ThreadMerge(m, i) == Takes(m, i) /\\ Open(i)')],
+        "OnlyAVerifiedAllowedHeadMerges",
+        ONE_MACHINE,
+    ),
+    (
+        "launch-a-resumed-item-unchecked",
+        "a resumed item starts a thread on a PR that merged, entered the merge queue or was held after it went back to tasks",
+        [("  /\\ Needed(i)\n  /\\ Set(m, i, \"running\")", "  /\\ Set(m, i, \"running\")")],
+        "AResumedThreadIsNeeded",
+        RESUMES,
     ),
     (
         "keep-a-merged-item",
