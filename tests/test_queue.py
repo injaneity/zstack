@@ -75,7 +75,8 @@ class Forge:
             if p.get("inq") == "down":
                 return 1, "", "graphql down"
             gone = p.get("removed", [])
-            return 0, json.dumps({"id": f"PR_{n}", "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isInMergeQueue": bool(p.get("inq")),
+            return 0, json.dumps({"id": f"PR_{n}", "state": p.get("state", "OPEN"), "headRefOid": p.get("probe", p["head"]),
+                                  "isInMergeQueue": bool(p.get("inq")),
                                   "added": {"filteredCount": p.get("adds", 0)},
                                   "removed": {"filteredCount": len(gone), "nodes": [{"reason": x} for x in gone[-1:]]}}), ""
         if a[:2] == ("api", "graphql"):
@@ -114,7 +115,7 @@ class Case(unittest.TestCase):
         self.pol["host"]["root"] = str(self.root)
         self.pol["run"]["threads"] = 2
         self.forge, self.cands, self.open, self.wakes, self.woken = Forge(), [], {}, [], []
-        self.threads, self.briefed, self.status, self.t3_down, self.listing, self.runs = {}, [], {}, False, [], {}
+        self.threads, self.briefed, self.status, self.t3_down, self.listing, self.active, self.latest = {}, [], {}, False, [], {}, {}
         for p in (patch.object(queue, "gh", self.forge.gh),
                   patch.object(queue, "candidates", lambda errors, pol: list(self.cands)),
                   patch.object(queue, "open_prs", lambda errors, name: dict(self.open)),
@@ -138,7 +139,8 @@ class Case(unittest.TestCase):
             return list(self.listing)
         said = self.status.get(args[1], "running")
         return "Thread is no longer available." if said == "gone" else {"thread": {"status": said, "worktreePath": f"/seen/{args[1]}",
-                                                                                   "runCount": self.runs.get(args[1], 0)}}
+                                                                                   "activeRunId": self.active.get(args[1]),
+                                                                                   "latestRunId": self.latest.get(args[1])}}
 
     def file(self):
         return json.loads((self.root / "queue.json").read_text())
@@ -922,6 +924,16 @@ class Approve(Case):
         self.assertIn({"id": "m", "why": f"PR 60 waits for the owner: the verifier has not passed head {H2}"}, got["kept"])
         self.assertEqual((sorted(self.file()["running"]), self.file()["tasks"], sorted(self.file()["waiting"])), (["w"], {}, ["m"]))
 
+    def test_a_head_that_moves_between_the_pass_s_reads_stops_a_resume_until_the_next_pass(self):
+        self.waiting("a", pr=90, said="fail")
+        self.forge.prs[90]["probe"] = H2
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        got = queue.step(self.pol)
+        self.assertEqual((got["kept"], self.file()["tasks"]),
+                         ([{"id": "a", "why": f"PR 90 moved to head {H2} while the pass read it, and the next pass reads it again"}], {}))
+        del self.forge.prs[90]["probe"]
+        self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["tasks"])), (["a"], ["a"]))
+
     def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
         self.cands = [cand(50, kind="review")]
         self.start(f"app-50-review-{H1[:7]}")
@@ -1187,9 +1199,9 @@ mode = open(os.path.join(here, "mode")).read().strip()
 if sys.argv[2] == "start" and mode != "no-start":
     print(json.dumps({"threadId": "mcp:1", "projectId": "p", "runId": "r"}))
 elif sys.argv[2] == "show" and mode == "ok":
-    print(json.dumps({"thread": {"threadId": sys.argv[3], "status": "running", "worktreePath": "/wt/1", "runCount": 2}, "messages": []}))
+    print(json.dumps({"thread": {"threadId": sys.argv[3], "status": "running", "worktreePath": "/wt/1"}, "messages": []}))
 elif sys.argv[2] == "send" and mode == "ok":
-    print(json.dumps({"runId": "r2", "delivery": "sent"}))
+    print(json.dumps({"runId": "run:thread:mcp%3A9:ordinal:3", "delivery": "queued"}))
 else:
     sys.exit("the server is not running")
 """
@@ -1268,31 +1280,39 @@ class Pass(Case):
         said = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("c", "done", said)], []))
 
-    def test_a_woken_thread_is_released_only_once_the_run_sent_to_it_has_begun(self):
+    def test_a_woken_thread_is_released_only_once_the_run_sent_to_it_has_ended(self):
         self.pol["run"]["threads"] = 1
         self.run_("a")
 
         def woken(q):
-            q["running"]["a"]["runs"] = 2
+            q["running"]["a"]["run"] = "run:thread:t-a:ordinal:3"
             return None, True
         queue.locked(self.pol, woken)
-        self.status, self.runs = {"t-a": "completed"}, {"t-a": 2}
+        self.status, self.latest = {"t-a": "completed"}, {"t-a": "run:thread:t-a:ordinal:2"}
         with self.trees():
             self.assertEqual(queue.run_pass(self.pol)["released"], [])
-            self.runs["t-a"] = 3
+            self.latest["t-a"], self.active["t-a"] = "run:thread:t-a:ordinal:3", "run:thread:t-a:ordinal:3"
+            self.assertEqual(queue.run_pass(self.pol)["released"], [])
+            self.active = {}
             self.assertEqual([x["released"] for x in queue.run_pass(self.pol)["released"]], ["a"])
 
     def test_a_release_from_a_woken_thread_waits_for_the_run_sent_to_it_and_a_thread_read_once_as_ended_is_sent_to_not_doubled(self):
         self.run_("a", thread="t-a")
 
         def woken(q):
-            q["running"]["a"]["runs"] = 2
+            q["running"]["a"]["run"] = "run:thread:t-a:ordinal:3"
             return None, True
         queue.locked(self.pol, woken)
-        self.runs["t-a"] = 2
+        self.pr_open(40)
+        queue.verified(self.pol, "a", 40, H1, "fail")
+        self.forge.prs[40]["head"] = H2
+        self.active["t-a"] = "run:thread:t-a:ordinal:2"
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+            with self.assertRaises(queue.Unfinished):
+                queue.release(self.pol, hook=True)
+            self.forge.prs[40]["state"] = "MERGED"
             self.assertEqual(queue.release(self.pol, hook=True), {"released": None})
-            self.runs["t-a"] = 3
+            self.active["t-a"] = "run:thread:t-a:ordinal:3"
             with self.trees():
                 self.assertEqual(queue.release(self.pol, hook=True)["released"], "a")
         self.pr_open(41)
@@ -1341,7 +1361,7 @@ class Pass(Case):
             self.assertEqual(calls[0]["stdin"], queue.brief(self.pol, up))
             self.assertEqual(calls[1]["argv"], ["thread", "show", "mcp:1", "--messages", "0", "--json"])
             woke = {"id": "a", "task": "Merge main and push", "wake": "mcp:9", "worktree": "/old"}
-            self.assertEqual((LAUNCH(self.pol, woke), woke["runs"]), (("mcp:9", "/wt/1"), 2))
+            self.assertEqual((LAUNCH(self.pol, woke), woke["run"]), (("mcp:9", "/wt/1"), "run:thread:mcp%3A9:ordinal:3"))
             calls = [json.loads(x) for x in (self.root / "calls").read_text().splitlines()]
             self.assertEqual([c["argv"] for c in calls[2:]], [["thread", "show", "mcp:9", "--messages", "0", "--json"],
                                                               ["thread", "send", "mcp:9", "-", "--json"]])
