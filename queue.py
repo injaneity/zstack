@@ -743,14 +743,14 @@ def launch(pol, up):
 def step(pol):
     def intend(q):
         was = json.dumps(q, sort_keys=True)
+        unresume(q)
         cleared, kept = settle(pol, q)
-        kept += recheck(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title", "priority")},
-                                      **{k: up[k] for k in ("dropped", "seen", "kept") if k in up},
+                                      **{k: up[k] for k in ("dropped", "seen", "queued", "kept") if k in up},
                                       "thread": None, "worktree": None, "pr": up.get("pr"), "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
@@ -1188,7 +1188,7 @@ def resume(pol, q, key, it, live, need):
             f"`git push origin {shlex.quote('HEAD:' + branch)}`, so the commits land on PR #{pr}, and open no new PR.{told}")
     q["tasks"][key] = {"task": said, "was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)),
                        "preapproved": it["preapproved"], "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr,
-                       "base": f"origin/{branch}", "kept": kept, **{k: it[k] for k in ("dropped", "seen") if k in it}}
+                       "base": f"origin/{branch}", "kept": kept, **{k: it[k] for k in ("dropped", "seen", "queued") if k in it}}
     return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
 
 
@@ -1279,42 +1279,13 @@ def release(pol, ident=None, hook=False, died=False):
     return out
 
 
-def merge_queued(pol, pr):
-    (owner, name) = pol["merge"]["repo"].split("/")
-    rc, out, err = gh("api", "graphql", "-f", f"query={QUEUED}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={pr}",
-                      "--jq", ".data.repository.pullRequest")
-    try:
-        return bool(json.loads(out)["isInMergeQueue"]) if not rc else None
-    except (ValueError, KeyError, TypeError):
-        return None
-
-
-def recheck(pol, q):
-    kept = []
+def unresume(q):
     for key, row in sorted(q["tasks"].items()):
-        if not row.get("pr") or key in q["running"]:
-            continue
-        it = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority")}, "readonly": False, "thread": None,
-              "worktree": None, "at": now(ms=True), **{k: row[k] for k in ("dropped", "seen", "kept") if k in row}}
-        if row["kind"] == "task":
-            it["task"] = row
-        try:
-            live = pr_view(pol, row["pr"])
-            on = live["state"] == "OPEN" and merge_queued(pol, row["pr"])
-            need = needs(pol, it, q["verdicts"].get(str(row["pr"])), live) if live["state"] == "OPEN" and on is False else []
-            why = (f"PR {row['pr']} is {live['state'].lower()}" if live["state"] != "OPEN" else
-                   f"PR {row['pr']} is in the merge queue" if on else
-                   f"whether PR {row['pr']} is in the merge queue could not be read" if on is None else
-                   f"PR {row['pr']} waits for the owner: " + (f"it is labelled {pol['merge']['hold_label']}" if held(pol, it, live) else
-                                                             "the PR is a draft" if live.get("isDraft") else
-                                                             blocked(pol, it, q["verdicts"].get(str(row["pr"])), live) or "nothing it needs"))
-        except Refused as e:
-            need, why = [], str(e)
-        if not need:
+        if row.get("pr") and key not in q["running"]:
+            q["waiting"][key] = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority", "at")}, "readonly": False,
+                                 "thread": None, "worktree": None, **{k: row[k] for k in ("dropped", "seen", "queued", "kept") if k in row},
+                                 **({"task": row} if row["kind"] == "task" else {})}
             del q["tasks"][key]
-            q["waiting"][key] = it
-            kept.append({"id": key, "why": f"{why}, so it waits again instead of starting a thread"})
-    return kept
 
 
 def settle(pol, q):
