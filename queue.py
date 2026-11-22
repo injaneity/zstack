@@ -1274,16 +1274,17 @@ def outcome(pol, q, key, merge=False, died=False):
     except Refused as e:
         return wait(str(e))
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
-    if back and not live and refs is None:
-        why = f"{ended_as} with no record of its pushes, so whether it opened a PR cannot be told"
-    elif back and not live and refs:
-        why = f"{ended_as} after it pushed {', '.join(refs)}, and no PR of it was found, so whether it opened one cannot be told"
+    if died and not live and refs is None:
+        why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
+    elif died and not live and refs:
+        why = f"its thread died after it pushed {', '.join(refs)}, and no PR of it was found, so whether it opened one cannot be told"
     elif back and not live and (it["kind"] != "task" or "task" in it):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
             q["tasks"][key] = {**it["task"], "preapproved": it["preapproved"]}
         q["verdicts"] = {k: v for k, v in q["verdicts"].items() if held_pr(q, int(k))}
-        return "tasks", f"{ended_as} with no PR, so it goes back to tasks to run again{kept}"
+        pushed = f" after it pushed {', '.join(refs)}" if refs else ""
+        return "tasks", f"{ended_as} with no PR{pushed}, so it goes back to tasks to run again{kept}"
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
