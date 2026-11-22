@@ -1383,17 +1383,19 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                   re.compile(r"\s*(//|/\*(?!.*\*/\s*\S))")),
                  (re.compile(r"\.(py|ya?ml|toml)$"), re.compile(r"\s*#(\s|$)"))]
 PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
-CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|\w/|/\w|(^|\s)-\w|^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|"
-                        r"export|extern|require|include|static|type|struct|enum|impl|async|await)\b")
+CODE_SHAPE = re.compile(r"[;{}=<>\[\]`\"]|(?<![a-z])'|'(?![a-z])|\d\.\d|\w\(|\w/|/\w|(^|\s)-\w|"
+                        r"^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|export|extern|"
+                        r"require|include|static|type|struct|enum|impl|async|await)\b")
 ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
                     "then than which who we you they our has have does do can will should must".split())
 NAMING = frozenset("name call dub title feature crate module package flag option setting key field var variable env function method "
                    "type struct trait class service binary executable exe daemon cli tool script app program command repo branch target "
-                   "plugin library lib endpoint api dependency table column".split())
+                   "plugin library lib endpoint api dependency version release table column".split())
 ACTS = frozenset("run ran install uninstall reinstall rename call invoke enable disable start launch spawn kill restart stop build "
                  "rebuild compile deploy ship download fetch update upgrade import export add remove configure open use pass set load "
-                 "require exec execute reboot".split())
-SQL = re.compile(r"\b(select\b.*\bfrom|insert\s+into|delete\s+from|update\s+\S+\s+set|from\s+\S+\s+(where|join))\b", re.I)
+                 "require exec execute reboot grant revoke truncate".split())
+SQL = re.compile(r"\b(select\b.*\bfrom|insert\s+into|delete\s+from|update\s+\S+\s+set|from\s+\S+\s+(where|join)|"
+                 r"(create|drop|alter)\s+(table|index|view|schema|database))\b", re.I)
 LONG_LINE = 1000
 
 
