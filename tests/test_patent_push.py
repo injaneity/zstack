@@ -248,6 +248,7 @@ class PatentPush(unittest.TestCase):
             self.assertEqual(remote, "")
         cr = "diff --git a/x b/x\n@@ -0,0 +1 @@\n+a\r@@@ b\r++skyhook\n"
         self.assertTrue(pp.held_hits([], cr, public=lambda t: True))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1,2 @@\n+a\r@@@ -1 +1 @@@\n++// skyhook\n", public=lambda t: True))
         self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\x0b\n", public=lambda t: True))
         self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\r\n", public=lambda t: True))
         crlf = "// skyhook " + "x" * (q.LONG_LINE - 11)
