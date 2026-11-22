@@ -772,7 +772,8 @@ class Approve(Case):
         self.assertEqual({k: row[k] for k in ("priority", "preapproved", "kind", "pr", "base", "was")},
                          {"priority": 5, "preapproved": True, "kind": "task", "pr": 40, "base": "origin/fix-parser", "was": "Fix the parser"})
         for said in ("Fix the parser\n", f"{dropped}. Merge origin/main into the branch", "runs again in a fresh thread",
-                     "`git push origin HEAD:fix-parser`", "open no new PR"):
+                     "where the brief above says to open a PR, PR #40 is that PR", "`git push origin HEAD:fix-parser`",
+                     "open no new PR"):
             self.assertIn(said, row["task"])
         self.assertEqual(self.file()["waiting"], {})
         self.assertEqual((queue.step(self.pol)["cleared"], self.file()["tasks"], self.file()["waiting"]), ([{"id": "a", "why": why}], {"a": row}, {}))
@@ -789,6 +790,37 @@ class Approve(Case):
         queue.release(self.pol, "a")
         self.status = {}
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}], ["40"]))
+
+    def test_a_drop_seen_by_a_pass_whose_thread_has_ended_goes_back_to_tasks_in_that_pass(self):
+        self.run_("a", thread="t-a")
+        self.pr_open(40)
+        self.forge.prs[40].update(queue=True)
+        queue.verified(self.pol, "a", 40, H1, "auto")
+        queue.release(self.pol, "a")
+        queue.approve(self.pol, "a")
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["MERGE_CONFLICT"], mergeable="CONFLICTING")
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        why = "its thread has ended, and PR 40 waits on that thread's work (a drop from the merge queue), so it goes back to tasks"
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": why}])
+        self.assertEqual(self.file()["tasks"]["a"]["dropped"]["head"], H1)
+
+    def test_a_wait_recorded_before_rows_kept_a_priority_goes_back_with_the_priority_its_labels_give(self):
+        self.cands = [cand(7, labels=["urgent"])]
+        self.start("app-7", "t-7")
+        self.cands = []
+        self.pr_open(47)
+        self.forge.issues[7] = ["urgent"]
+        queue.verified(self.pol, "app-7", 47, H1, "fail")
+        queue.release(self.pol, "app-7")
+
+        def old(q):
+            del q["waiting"]["app-7"]["priority"]
+            return None, True
+        queue.locked(self.pol, old)
+        self.status, self.pol["run"]["threads"] = {"t-7": "completed"}, 0
+        queue.step(self.pol)
+        self.assertEqual(self.file()["tasks"]["app-7"]["priority"], 100)
 
     def test_a_resumed_task_keeps_its_verdict_waits_out_a_hold_names_every_kept_worktree_and_never_doubles_a_pr(self):
         self.waiting("a", pr=40, said="fail")
@@ -821,7 +853,8 @@ class Approve(Case):
         hold = M["hold_label"]
         cases = (("live", "fail", {}, "running"), ("person", "review", {"mergeable": "CONFLICTING"}, "completed"),
                  ("labelled", "auto", {"labels": [M["review_label"]], "ci": "FAILURE"}, "cancelled"),
-                 ("held", "fail", {"labels": [hold]}, "completed"), ("draft", "fail", {"draft": True}, "failed"),
+                 ("held", "fail", {"labels": [hold]}, "completed"), ("flagged", "fail", {"labels": [M["review_label"]]}, "completed"),
+                 ("draft", "fail", {"draft": True}, "failed"),
                  ("green", "auto", {}, "completed"), ("fork", "fail", {"fork": True}, "completed"),
                  ("red", "auto", {"ci": "FAILURE"}, "completed"), ("unverified", "fail", {}, "interrupted"),
                  ("moved", "auto", {"head": H2}, "cancelled"), ("gone", "auto", {"mergeable": "CONFLICTING"}, "gone"))
@@ -891,7 +924,8 @@ class Approve(Case):
         queue.locked(self.pol, join)
         self.status["t-a"] = "completed"
         got = queue.step(self.pol)
-        self.assertEqual(([x["id"] for x in got["cleared"]], sorted(self.file()["tasks"]), sorted(self.file()["waiting"])), (["z"], ["z"], ["a", "w"]))
+        self.assertEqual(([x["id"] for x in got["cleared"]], sorted(self.file()["tasks"]), sorted(self.file()["waiting"])),
+                         (["z"], ["z"], ["a", "w"]))
         self.pol["run"]["threads"] = 9
         self.assertEqual((queue.step(self.pol)["launched"]["id"], sorted(self.file()["waiting"])), ("z", ["a", "w"]))
 
