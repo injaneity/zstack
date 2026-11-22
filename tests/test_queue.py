@@ -43,6 +43,7 @@ class Forge:
         if a[:2] == ("pr", "view"):
             p = self.prs[int(a[2])]
             return 0, json.dumps({"number": int(a[2]), "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isDraft": p.get("draft", False),
+                                  "headRefName": p.get("branch") or f"pr-{a[2]}", "baseRefName": "main", "isCrossRepository": p.get("fork", False),
                                   "mergeable": p.get("mergeable", "MERGEABLE"),
                                   "labels": [{"name": x} for x in p.get("labels", [])],
                                   "statusCheckRollup": [{"name": M["gate_check"], "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]}), ""
@@ -753,6 +754,68 @@ class Approve(Case):
         self.forge.issues[1] = []
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "app-1", "why": "PR 40 merged"}])
 
+    def test_a_pr_dropped_from_the_merge_queue_whose_thread_ended_goes_back_to_tasks_once_with_its_priority_and_runs_on_that_pr(self):
+        self.run_("a", thread="t-a", text="Fix the parser", priority=5)
+        self.pr_open(40)
+        self.forge.prs[40].update(branch="fix-parser", queue=True)
+        queue.verified(self.pol, "a", 40, H1, "auto")
+        queue.release(self.pol, "a")
+        queue.approve(self.pol, "a")
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["MERGE_CONFLICT"], mergeable="CONFLICTING")
+        dropped = f"GitHub took head {H1} out of the merge queue: MERGE_CONFLICT"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}])
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        why = "its thread has ended, and PR 40 waits on that thread's work (a drop from the merge queue), so it goes back to tasks"
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": why}])
+        row = self.file()["tasks"]["a"]
+        self.assertEqual({k: row[k] for k in ("priority", "preapproved", "kind", "pr", "base", "was")},
+                         {"priority": 5, "preapproved": True, "kind": "task", "pr": 40, "base": "origin/fix-parser", "was": "Fix the parser"})
+        for said in ("Fix the parser\n", f"{dropped}. Merge origin/main into the branch", "git push origin HEAD:fix-parser", "open no new PR"):
+            self.assertIn(said, row["task"])
+        self.assertEqual(self.file()["waiting"], {})
+        self.assertEqual((queue.step(self.pol)["cleared"], self.file()["tasks"]), ([], {"a": row}))
+        self.pol["run"]["threads"] = 9
+        self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
+        self.assertEqual((self.briefed[-1]["base"], self.briefed[-1]["task"], self.file()["tasks"]), ("origin/fix-parser", row["task"], {}))
+        running = self.file()["running"]["a"]
+        self.assertEqual({k: running[k] for k in ("pr", "priority", "preapproved")}, {"pr": 40, "priority": 5, "preapproved": True})
+
+    def test_only_a_wait_whose_thread_ended_and_whose_pr_needs_that_thread_goes_back_to_tasks(self):
+        hold = M["hold_label"]
+        cases = (("live", "fail", {}, "running"), ("person", "review", {"mergeable": "CONFLICTING"}, "completed"),
+                 ("labelled", "auto", {"labels": [M["review_label"]], "ci": "FAILURE"}, "cancelled"),
+                 ("held", "fail", {"labels": [hold]}, "completed"), ("draft", "fail", {"draft": True}, "failed"),
+                 ("green", "auto", {}, "completed"), ("fork", "fail", {"fork": True}, "completed"),
+                 ("red", "auto", {"ci": "FAILURE"}, "completed"), ("unverified", "fail", {}, "interrupted"),
+                 ("moved", "auto", {"head": H2}, "cancelled"), ("gone", "auto", {"mergeable": "CONFLICTING"}, "gone"))
+        for n, (ident, said, pr, _) in enumerate(cases):
+            self.waiting(ident, pr=60 + n, said=said)
+            self.forge.prs[60 + n].update(pr)
+        self.status, self.pol["run"]["threads"] = {f"t-{c[0]}": c[3] for c in cases}, 0
+        got = queue.step(self.pol)
+        work = {"red": f"{M['gate_check']} red", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
+                "gone": "a merge conflict"}
+        self.assertEqual(sorted((x["id"], x["why"]) for x in got["cleared"]),
+                         sorted((k, f"its thread has ended, and PR {60 + [c[0] for c in cases].index(k)} waits on that thread's work ({w}), so it "
+                                    "goes back to tasks") for k, w in work.items()))
+        self.assertEqual((sorted(self.file()["tasks"]), sorted(self.file()["waiting"])), (sorted(work), sorted({c[0] for c in cases} - set(work))))
+        tasks = self.file()["tasks"]
+        self.assertEqual(queue.step(self.pol)["cleared"], [])
+        self.assertIn(f"The verifier failed head {H1}: fix its findings and push.", tasks["unverified"]["task"])
+        self.assertIn(f"The verifier has not passed head {H2}: have it check the head you end on.", tasks["moved"]["task"])
+        self.assertIn(f"{M['gate_check']} failed on head {H1}. Read its logs", tasks["red"]["task"])
+        self.assertIn("GitHub says the PR conflicts with main. Merge origin/main", tasks["gone"]["task"])
+
+    def test_a_wait_on_a_pr_another_item_holds_stays_and_of_two_ended_waits_on_one_pr_one_goes_back(self):
+        self.waiting("a", pr=40, said="fail")
+        self.waiting("b", pr=40, said="fail")
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["waiting"])), ([], ["a", "b"]))
+        self.status["t-b"] = "cancelled"
+        self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["waiting"])), (["a"], ["b"]))
+        self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["tasks"])), ([], ["a"]))
+
     def test_an_unapproved_waiting_pr_is_left_for_its_owner(self):
         self.waiting(said="auto")
         self.assertEqual((queue.step(self.pol)["cleared"], self.merges()), ([], []))
@@ -1067,6 +1130,7 @@ class Pass(Case):
         self.add("a")
         queue.run_pass(self.pol)
         self.pr_open(40)
+        queue.verified(self.pol, "a", 40, H1, "review")
         self.status = {"t-a": "failed"}
         with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: 40 if it["worktree"] == "/seen/t-a" else None):
             got = queue.run_pass(self.pol)
