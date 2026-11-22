@@ -1282,6 +1282,35 @@ class Pass(Case):
             self.runs["t-a"] = 3
             self.assertEqual([x["released"] for x in queue.run_pass(self.pol)["released"]], ["a"])
 
+    def test_a_release_from_a_woken_thread_waits_for_the_run_sent_to_it_and_a_thread_read_once_as_ended_is_sent_to_not_doubled(self):
+        self.run_("a", thread="t-a")
+
+        def woken(q):
+            q["running"]["a"]["runs"] = 2
+            return None, True
+        queue.locked(self.pol, woken)
+        self.runs["t-a"] = 2
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-a"}):
+            self.assertEqual(queue.release(self.pol, hook=True), {"released": None})
+            self.runs["t-a"] = 3
+            with self.trees():
+                self.assertEqual(queue.release(self.pol, hook=True)["released"], "a")
+        self.pr_open(41)
+        self.run_("b", thread="t-b")
+        queue.verified(self.pol, "b", 41, H1, "fail")
+        queue.release(self.pol, "b")
+        reads, t3 = [], self.t3
+
+        def flips(pol, *args, stdin=None):
+            if args[:2] == ("show", "t-b"):
+                reads.append(1)
+                self.status["t-b"] = "completed" if len(reads) == 1 else "running"
+            return t3(pol, *args, stdin=stdin)
+        self.pol["run"]["threads"] = 0
+        with patch.object(queue, "t3", flips):
+            queue.step(self.pol)
+        self.assertEqual((self.file()["tasks"]["b"]["wake"], "base" in self.file()["tasks"]["b"]), ("t-b", False))
+
     def test_two_passes_never_run_at_once(self):
         self.add("a")
         with open(self.root / "pass.lock", "w") as held:
