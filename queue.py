@@ -1191,14 +1191,14 @@ def shared(pol, q, it):
         any(on(x) and (x.get("resumed") or not ended(pol, x)) for x in q["waiting"].values())
 
 
-def resume(pol, q, key, it, live, need):
+def resume(pol, q, key, it, live, need, state):
     repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
     was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
     keep = {k: it[k] for k in ("dropped", "seen", "queued") if k in it}
     common = {"was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)), "preapproved": it["preapproved"],
               "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr, **keep}
     why = f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
-    if it["thread"] and thread_state(pol, it["thread"]) == "ended":
+    if state == "ended":
         said = (f"{was}\n\nThis thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. The PR waits on this thread's own work, "
                 f"so the queue sends the item back to it:\n" + "".join(f"- {x[1]}\n" for x in need) +
                 f"Work on {shlex.quote(branch)}, the PR's head branch, and push to it, so the commits land on PR #{pr}; open no new PR.")
@@ -1246,8 +1246,9 @@ def outcome(pol, q, key, merge=False, died=False):
             stale = why.startswith("it could not be read again") or why.startswith("the verifier has not passed head ") and \
                 not why.endswith(live["headRefOid"])
             need = needs(pol, it, v, live) if merge and not it.get("queued") and why not in stops and not stale else []
-            if need and ended(pol, it) and not shared(pol, q, it):
-                return resume(pol, q, key, it, live, need)
+            state = (thread_state(pol, it["thread"]) if it["thread"] else "gone") if need else None
+            if state in ("ended", "gone") and not shared(pol, q, it):
+                return resume(pol, q, key, it, live, need, state)
             tidy(pol, it, False)
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
@@ -1292,6 +1293,10 @@ def release(pol, ident=None, hook=False, died=False):
             if ident:
                 raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
+        if not ident and was == "running" and "runs" in q["running"][key]:
+            seen = t3(pol, "show", thread, "--messages", "0")
+            if not isinstance(seen, dict) or seen["thread"].get("runCount", 0) <= q["running"][key]["runs"]:
+                return {"released": None}, False
         held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
         if held_back:
             return Unfinished(held_back), False
