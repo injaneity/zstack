@@ -1391,6 +1391,10 @@ NAMING = frozenset("named called dubbed titled feature features crate crates mod
                    "setting settings key keys field fields var vars variable variables env function functions method methods type types "
                    "struct trait class service services binary command commands repo branch target targets plugin plugins library lib "
                    "table tables column columns".split())
+ACTS = frozenset("run runs running ran install installs installing installed uninstall rename renames renaming renamed call calls calling "
+                 "invoke invokes invoking enable enables enabling disable disables disabling start starts launch launches spawn spawns "
+                 "kill restart restarts stop stops build builds deploy deploys import imports export exports add adds remove removes "
+                 "upgrade upgrades configure open opens use uses using pass passes set sets".split())
 SQL = re.compile(r"\b(select\b.*\bfrom|insert\s+into|delete\s+from|update\s+\S+\s+set|from\s+\S+\s+(where|join))\b", re.I)
 LONG_LINE = 1000
 
@@ -1455,7 +1459,7 @@ class Patent:
     @staticmethod
     def plain(text, m):
         return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and bool(PLAIN_TAIL.match(text, m.end())))
+                and bool(PLAIN_TAIL.match(text, m.end())) and ACTS.isdisjoint(re.findall(r"[a-z]+", text[:m.start()].lower())[-1:]))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):

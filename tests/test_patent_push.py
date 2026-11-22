@@ -99,7 +99,10 @@ class PatentPush(unittest.TestCase):
                            ("Cargo.toml", "# The Cargo feature is named either pairing or legacy depending on the build."),
                            ("Cargo.toml", "# To enable the Cargo feature, add pairing to the list."),
                            ("src/store.rs", "// select id from pairing where id is not null"),
-                           ("a.py", "# insert into pairing the rows we kept"), ("a.rs", "// delete from pairing the stale rows")):
+                           ("a.py", "# insert into pairing the rows we kept"), ("a.rs", "// delete from pairing the stale rows"),
+                           ("src/setup.rs", "// Run pairing with no arguments."),
+                           ("src/setup.rs", "// Install teleport on each host before the demo."),
+                           ("src/setup.rs", "// Rename pairing to avoid shadowing it."), ("a.py", "# then restart keyvault on the box")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
