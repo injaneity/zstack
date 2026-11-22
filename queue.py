@@ -3,6 +3,7 @@ import ctypes
 import fcntl
 import functools
 import json
+import locale
 import os
 import re
 import shlex
@@ -947,7 +948,7 @@ def gate(pol, pr, head):
 
 def git(*args, cwd=None, raw=False):
     p = subprocess.run(["git", *args], capture_output=True, text=not raw, env=ENV, cwd=cwd, timeout=300)
-    return p.returncode, p.stdout.decode(errors="surrogateescape") if raw else p.stdout
+    return p.returncode, p.stdout.decode(locale.getpreferredencoding(False)) if raw else p.stdout
 
 
 def listed(pol, path):
@@ -1394,7 +1395,6 @@ LONG_LINE = 1000
 
 
 def one_line(text):
-    text = text[:-1] if text.endswith("\r") else text
     return text.splitlines() == [text]
 
 
@@ -1474,8 +1474,11 @@ class Patent:
 
     @staticmethod
     def in_tree(text, tree, cwd=None):
-        rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
-                      cwd=cwd, raw=True)
+        try:
+            rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
+                          cwd=cwd, raw=True)
+        except UnicodeDecodeError:
+            return False
         return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if one_line(x)}
 
     def staging_push_ok(self):

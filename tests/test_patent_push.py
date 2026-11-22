@@ -249,7 +249,7 @@ class PatentPush(unittest.TestCase):
         cr = "diff --git a/x b/x\n@@ -0,0 +1 @@\n+a\r@@@ b\r++skyhook\n"
         self.assertTrue(pp.held_hits([], cr, public=lambda t: True))
         self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\x0b\n", public=lambda t: True))
-        self.assertEqual(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\r\n", public=lambda t: True), [])
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\r\n", public=lambda t: True))
         crlf = "// skyhook " + "x" * (q.LONG_LINE - 11)
         for name, text in (("crlf", f"{crlf}\r\n"), ("tail", "// skyhook x\r" + "y" * q.LONG_LINE + "\n")):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
@@ -264,9 +264,12 @@ class PatentPush(unittest.TestCase):
             self.assertFalse(q.Patent.in_tree("1:1:// skyhook x secret", "origin/main", cwd=work))
             self.assertFalse(q.Patent.in_tree("// skyhook x secret", "origin/main", cwd=work))
         with tempfile.TemporaryDirectory() as tmp:
-            _, _, work, _ = self.repo(tmp, {"src/a.rs": "// skyhook\r\r\n", "src/b.rs": "// skyhook y\r\n"})
-            self.assertFalse(q.Patent.in_tree("// skyhook", "origin/main", cwd=work))
-            self.assertTrue(q.Patent.in_tree("// skyhook y", "origin/main", cwd=work))
+            _, _, work, _ = self.repo(tmp, {"src/a.rs": "// skyhook\r\r\n", "src/b.rs": "// skyhook y\r\n", "src/c.rs": "// skyhook z\r"})
+            for text in ("// skyhook", "// skyhook y", "// skyhook z"):
+                self.assertFalse(q.Patent.in_tree(text, "origin/main", cwd=work))
+            Path(work, "d.rs").write_bytes(b"\xff x\n")
+            with self.assertRaises(UnicodeDecodeError):
+                q.git("diff", "--no-index", "-U0", os.devnull, "d.rs", cwd=work, raw=True)
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
