@@ -642,11 +642,15 @@ def work(pol, q):
             skipped[why] = skipped.get(why, 0) + 1
             continue
         pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
-        ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
+        ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": rank(c["labels"]), "at": c["created"],
                       "preapproved": pre, "task": task(c, pol), "title": c["title"], "readonly": teammate(c, pol)})
     ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items() if k not in q["running"]]
     ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
     return ready, skipped, errors, {c["id"] for c in cands}
+
+
+def rank(labels):
+    return 100 if "urgent" in labels else 0
 
 
 def first(pol, q):
@@ -1141,7 +1145,7 @@ def needs(pol, it, v, live):
         return []
     head, base, gate_name = live["headRefOid"], live.get("baseRefName") or "its base", pol["merge"]["gate_check"]
     passed = bool(v) and v["result"] != "fail" and v["head"] == head
-    if passed and not it["preapproved"] and (v["result"] != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]):
+    if not it["preapproved"] and (pol["merge"]["review_label"] in [x["name"] for x in live["labels"]] or passed and v["result"] != "auto"):
         return []
     out = []
     if (it.get("dropped") or {}).get("head") == head:
@@ -1181,13 +1185,15 @@ def resume(pol, q, key, it, live, need):
     repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
     was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
     keep = {k: it[k] for k in ("dropped", "seen", "queued") if k in it}
-    common = {"was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)), "preapproved": it["preapproved"],
+    priority = it["priority"] if "priority" in it else row["priority"] if "priority" in row else rank(labels_of(pol, it, live))
+    common = {"was": was, "title": it["title"], "priority": priority, "preapproved": it["preapproved"],
               "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr, **keep}
     kept = [x for x in it.get("kept", []) if listed(pol, x)[1]] + ([] if tidy(pol, it, True) else [it["worktree"]])
     told = "".join(f"\nAn old thread's worktree {x} still holds work that is not on the remote: read it with `git -C {shlex.quote(x)} status` and "
                    f"`git -C {shlex.quote(x)} log --branches --not --remotes`, and take what belongs to PR #{pr}." for x in kept)
     said = (f"{was}\n\nThis item ran before, and its thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. "
-            f"The PR waits on this item's own work, so it runs again in a fresh thread:\n" + "".join(f"- {x[1]}\n" for x in need) +
+            "The PR waits on this item's own work, so it runs again in a fresh thread, and where the brief above says to open a PR, "
+            f"PR #{pr} is that PR:\n" + "".join(f"- {x[1]}\n" for x in need) +
             f"Your worktree starts at origin/{branch}, the PR's head branch, on a branch of its own: push with "
             f"`git push origin {shlex.quote('HEAD:' + branch)}`, so the commits land on PR #{pr}, and open no new PR.{told}")
     q["tasks"][key] = {"task": said, **common, "base": f"origin/{branch}", "kept": kept}
@@ -1211,8 +1217,13 @@ def outcome(pol, q, key, merge=False, died=False):
         if found:
             move(it, found)
             live = pr_view(pol, found)
+        was = (it.get("dropped") or {}).get("head")
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
+            v = q["verdicts"].get(str(it["pr"]))
+            need = needs(pol, it, v, live) if (it.get("dropped") or {}).get("head") != was else []
+            if need and ended(pol, it) and not shared(pol, q, it):
+                return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
             return wait(said)
         if live and live["state"] == "OPEN":
