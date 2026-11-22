@@ -202,10 +202,8 @@ M = [
     ),
     (
         "resume-starts-a-second-thread",
-        "a resumed item starts a fresh thread instead of sending the brief to its own, so a thread the orchestrator woke runs beside it",
-        [("  /\\ thread' = thread \\cup {i} /\\ UNCHANGED <<held, work, endedUnverified, pending, twoThreads, diedCleared>>\n",
-          "  /\\ pending' = pending \\cup {i} /\\ twoThreads' = (twoThreads \\/ i \\in thread)\n"
-          "  /\\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared>>\n")],
+        "a resumed item starts a fresh thread though T3 still has its own, so a thread the orchestrator woke runs beside it",
+        [("  /\\ (IF i \\in vanished THEN pending'", "  /\\ (IF TRUE THEN pending'")],
         "OneThreadPerItem",
         RESUMES,
     ),
