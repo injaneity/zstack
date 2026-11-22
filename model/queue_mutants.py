@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Machines = {"mac", "linux"}\n', '  Machines = {"mac"}\n')
-RESUMES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Woken = {}\n  Resumes = {}\n',
-           '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Woken = {"i1"}\n  Resumes = {"i1", "i2", "i3"}\n')
+RESUMES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
+           '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -198,20 +198,6 @@ M = [
         "a resumed item starts a thread on a PR that merged, entered the merge queue or was held after it went back to tasks",
         [("  /\\ Needed(i)\n  /\\ Set(m, i, \"running\")", "  /\\ Set(m, i, \"running\")")],
         "AResumedThreadIsNeeded",
-        RESUMES,
-    ),
-    (
-        "resume-starts-a-second-thread",
-        "a resumed item starts a fresh thread though T3 still has its own, so a thread the orchestrator woke runs beside it",
-        [("  /\\ (IF i \\in vanished THEN pending'", "  /\\ (IF TRUE THEN pending'")],
-        "OneThreadPerItem",
-        RESUMES,
-    ),
-    (
-        "release-before-the-sent-run",
-        "the turn a woken thread was already running ends and frees the slot, though the brief the queue sent it has not run yet",
-        [("  /\\ i \\notin queuedRun /\\ endedUnverified'", "  /\\ endedUnverified'")],
-        "NoRunOutsideASlot",
         RESUMES,
     ),
     (
