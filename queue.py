@@ -750,7 +750,7 @@ def step(pol):
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title", "priority")},
-                                      **{k: up[k] for k in ("dropped", "seen", "queued", "kept") if k in up},
+                                      **{k: up[k] for k in ("dropped", "seen", "queued", "kept", "threads") if k in up},
                                       "thread": None, "worktree": None, "pr": up.get("pr"), "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
@@ -1161,19 +1161,21 @@ def needs(pol, it, v, live):
 
 
 def ended(pol, it):
-    if not it["thread"]:
-        return True
-    seen = t3(pol, "show", it["thread"], "--messages", "0")
-    if isinstance(seen, dict):
-        return seen["thread"]["status"] in DEAD
-    rows = t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
-    return isinstance(rows, list) and it["thread"] not in [r["threadId"] for r in rows]
+    for thread in [it["thread"]] * bool(it["thread"]) + it.get("threads", []):
+        seen = t3(pol, "show", thread, "--messages", "0")
+        if isinstance(seen, dict) and seen["thread"]["status"] not in DEAD:
+            return False
+        rows = None if isinstance(seen, dict) else t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
+        if not isinstance(seen, dict) and (not isinstance(rows, list) or thread in [r["threadId"] for r in rows]):
+            return False
+    return True
 
 
 def shared(pol, q, it):
     def on(x):
         return it["pr"] in (x.get("pr"), x.get("n"))
-    return any(on(x) for p in ("running", "tasks") for x in q[p].values()) or any(on(x) and not ended(pol, x) for x in q["waiting"].values())
+    return any(on(x) for p in ("running", "tasks") for x in q[p].values()) or \
+        any(on(x) and (x.get("resumed") or not ended(pol, x)) for x in q["waiting"].values())
 
 
 def resume(pol, q, key, it, live, need):
@@ -1188,7 +1190,8 @@ def resume(pol, q, key, it, live, need):
             f"`git push origin {shlex.quote('HEAD:' + branch)}`, so the commits land on PR #{pr}, and open no new PR.{told}")
     q["tasks"][key] = {"task": said, "was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)),
                        "preapproved": it["preapproved"], "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr,
-                       "base": f"origin/{branch}", "kept": kept, **{k: it[k] for k in ("dropped", "seen", "queued") if k in it}}
+                       "base": f"origin/{branch}", "kept": kept, "threads": it.get("threads", []) + [it["thread"]] * bool(it["thread"]),
+                       **{k: it[k] for k in ("dropped", "seen", "queued") if k in it}}
     return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
 
 
@@ -1219,7 +1222,8 @@ def outcome(pol, q, key, merge=False, died=False):
             if not why:
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
-            need = needs(pol, it, v, live) if merge and not it.get("queued") else []
+            stops = (f"it is labelled {pol['merge']['hold_label']}", "it needs a person's review", "the PR is a draft")
+            need = needs(pol, it, v, live) if merge and not it.get("queued") and why not in stops else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
@@ -1283,7 +1287,8 @@ def unresume(q):
     for key, row in sorted(q["tasks"].items()):
         if row.get("pr") and key not in q["running"]:
             q["waiting"][key] = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority", "at")}, "readonly": False,
-                                 "thread": None, "worktree": None, **{k: row[k] for k in ("dropped", "seen", "queued", "kept") if k in row},
+                                 "thread": None, "worktree": None, "resumed": True,
+                                 **{k: row[k] for k in ("dropped", "seen", "queued", "kept", "threads") if k in row},
                                  **({"task": row} if row["kind"] == "task" else {})}
             del q["tasks"][key]
 
