@@ -196,22 +196,16 @@ M = [
     (
         "launch-a-resumed-item-unchecked",
         "a resumed item starts a thread on a PR that merged, entered the merge queue or was held after it went back to tasks",
-        [("  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i) /\\ i \\notin thread)\n", "  /\\ (i \\in Resumes /\\ i \\in pr => i \\notin thread)\n")],
+        [("  /\\ Needed(i)\n  /\\ Set(m, i, \"running\")", "  /\\ Set(m, i, \"running\")")],
         "AResumedThreadIsNeeded",
         RESUMES,
     ),
     (
-        "launch-beside-a-woken-thread",
-        "a resumed item starts a fresh thread while its old thread, woken again after it went back to tasks, still runs",
-        [("  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i) /\\ i \\notin thread)\n", "  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i))\n")],
-        "OneThreadPerItem",
-        RESUMES,
-    ),
-    (
-        "resume-a-live-thread",
-        "the pass never reads an item's thread before it sends the item back or launches it, so a second thread starts beside a woken one",
-        [('Resumes /\\ q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Resumes /\\ q[m][i] = "waiting" /\\ i'),
-         ("  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i) /\\ i \\notin thread)\n", "  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i))\n")],
+        "resume-starts-a-second-thread",
+        "a resumed item starts a fresh thread instead of sending the brief to its own, so a thread the orchestrator woke runs beside it",
+        [("  /\\ thread' = thread \\cup {i} /\\ UNCHANGED <<held, work, endedUnverified, pending, twoThreads, diedCleared>>\n",
+          "  /\\ pending' = pending \\cup {i} /\\ twoThreads' = (twoThreads \\/ i \\in thread)\n"
+          "  /\\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared>>\n")],
         "OneThreadPerItem",
         RESUMES,
     ),

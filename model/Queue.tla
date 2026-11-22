@@ -37,11 +37,16 @@ Needed(i) == i \notin merged /\ i \notin inq /\ i \notin held /\ (status[i] = "n
 First(m, i) == \A j \in Items : Ready(m, j) => Prio[j] <= Prio[i]
 Launch(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m, i)
   /\ Busy(m) < Cap
-  /\ (i \in Resumes /\ i \in pr => Needed(i) /\ i \notin thread)
+  /\ ~(i \in Resumes /\ i \in pr)
   /\ Set(m, i, "running") /\ pending' = pending \cup {i} /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread)
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held)
-  /\ needless' = (needless \/ i \in Resumes /\ i \in pr /\ ~Needed(i)) /\ crowded' = (crowded \/ Busy(m) >= Cap)
-  /\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared>>
+  /\ crowded' = (crowded \/ Busy(m) >= Cap)
+  /\ UNCHANGED <<held, work, needless, endedUnverified, thread, diedCleared>>
+Rewake(m, i) == q[m][i] = "none" /\ i \in Resumes /\ i \in pr /\ i \notin held /\ i \in Accepts[m] /\ First(m, i) /\ Busy(m) < Cap
+  /\ Needed(i)
+  /\ Set(m, i, "running") /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held)
+  /\ needless' = (needless \/ ~Needed(i)) /\ crowded' = (crowded \/ Busy(m) >= Cap)
+  /\ thread' = thread \cup {i} /\ UNCHANGED <<held, work, endedUnverified, pending, twoThreads, diedCleared>>
 
 Takes(m, i) == q[m][i] \in {"running", "waiting"}
 Push(m, i) == Takes(m, i) /\ i \notin NoTree /\ i \notin merged
@@ -110,7 +115,7 @@ Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, u
 
 Next ==
   \/ \E m \in Machines, i \in Items :
-       Launch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
+       Launch(m, i) \/ Rewake(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
        \/ Resume(m, i) \/ Unresume(m, i) \/ Wake(m, i)
        \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
   \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Started(i) \/ Lost(i)
