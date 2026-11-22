@@ -194,6 +194,13 @@ M = [
         ONE_MACHINE,
     ),
     (
+        "launch-a-resumed-item-unchecked",
+        "a resumed item starts a thread on a PR that merged, entered the merge queue or was held after it went back to tasks",
+        [("  /\\ (i \\in Resumes /\\ i \\in pr => Needed(i))\n", "")],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
         "resume-a-live-thread",
         "a waiting PR whose thread was woken again goes back to tasks, so a second thread starts beside it",
         [('Resumes /\\ q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Resumes /\\ q[m][i] = "waiting" /\\ i')],
