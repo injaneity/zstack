@@ -278,6 +278,7 @@ class PatentPush(unittest.TestCase):
             g("replace", g("rev-parse", "origin/main:src/a.rs", cwd=work).strip(), g("hash-object", "-w", "fake", cwd=work).strip(), cwd=work)
             self.assertTrue(q.Patent.in_tree("// skyhook a", "origin/main", cwd=work))
             self.assertFalse(q.Patent.in_tree("// skyhook secret", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook\0a", "origin/main", cwd=work))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
