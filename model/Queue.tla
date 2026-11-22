@@ -51,14 +51,14 @@ Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
 
 NeedsPerson(i) == (status[i] = "review" \/ i \in Review) /\ i \notin pre
 Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held
-MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ (who = "pass" => i \in pre /\ i \notin Review)
+MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ i \notin dropped /\ (who = "pass" => i \in pre /\ i \notin Review)
 Merge(i, who) == i \in pr /\ i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = who]
   /\ okAtMerge' = [okAtMerge EXCEPT ![i] = MayMerge(i, who)] /\ inq' = inq \ {i}
   /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, drops, history>>
 Enqueue(i) == inq' = inq \cup {i} /\ okAtMerge' = [okAtMerge EXCEPT ![i] = MayMerge(i, "pass")] /\ requeued' = (requeued \/ i \in gone)
   /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, merged, gone, lost, dropped, by, history>>
 MergeOrQueue(i) == IF i \in Queues THEN Enqueue(i) ELSE Merge(i, "pass")
-ThreadMerge(m, i) == Takes(m, i) /\ Open(i) /\ Merge(i, "thread")
+ThreadMerge(m, i) == Takes(m, i) /\ Open(i) /\ i \notin dropped /\ Merge(i, "thread")
 PassReady(m, i) == q[m][i] = "waiting" /\ i \in pr /\ i \notin merged /\ Open(i) /\ i \in pre /\ i \notin Review /\ i \notin unread /\ i \notin inq /\ i \notin lost /\ i \notin dropped
 PassMerge(m, i) == PassReady(m, i) /\ MergeOrQueue(i)
 Dequeue(m, i) == q[m][i] = "waiting" /\ i \in inq /\ i \in held /\ inq' = inq \ {i} /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, merged, drops, by, okAtMerge, history>>

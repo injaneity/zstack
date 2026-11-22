@@ -187,6 +187,13 @@ M = [
         RESUMES,
     ),
     (
+        "thread-merges-a-dropped-head",
+        "the gate lets a thread merge a head GitHub dropped from the merge queue",
+        [('ThreadMerge(m, i) == Takes(m, i) /\\ Open(i) /\\ i \\notin dropped', 'ThreadMerge(m, i) == Takes(m, i) /\\ Open(i)')],
+        "OnlyAVerifiedAllowedHeadMerges",
+        ONE_MACHINE,
+    ),
+    (
         "resume-a-live-thread",
         "a waiting PR whose thread was woken again goes back to tasks, so a second thread starts beside it",
         [('Resumes /\\ q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Resumes /\\ q[m][i] = "waiting" /\\ i')],
