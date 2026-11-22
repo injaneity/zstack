@@ -246,6 +246,9 @@ class PatentPush(unittest.TestCase):
                                      base={"src/serve.rs": "// skyhook still sends this\n"})
             self.assertNotEqual(r.returncode, 0)
             self.assertEqual(remote, "")
+        cr = "diff --git a/x b/x\n@@ -0,0 +1 @@\n+a\r@@@ b\r++skyhook\n"
+        self.assertTrue(pp.held_hits([], cr, public=lambda t: True))
+        self.assertEqual(pp.held_hits([], "diff --git a/x b/x\n@@ -0,0 +1 @@\n+// skyhook\r\n", public=lambda t: True), [])
         crlf = "// skyhook " + "x" * (q.LONG_LINE - 11)
         for name, text in (("crlf", f"{crlf}\r\n"), ("tail", "// skyhook x\r" + "y" * q.LONG_LINE + "\n")):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
@@ -258,7 +261,7 @@ class PatentPush(unittest.TestCase):
                 g("config", key, "true", cwd=work)
             self.assertFalse(q.Patent.in_tree("// skyhook x", "origin/main", cwd=work))
             self.assertFalse(q.Patent.in_tree("1:1:// skyhook x secret", "origin/main", cwd=work))
-            self.assertTrue(q.Patent.in_tree("// skyhook x secret", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook x secret", "origin/main", cwd=work))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:

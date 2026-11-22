@@ -1420,11 +1420,10 @@ class Patent:
     def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
         skip, docs, cols, hunk, lines = False, False, 1, False, []
-        pieces = ((full, line) for full in (diff or "").split("\n") + ["@@"]
-                  for line in full.replace("\r\n", "\n").replace("\r", "\n").splitlines())
-        for full, line in pieces:
+        parts = (full.replace("\r\n", "\n").replace("\r", "\n").splitlines() for full in (diff or "").split("\n") + ["@@"])
+        for one, line in ((len(part) == 1, line) for part in parts for line in part):
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
-                hits += [raw for _, _, raw, whole in unmatched(lines) if not public(whole)]
+                hits += [raw for _, n, raw, whole in unmatched(lines) if not (whole and public(n))]
                 lines = []
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
@@ -1440,7 +1439,7 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
-            lines.append((line[0], " ".join(text.split()), line[:100], " ".join(full[cols:].split())))
+            lines.append((line[0], " ".join(text.split()), line[:100], one))
         return list(dict.fromkeys(hits))[:5]
 
     def choose_remote(self, url, hits, staging_ok):
@@ -1472,7 +1471,7 @@ class Patent:
     def in_tree(text, tree, cwd=None):
         rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
                       cwd=cwd, raw=True)
-        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n")}
+        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if len(x.rstrip("\r").splitlines()) <= 1}
 
     def staging_push_ok(self):
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
