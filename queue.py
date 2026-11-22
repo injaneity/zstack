@@ -1160,6 +1160,10 @@ CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|\w/|/\w|(^|\s)-\w|^\s*(//+|#|--|/\*
                         r"export|extern|require|include|static|type|struct|enum|impl|async|await)\b")
 ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
                     "then than which who we you they our has have does do can will should must".split())
+NAMES_BEFORE = frozenset("named called dubbed titled".split())
+NAMES_NEXT = frozenset("feature features crate crates module modules package packages flag flags option options setting settings "
+                       "key keys field fields var vars variable variables env function functions method methods type types struct trait "
+                       "class service services binary command commands repo branch target targets plugin plugins library lib".split())
 LONG_LINE = 1000
 
 
@@ -1221,8 +1225,11 @@ class Patent:
 
     @staticmethod
     def plain(text, m):
-        return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and bool(PLAIN_TAIL.match(text, m.end())))
+        tail = PLAIN_TAIL.match(text, m.end())
+        if not (tail and m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")):
+            return False
+        before, after = re.findall(r"[a-z]+", text[:m.start()].lower())[-1:], re.findall(r"[a-z]+", text[tail.end():].lower())[:1]
+        return not NAMES_BEFORE.intersection(before) and not NAMES_NEXT.intersection(before + after)
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
