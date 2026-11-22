@@ -147,7 +147,7 @@ function ghApiWrites(w: string[]): boolean {
 
 const GH_CORE = new Set(["alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "extension", "gist", "gpg-key",
 	"help", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"]);
-const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge)\b/;
+const GRAPHQL_MERGE = /\b(mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest)\b/;
 const GRAPHQL_READY = /\bmarkPullRequestReadyForReview\b/;
 
 const GH_API_VALUE_OPTS = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
@@ -175,7 +175,7 @@ function ghOwned(c: Cmd, owned: Owned, host: Host): string | undefined {
 	const who = owned ? `${[...owned].join(", ")} merges only through the queue` : "the repos the queue owns are unknown (queue.py dump failed)";
 	const api = w[1] === "api" && ghApiWrites(w);
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => GRAPHQL_MERGE.test(a) || GRAPHQL_READY.test(a)))
-		return `a GraphQL ready, merge or auto-merge mutation while ${who}`;
+		return `a GraphQL ready, merge, merge-queue or auto-merge mutation while ${who}`;
 	if (api && operands(w.slice(2), GH_API_VALUE_OPTS)[0] === "graphql" && w.some((a) => /^--input(=|$)/.test(a) || /^[\w-]+=@/.test(a)))
 		return `a GraphQL query read from a file or stdin, which the guard cannot read, while ${who}`;
 	const flag = (f: string) => w.some((a, i) => a === f && !GH_VALUE_OPTS.has(w[i - 1]));
