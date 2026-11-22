@@ -179,6 +179,7 @@ M = [
         "a waiting PR whose thread was woken again goes back to tasks, so a second thread starts beside it",
         [('Stuck(m, i) == q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Stuck(m, i) == q[m][i] = "waiting" /\\ i')],
         "OneThreadPerItem",
+        ('  Queues = {"i1"}\n  Woken = {}\n', '  Queues = {}\n  Woken = {"i1"}\n'),
     ),
     (
         "keep-a-merged-item",

@@ -8,10 +8,11 @@ mkdir "$tmp/spec" && cp "$src/model/Queue.tla" "$src/model/Queue.cfg" "$tmp/spec
 (cd "$tmp/spec" && "$checker" -workers auto -metadir meta -config Queue.cfg Queue.tla) > "$tmp/out" 2>&1
 grep -q "Model checking completed. No error has been found." "$tmp/out" || { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg"; exit 1; }
 echo "ok    model/Queue.cfg: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
-mkdir "$tmp/direct" && cp "$src/model/Queue.tla" "$tmp/direct/" && sed 's/^  Queues = {"i1"}$/  Queues = {}/' "$src/model/Queue.cfg" > "$tmp/direct/Queue.cfg"
+mkdir "$tmp/direct" && cp "$src/model/Queue.tla" "$tmp/direct/" && sed -e 's/^  Queues = {"i1"}$/  Queues = {}/' -e 's/^  Woken = {}$/  Woken = {"i1"}/' "$src/model/Queue.cfg" > "$tmp/direct/Queue.cfg"
 grep -q '^  Queues = {}$' "$tmp/direct/Queue.cfg" || { echo "FAIL  model/Queue.cfg has no Queues = {\"i1\"} line to clear"; exit 1; }
+grep -q '^  Woken = {"i1"}$' "$tmp/direct/Queue.cfg" || { echo "FAIL  model/Queue.cfg has no Woken = {} line to fill"; exit 1; }
 (cd "$tmp/direct" && "$checker" -workers auto -metadir meta -config Queue.cfg Queue.tla) > "$tmp/out" 2>&1
-grep -q "Model checking completed. No error has been found." "$tmp/out" || { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg with no merge queue"; exit 1; }
-echo "ok    model/Queue.cfg with no merge queue: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
+grep -q "Model checking completed. No error has been found." "$tmp/out" || { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg with no merge queue and a woken thread"; exit 1; }
+echo "ok    model/Queue.cfg with no merge queue and a woken thread: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
 python3 -I "$src/model/queue_mutants.py" "$checker" "$tmp/mutants" || { echo "FAIL  a model/queue_mutants.py mutant was not killed by its rule"; exit 1; }
 echo "ok    model/Queue.tla holds under everystate, and every mutant fails on its rule"

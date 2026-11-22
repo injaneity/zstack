@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Woken
 
 VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, by, okAtMerge, thread, pending, startedHeld, jumped, crowded, endedUnverified, twoThreads, diedCleared
 
@@ -11,7 +11,7 @@ States == {"none", "running", "waiting", "done"}
 TypeOK ==
   /\ q \in [Machines -> [Items -> States]] /\ Paged \subseteq Items
   /\ held \subseteq Items /\ pre \subseteq Items /\ unread \subseteq Garbles /\ up \in BOOLEAN /\ pr \subseteq Items /\ stale \subseteq Items /\ merged \subseteq Items
-  /\ Queues \subseteq Items /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN
+  /\ Queues \subseteq Items /\ Woken \subseteq Items /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
   /\ thread \subseteq Items /\ pending \subseteq Items /\ twoThreads \in BOOLEAN /\ diedCleared \in BOOLEAN
@@ -93,9 +93,7 @@ Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCH
 Stuck(m, i) == q[m][i] = "waiting" /\ i \notin thread /\ i \in pr /\ i \notin merged /\ i \notin held /\ i \notin inq
   /\ (status[i] = "none" \/ i \in dropped)
 Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
-Wake(m, i) == q[m][i] = "waiting" /\ i \notin thread /\ thread' = thread \cup {i}
-  /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared>>
-Rest(m, i) == q[m][i] = "waiting" /\ i \in thread /\ thread' = thread \ {i}
+Wake(m, i) == i \in Woken /\ q[m][i] = "waiting" /\ i \notin thread /\ thread' = thread \cup {i}
   /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared>>
 
 Flip == up' = ~up /\ UNCHANGED <<q, held, pre, unread, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
@@ -108,7 +106,7 @@ Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, u
 Next ==
   \/ \E m \in Machines, i \in Items :
        Launch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
-       \/ Resume(m, i) \/ Wake(m, i) \/ Rest(m, i)
+       \/ Resume(m, i) \/ Wake(m, i)
        \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
   \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Started(i) \/ Lost(i)
      \/ Land(i) \/ Drop(i)
