@@ -231,7 +231,13 @@ class PatentPush(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("skyhook is available", r.stderr)
             self.assertEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/space", [{"src/serve.rs": "// skyhook  still sends this\n"}],
+                                     base={"src/serve.rs": "// skyhook still sends this\n"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(remote, "")
         self.assertEqual(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: t == "// Skyhook the session"), [])
+        self.assertTrue(pp.held_hits([], "+// Skyhook the session\r secret\n", public=lambda t: t == "// Skyhook the session"))
         self.assertTrue(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: False))
 
     def test_a_held_file_renamed_away_is_held(self):

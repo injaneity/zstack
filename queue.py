@@ -1401,7 +1401,7 @@ def unmatched(lines):
         if left[s][n]:
             left[s][n] -= 1
         else:
-            out.append(raw)
+            out.append((n, raw))
     return out
 
 
@@ -1420,9 +1420,9 @@ class Patent:
     def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
         skip, docs, cols, hunk, lines = False, False, 1, False, []
-        for line in (diff or "").splitlines() + ["@@"]:
+        for line in (diff or "").split("\n") + ["@@"]:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
-                hits += unmatched(lines)
+                hits += [raw for n, raw in unmatched(lines) if not public(n)]
                 lines = []
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
@@ -1436,7 +1436,7 @@ class Patent:
             text = line[cols:]
             if skip or line[:cols] not in ("+" * cols, "-" * cols) or len(text) > LONG_LINE:
                 continue
-            if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text) or public(text):
+            if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
@@ -1468,8 +1468,8 @@ class Patent:
 
     @staticmethod
     def in_tree(text, tree, cwd=None):
-        rc, out = git("grep", "-h", "-I", "-F", "-e", text.strip(), tree, cwd=cwd)
-        return rc == 0 and " ".join(text.split()) in {" ".join(x.split()) for x in out.splitlines()}
+        rc, out = git("grep", "-h", "-I", "-F", "-e", max(text.split(), key=len), tree, cwd=cwd)
+        return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n")}
 
     def staging_push_ok(self):
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
