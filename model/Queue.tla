@@ -37,7 +37,7 @@ Needed(i) == i \notin merged /\ i \notin inq /\ i \notin held /\ (status[i] = "n
 First(m, i) == \A j \in Items : Ready(m, j) => Prio[j] <= Prio[i]
 Launch(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m, i)
   /\ Busy(m) < Cap
-  /\ (i \in Resumes /\ i \in pr => Needed(i))
+  /\ (i \in Resumes /\ i \in pr => Needed(i) /\ i \notin thread)
   /\ Set(m, i, "running") /\ pending' = pending \cup {i} /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread)
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held)
   /\ needless' = (needless \/ i \in Resumes /\ i \in pr /\ ~Needed(i)) /\ crowded' = (crowded \/ Busy(m) >= Cap)
@@ -96,9 +96,9 @@ Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCH
 Stuck(m, i) == i \in Resumes /\ q[m][i] = "waiting" /\ i \notin thread /\ i \in pr /\ i \notin merged /\ i \notin held /\ i \notin inq
   /\ (status[i] = "none" \/ i \in dropped)
 Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
-Unresume(m, i) == i \in Resumes /\ q[m][i] = "none" /\ i \in pr /\ i \notin pending /\ i \notin thread /\ Set(m, i, "waiting")
+Unresume(m, i) == i \in Resumes /\ q[m][i] = "none" /\ i \in pr /\ i \notin pending /\ Set(m, i, "waiting")
   /\ UNCHANGED <<held, work, history>>
-Wake(m, i) == i \in Woken /\ q[m][i] = "waiting" /\ i \notin thread /\ thread' = thread \cup {i}
+Wake(m, i) == i \in Woken /\ (q[m][i] = "waiting" \/ q[m][i] = "none" /\ i \in Resumes /\ i \in pr) /\ i \notin thread /\ thread' = thread \cup {i}
   /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared>>
 
 Flip == up' = ~up /\ UNCHANGED <<q, held, pre, unread, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
