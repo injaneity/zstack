@@ -811,7 +811,7 @@ class Approve(Case):
             self.forge.prs[40]["labels"], self.threads["a"] = [], ("t-a2", "/nowhere/wt-a2")
             self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
             queue.release(self.pol, "a")
-            self.status, self.pol["run"]["threads"] = {"t-a2": "completed"}, 0
+            self.status, self.pol["run"]["threads"] = {"t-a": "completed", "t-a2": "completed"}, 0
             queue.step(self.pol)
         self.assertEqual(self.file()["tasks"]["a"]["kept"], ["/nowhere/wt-a", "/nowhere/wt-a2"])
 
@@ -875,6 +875,30 @@ class Approve(Case):
         self.assertEqual((got["cleared"], self.file()["done"]), ([{"id": "merged", "why": "PR 41 merged"}], ["merged"]))
         self.assertEqual((self.file()["tasks"], sorted(self.file()["waiting"]), self.file()["waiting"]["queued"]["queued"]),
                          ({}, ["app-7", "draft", "queued", "unread"], H1))
+
+    def test_a_resumed_row_stays_with_its_pr_waits_on_its_woken_thread_and_a_hold_seen_by_the_last_read_stops_it(self):
+        for ident, pr in (("z", 80), ("w", 70)):
+            self.waiting(ident, pr=pr, said="fail")
+        self.waiting("h", pr=60, said="auto")
+        queue.approve(self.pol, "h")
+        self.forge.prs[60].update(mergeable="CONFLICTING", then={"labels": [M["hold_label"]]})
+        self.status = {"t-z": "completed", "t-w": "completed", "t-h": "completed", "t-a": "completed"}
+        self.pol["run"]["threads"] = 0
+        got = queue.step(self.pol)
+        self.assertEqual((sorted(x["id"] for x in got["cleared"]), sorted(self.file()["tasks"])), (["w", "z"], ["w", "z"]))
+        self.assertEqual(self.file()["tasks"]["w"]["threads"], ["t-w"])
+        self.assertIn({"id": "h", "why": f"PR 60 waits for the owner: it is labelled {M['hold_label']}"}, got["kept"])
+
+        def join(q):
+            q["waiting"]["a"] = {**q["waiting"]["h"], "pr": 80, "thread": "t-a", "preapproved": False}
+            return None, True
+        queue.locked(self.pol, join)
+        self.status["t-w"] = "running"
+        got = queue.step(self.pol)
+        self.assertEqual(([x["id"] for x in got["cleared"]], sorted(self.file()["tasks"]), sorted(self.file()["waiting"])),
+                         (["z"], ["z"], ["a", "h", "w"]))
+        self.pol["run"]["threads"] = 9
+        self.assertEqual((queue.step(self.pol)["launched"]["id"], sorted(self.file()["waiting"])), ("z", ["a", "h", "w"]))
 
     def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
         self.cands = [cand(50, kind="review")]
