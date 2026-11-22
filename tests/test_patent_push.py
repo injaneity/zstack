@@ -270,6 +270,8 @@ class PatentPush(unittest.TestCase):
             Path(work, "d.rs").write_bytes(b"\xff x\n")
             with self.assertRaises(UnicodeDecodeError):
                 q.git("diff", "--no-index", "-U0", os.devnull, "d.rs", cwd=work, raw=True)
+            with self.assertRaises(UnicodeDecodeError):
+                q.git("-c", "alias.e=!printf '\\377' >&2", "e", cwd=work, raw=True)
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:

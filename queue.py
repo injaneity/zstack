@@ -948,7 +948,11 @@ def gate(pol, pr, head):
 
 def git(*args, cwd=None, raw=False):
     p = subprocess.run(["git", *args], capture_output=True, text=not raw, env=ENV, cwd=cwd, timeout=300)
-    return p.returncode, p.stdout.decode(locale.getpreferredencoding(False)) if raw else p.stdout
+    if raw:
+        enc = locale.getpreferredencoding(False)
+        out, _ = p.stdout.decode(enc), p.stderr.decode(enc)
+        return p.returncode, out
+    return p.returncode, p.stdout
 
 
 def listed(pol, path):
