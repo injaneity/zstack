@@ -280,6 +280,21 @@ class PatentPush(unittest.TestCase):
             self.assertTrue(q.Patent.in_tree("// skyhook a", "origin/main", cwd=work))
             self.assertFalse(q.Patent.in_tree("// skyhook secret", "origin/main", cwd=work))
             self.assertFalse(q.Patent.in_tree("// skyhook\0a", "origin/main", cwd=work))
+        with tempfile.TemporaryDirectory() as tmp:
+            def g(*a, cwd):
+                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", *a],
+                                      cwd=cwd, check=True, capture_output=True, text=True).stdout
+            sub, top = f"{tmp}/sub", f"{tmp}/top"
+            for d in (sub, top):
+                g("init", "-q", d, cwd=tmp)
+            Path(sub, "p.rs").write_text("// skyhook private\n")
+            g("add", ".", cwd=sub)
+            g("commit", "-qm", "p", cwd=sub)
+            g("submodule", "add", "-q", sub, "sub", cwd=top)
+            g("commit", "-qm", "base", cwd=top)
+            key = "submodule.recurse"
+            g("config", key, "true", cwd=top)
+            self.assertFalse(q.Patent.in_tree("// skyhook private", "HEAD", cwd=top))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
