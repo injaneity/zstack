@@ -102,7 +102,11 @@ class PatentPush(unittest.TestCase):
                            ("a.py", "# insert into pairing the rows we kept"), ("a.rs", "// delete from pairing the stale rows"),
                            ("src/setup.rs", "// Run pairing with no arguments."),
                            ("src/setup.rs", "// Install teleport on each host before the demo."),
-                           ("src/setup.rs", "// Rename pairing to avoid shadowing it."), ("a.py", "# then restart keyvault on the box")):
+                           ("src/setup.rs", "// Rename pairing to avoid shadowing it."), ("a.py", "# then restart keyvault on the box"),
+                           ("src/setup.rs", "// Restarting teleport on each host fixes the login loop."),
+                           ("src/setup.rs", "// Run the latest teleport on each host before the demo."),
+                           ("src/setup.rs", "// teleport ships as a standalone executable for macOS."),
+                           ("a.py", "# we stopped the old pairing daemons on the box"), ("a.rs", "// the hosts' teleport is downloaded at boot")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))

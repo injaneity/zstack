@@ -17,8 +17,8 @@ skip = ["app/app-agents"]
 # no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines. In a whole-line code
 # comment, in that file's comment syntax, a word that is plain lowercase prose does not count; a capitalised, quoted or joined one
 # (`Skyhook`, `skyhookCode`, `skyhook_id`, `app-skyhook`, `skyhook.rs`) still does, as does any word in a comment that
-# names a code thing (`named`, `feature`, `crate`, `flag`, `table`, ...) or reads as SQL, and a word right
-# after an action verb (`run skyhook`, `install skyhook`).
+# names a code thing (`named`, `feature`, `crate`, `executable`, ...) or an action on one (`run`, `installing`,
+# `restarted`, ...), in any English ending, or reads as SQL.
 [patent]
 held_words = ["skyhook", "vaultkey", "sealing"]
 skip_lockfiles = [

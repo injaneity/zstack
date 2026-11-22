@@ -1387,14 +1387,12 @@ CODE_SHAPE = re.compile(r"[;{}=<>\[\]`]|\w\(|\w/|/\w|(^|\s)-\w|^\s*(//+|#|--|/\*
                         r"export|extern|require|include|static|type|struct|enum|impl|async|await)\b")
 ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
                     "then than which who we you they our has have does do can will should must".split())
-NAMING = frozenset("named called dubbed titled feature features crate crates module modules package packages flag flags option options "
-                   "setting settings key keys field fields var vars variable variables env function functions method methods type types "
-                   "struct trait class service services binary command commands repo branch target targets plugin plugins library lib "
-                   "table tables column columns".split())
-ACTS = frozenset("run runs running ran install installs installing installed uninstall rename renames renaming renamed call calls calling "
-                 "invoke invokes invoking enable enables enabling disable disables disabling start starts launch launches spawn spawns "
-                 "kill restart restarts stop stops build builds deploy deploys import imports export exports add adds remove removes "
-                 "upgrade upgrades configure open opens use uses using pass passes set sets".split())
+NAMING = frozenset("name call dub title feature crate module package flag option setting key field var variable env function method "
+                   "type struct trait class service binary executable exe daemon cli tool script app program command repo branch target "
+                   "plugin library lib endpoint api dependency table column".split())
+ACTS = frozenset("run ran install uninstall reinstall rename call invoke enable disable start launch spawn kill restart stop build "
+                 "rebuild compile deploy ship download fetch update upgrade import export add remove configure open use pass set load "
+                 "require exec execute reboot".split())
 SQL = re.compile(r"\b(select\b.*\bfrom|insert\s+into|delete\s+from|update\s+\S+\s+set|from\s+\S+\s+(where|join))\b", re.I)
 LONG_LINE = 1000
 
@@ -1454,12 +1452,22 @@ class Patent:
     def english(text):
         words = re.findall(r"[a-z']+", text.lower())
         return (not CODE_SHAPE.search(text) and not SQL.search(text) and len(words) >= 4 and not ENGLISH.isdisjoint(words)
-                and NAMING.isdisjoint(words))
+                and not any((NAMING | ACTS) & Patent.stems(w) for w in words))
+
+    @staticmethod
+    def stems(word):
+        word = word.removesuffix("'s")
+        out = {word}
+        for end in ("ing", "ed", "es", "s", "d"):
+            base = word[:-len(end)]
+            if word.endswith(end) and len(base) >= 2:
+                out |= {base, base + "e"} | ({base[:-1]} if base[-1] == base[-2] else set())
+        return out
 
     @staticmethod
     def plain(text, m):
         return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and bool(PLAIN_TAIL.match(text, m.end())) and ACTS.isdisjoint(re.findall(r"[a-z]+", text[:m.start()].lower())[-1:]))
+                and bool(PLAIN_TAIL.match(text, m.end())))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
