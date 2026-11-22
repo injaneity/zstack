@@ -774,7 +774,7 @@ class Approve(Case):
         for said in ("Fix the parser\n", f"{dropped}. Merge origin/main into the branch", "git push origin HEAD:fix-parser", "open no new PR"):
             self.assertIn(said, row["task"])
         self.assertEqual(self.file()["waiting"], {})
-        self.assertEqual((queue.step(self.pol)["cleared"], self.file()["tasks"]), ([], {"a": row}))
+        self.assertEqual((queue.step(self.pol)["cleared"], self.file()["tasks"], self.file()["waiting"]), ([{"id": "a", "why": why}], {"a": row}, {}))
         self.pol["run"]["threads"] = 9
         self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
         self.assertEqual((self.briefed[-1]["base"], self.briefed[-1]["task"], self.file()["tasks"]), ("origin/fix-parser", row["task"], {}))
@@ -835,7 +835,7 @@ class Approve(Case):
                                     "goes back to tasks") for k, w in work.items()))
         self.assertEqual((sorted(self.file()["tasks"]), sorted(self.file()["waiting"])), (sorted(work), sorted({c[0] for c in cases} - set(work))))
         tasks = self.file()["tasks"]
-        self.assertEqual(queue.step(self.pol)["cleared"], [])
+        self.assertEqual((len(queue.step(self.pol)["cleared"]), self.file()["tasks"]), (len(work), tasks))
         self.assertIn(f"The verifier failed head {H1}: fix its findings and push.", tasks["unverified"]["task"])
         self.assertIn(f"The verifier has not passed head {H2}: have it check the head you end on.", tasks["moved"]["task"])
         self.assertIn(f"{M['gate_check']} failed on head {H1}. Read its logs", tasks["red"]["task"])
@@ -848,7 +848,8 @@ class Approve(Case):
         self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["waiting"])), ([], ["a", "b"]))
         self.status["t-b"] = "cancelled"
         self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["waiting"])), (["a"], ["b"]))
-        self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["tasks"])), ([], ["a"]))
+        self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["tasks"]), sorted(self.file()["waiting"])),
+                         (["a"], ["a"], ["b"]))
 
     def test_a_resumed_row_whose_pr_no_longer_needs_its_thread_waits_again_and_an_issue_hold_is_read_from_the_issue(self):
         self.cands = [cand(7)]
@@ -866,13 +867,14 @@ class Approve(Case):
         self.assertEqual((sorted(self.file()["tasks"]), self.file()["waiting"]), (["app-7", "draft", "merged", "queued", "unread"], {}))
         self.forge.prs[40]["draft"], self.forge.prs[41]["state"], self.forge.prs[42]["inq"], self.forge.prs[43]["inq"] = True, "MERGED", True, "down"
         self.forge.issues[7] = [M["hold_label"]]
-        kept = {x["id"]: x["why"] for x in queue.step(self.pol)["kept"]}
-        tail = ", so it waits again instead of starting a thread"
-        self.assertEqual(kept, {"app-7": f"PR 47 waits for the owner: it is labelled {M['hold_label']}{tail}",
-                                "draft": f"PR 40 waits for the owner: the PR is a draft{tail}",
-                                "merged": f"PR 41 is merged{tail}", "queued": f"PR 42 is in the merge queue{tail}",
-                                "unread": f"whether PR 43 is in the merge queue could not be read{tail}"})
-        self.assertEqual((self.file()["tasks"], sorted(self.file()["waiting"])), ({}, ["app-7", "draft", "merged", "queued", "unread"]))
+        got = queue.step(self.pol)
+        unpassed = f"waits for the owner: the verifier has not passed head {H1}"
+        self.assertEqual({x["id"]: x["why"] for x in got["kept"]},
+                         {"app-7": f"PR 47 {unpassed}", "draft": f"PR 40 {unpassed}", "queued": f"PR 42 is in the merge queue at head {H1}",
+                          "unread": "PR 43: whether it is in the merge queue could not be read: graphql down"})
+        self.assertEqual((got["cleared"], self.file()["done"]), ([{"id": "merged", "why": "PR 41 merged"}], ["merged"]))
+        self.assertEqual((self.file()["tasks"], sorted(self.file()["waiting"]), self.file()["waiting"]["queued"]["queued"]),
+                         ({}, ["app-7", "draft", "queued", "unread"], H1))
 
     def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
         self.cands = [cand(50, kind="review")]
