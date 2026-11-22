@@ -781,6 +781,9 @@ class Approve(Case):
         running = self.file()["running"]["a"]
         self.assertEqual({k: running[k] for k in ("pr", "priority", "preapproved")}, {"pr": 40, "priority": 5, "preapproved": True})
         self.assertEqual(running["dropped"]["head"], H1)
+        self.assertEqual(queue.verified(self.pol, "a", 40, H1, "auto")["say"], f"its thread does not merge it: {dropped}")
+        with self.assertRaisesRegex(queue.Refused, f"PR 40 does not merge: {dropped}"):
+            queue.gate(self.pol, 40, H1)
         queue.release(self.pol, "a")
         self.status = {}
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}], ["40"]))
@@ -796,18 +799,19 @@ class Approve(Case):
         self.assertEqual(row["kept"], ["/nowhere/wt-a"])
         self.assertIn("git push origin 'HEAD:fix/parser(v2)'", row["task"])
         self.assertIn("`git -C /nowhere/wt-a status`", row["task"])
-        self.open, self.pol["run"]["threads"] = {40: [M["hold_label"]]}, 9
-        self.run_("b")
-        self.pr_open(41)
-        queue.verified(self.pol, "b", 41, H1, "auto")
-        self.assertEqual(sorted(self.file()["verdicts"]), ["40", "41"])
-        got = queue.step(self.pol)
-        self.assertEqual((got["launched"], got["skipped"], sorted(self.file()["tasks"])), (None, {"held": 1}, ["a"]))
-        self.open, self.threads["a"] = {40: []}, ("t-a2", "/nowhere/wt-a2")
-        self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
-        queue.release(self.pol, "a")
-        self.status, self.pol["run"]["threads"] = {"t-a2": "completed"}, 0
+        self.forge.prs[40]["labels"], self.pol["run"]["threads"] = [M["hold_label"]], 9
         with trees:
+            self.run_("b")
+            self.pr_open(41)
+            queue.verified(self.pol, "b", 41, H1, "auto")
+            self.assertEqual(sorted(self.file()["verdicts"]), ["40", "41"])
+            self.assertEqual((sorted(self.file()["tasks"]), sorted(self.file()["waiting"])), ([], ["a"]))
+            got = queue.step(self.pol)
+            self.assertEqual((got["launched"], self.file()["tasks"]), (None, {}))
+            self.forge.prs[40]["labels"], self.threads["a"] = [], ("t-a2", "/nowhere/wt-a2")
+            self.assertEqual(queue.step(self.pol)["launched"]["id"], "a")
+            queue.release(self.pol, "a")
+            self.status, self.pol["run"]["threads"] = {"t-a2": "completed"}, 0
             queue.step(self.pol)
         self.assertEqual(self.file()["tasks"]["a"]["kept"], ["/nowhere/wt-a", "/nowhere/wt-a2"])
 
@@ -845,6 +849,30 @@ class Approve(Case):
         self.status["t-b"] = "cancelled"
         self.assertEqual(([x["id"] for x in queue.step(self.pol)["cleared"]], sorted(self.file()["waiting"])), (["a"], ["b"]))
         self.assertEqual((queue.step(self.pol)["cleared"], sorted(self.file()["tasks"])), ([], ["a"]))
+
+    def test_a_resumed_row_whose_pr_no_longer_needs_its_thread_waits_again_and_an_issue_hold_is_read_from_the_issue(self):
+        self.cands = [cand(7)]
+        self.start("app-7", "t-7")
+        self.cands = []
+        self.pr_open(47)
+        queue.verified(self.pol, "app-7", 47, H1, "fail")
+        queue.release(self.pol, "app-7")
+        self.forge.issues[7] = []
+        for n, ident in enumerate(("draft", "merged", "queued", "unread"), 40):
+            self.waiting(ident, pr=n, said="fail")
+        self.status = {f"t-{x}": "completed" for x in ("draft", "merged", "queued", "unread", "7")}
+        self.pol["run"]["threads"] = 0
+        queue.locked(self.pol, lambda q: (queue.settle(self.pol, q), True))
+        self.assertEqual((sorted(self.file()["tasks"]), self.file()["waiting"]), (["app-7", "draft", "merged", "queued", "unread"], {}))
+        self.forge.prs[40]["draft"], self.forge.prs[41]["state"], self.forge.prs[42]["inq"], self.forge.prs[43]["inq"] = True, "MERGED", True, "down"
+        self.forge.issues[7] = [M["hold_label"]]
+        kept = {x["id"]: x["why"] for x in queue.step(self.pol)["kept"]}
+        tail = ", so it waits again instead of starting a thread"
+        self.assertEqual(kept, {"app-7": f"PR 47 waits for the owner: it is labelled {M['hold_label']}{tail}",
+                                "draft": f"PR 40 waits for the owner: the PR is a draft{tail}",
+                                "merged": f"PR 41 is merged{tail}", "queued": f"PR 42 is in the merge queue{tail}",
+                                "unread": f"whether PR 43 is in the merge queue could not be read{tail}"})
+        self.assertEqual((self.file()["tasks"], sorted(self.file()["waiting"])), ({}, ["app-7", "draft", "merged", "queued", "unread"]))
 
     def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
         self.cands = [cand(50, kind="review")]
