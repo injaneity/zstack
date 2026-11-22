@@ -900,6 +900,25 @@ class Approve(Case):
         self.pol["run"]["threads"] = 9
         self.assertEqual((queue.step(self.pol)["launched"]["id"], sorted(self.file()["waiting"])), ("z", ["a", "h", "w"]))
 
+    def test_a_fresher_read_that_moved_the_head_stops_a_resume_and_a_thread_woken_before_the_start_stops_the_launch(self):
+        self.waiting("m", pr=60, said="auto")
+        queue.approve(self.pol, "m")
+        self.forge.prs[60].update(mergeable="CONFLICTING", then={"head": H2, "labels": [M["hold_label"]]})
+        self.waiting("w", pr=70, said="fail")
+        self.status, self.pol["run"]["threads"] = {"t-m": "completed", "t-w": "completed"}, 9
+        settle = queue.settle
+
+        def wakes(pol, q):
+            out = settle(pol, q)
+            self.status["t-w"] = "running"
+            return out
+        with patch.object(queue, "settle", wakes):
+            got = queue.step(self.pol)
+        self.assertEqual((got["launched"], got["waiting"]), (None, "w: a thread that ran it before is live again, so no second one starts"))
+        self.assertIn({"id": "m", "why": f"PR 60 waits for the owner: the verifier has not passed head {H2}"}, got["kept"])
+        self.assertEqual((self.file()["running"], sorted(self.file()["tasks"]), sorted(self.file()["waiting"])), ({}, ["w"], ["m"]))
+        self.assertEqual((queue.step(self.pol)["launched"], sorted(self.file()["waiting"])), (None, ["m", "w"]))
+
     def test_a_wait_on_the_pr_a_running_review_has_not_recorded_yet_stays(self):
         self.cands = [cand(50, kind="review")]
         self.start(f"app-50-review-{H1[:7]}")
