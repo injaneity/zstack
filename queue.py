@@ -724,6 +724,15 @@ def t3(pol, *args, stdin=None):
         return f"{type(e).__name__}: {e}"[:200]
 
 
+def ordinal(run):
+    m = re.search(r":ordinal:(\d+)$", run or "")
+    return int(m.group(1)) if m else None
+
+
+def ran(seen, run):
+    return not seen["thread"].get("activeRunId") and (ordinal(seen["thread"].get("latestRunId")) or 0) >= ordinal(run)
+
+
 def launch(pol, up):
     clone = os.path.expanduser(pol["host"]["clone"])
     if up.get("wake"):
@@ -731,9 +740,9 @@ def launch(pol, up):
         if not isinstance(seen, dict):
             raise Refused(f"thread {up['wake']} of {up['id']} cannot be read, so nothing was sent to it: {seen}")
         got = t3(pol, "send", up["wake"], "-", stdin=brief(pol, up))
-        if not isinstance(got, dict):
+        if not isinstance(got, dict) or not ordinal(got.get("runId")):
             raise Refused(f"no message reached thread {up['wake']} of {up['id']}: {got}")
-        up["runs"] = seen["thread"].get("runCount", 0)
+        up["run"] = got["runId"]
         return up["wake"], seen["thread"]["worktreePath"] or up.get("worktree")
     if git("-C", clone, "fetch", "--quiet", "origin")[0]:
         raise Refused(f"git fetch origin failed in {clone}; not launching on an old tree")
@@ -775,7 +784,7 @@ def step(pol):
 
     def record(q):
         q["tasks"].pop(up["id"], None)
-        q["running"][up["id"]].update(thread=thread, worktree=worktree, **{k: up[k] for k in ("runs",) if k in up})
+        q["running"][up["id"]].update(thread=thread, worktree=worktree, **{k: up[k] for k in ("run",) if k in up})
         return dict(out, launched={"id": up["id"], "thread": thread, "worktree": worktree}), True
     return locked(pol, record)
 
@@ -809,9 +818,8 @@ def reconcile(pol):
             if not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
             asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-            begun = seen["thread"].get("runCount", 0) > it.get("runs", -1) or \
-                (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60
-            if seen["thread"]["status"] in DEAD and begun:
+            done = not it.get("run") or ran(seen, it["run"]) or (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60
+            if seen["thread"]["status"] in DEAD and done:
                 dead.append((key, seen["thread"]["status"] in DIED))
         return dead, changed
     return locked(pol, go)
@@ -1133,7 +1141,8 @@ def in_queue(pol, key, it, live):
         return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
     if not it.get("queued"):
         it["seen"] = seen
-        return None
+        moved = got["headRefOid"] != live["headRefOid"]
+        return f"PR {pr} moved to head {got['headRefOid']} while the pass read it, and the next pass reads it again" if moved else None
     why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
            "cannot be told" if seen[0] > it["seen"][0] else
            f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
@@ -1293,13 +1302,14 @@ def release(pol, ident=None, hook=False, died=False):
             if ident:
                 raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
-        if not ident and was == "running" and "runs" in q["running"][key]:
-            seen = t3(pol, "show", thread, "--messages", "0")
-            if not isinstance(seen, dict) or seen["thread"].get("runCount", 0) <= q["running"][key]["runs"]:
-                return {"released": None}, False
         held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
         if held_back:
             return Unfinished(held_back), False
+        if not ident and was == "running" and q["running"][key].get("run"):
+            seen = t3(pol, "show", thread, "--messages", "0")
+            active = seen["thread"].get("activeRunId") if isinstance(seen, dict) else None
+            if (ordinal(active) or 0) < ordinal(q["running"][key]["run"]):
+                return {"released": None}, False
         it = q[was][key]
         state, why = outcome(pol, q, key, died=died)
         said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
