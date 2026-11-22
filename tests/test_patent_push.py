@@ -113,7 +113,8 @@ class PatentPush(unittest.TestCase):
                            ("a.rs", "// the 3.2 pairing is gone"), ("a.py", "# drop table pairing if it is there"),
                            ("a.py", "# assert pairing is not None"), ("a.rs", "// where pairing is not null"),
                            ("src/setup.rs", "// we built teleport for windows and macos."), ("a.py", "# if pairing is None:"),
-                           ("a.py", "# while pairing:"), ("a.py", "# if pairing is ready: break"), ("a.py", "# if pairing is ready:break"), ("a.rs", "// where pairing between 1 and 5")):
+                           ("a.py", "# while pairing:"),
+                           ("a.py", "# if pairing is ready: break"), ("a.py", "# if pairing is ready:break"), ("a.rs", "// where pairing between 1 and 5")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
