@@ -169,6 +169,18 @@ M = [
         "ADeadThreadWithNoPRIsRunAgain",
     ),
     (
+        "an-ended-wait-is-stuck",
+        "a waiting PR whose thread has ended, and whose head needs that thread's work, waits on the ended thread for good",
+        [('Resume(m, i) == Stuck(m, i) /\\ Set', 'Resume(m, i) == Stuck(m, i) /\\ FALSE /\\ Set')],
+        LIVE,
+    ),
+    (
+        "resume-a-live-thread",
+        "a waiting PR whose thread was woken again goes back to tasks, so a second thread starts beside it",
+        [('Stuck(m, i) == q[m][i] = "waiting" /\\ i \\notin thread /\\ i', 'Stuck(m, i) == q[m][i] = "waiting" /\\ i')],
+        "OneThreadPerItem",
+    ),
+    (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
         [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],

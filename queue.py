@@ -563,7 +563,7 @@ def takes(labels, host):
 def skip(c, q, prs, pol):
     hold = pol["merge"]["hold_label"]
     held_prs = {n for n, labels in prs.items() if hold in labels}
-    for part in ("running", "waiting", "done"):
+    for part in ("running", "waiting", "tasks", "done"):
         if c["id"] in q[part]:
             return part
     if not takes(c["labels"], pol["host"]):
@@ -574,7 +574,7 @@ def skip(c, q, prs, pol):
         return "held"
     if c["kind"] == "issue" and any(n in prs for n in c["linked"]):
         return "pr"
-    busy = {n for part in ("running", "waiting") for i in q[part].values() for n in (i["n"], i["pr"]) if n}
+    busy = {n for part in ("running", "waiting", "tasks") for i in q[part].values() for n in (i.get("n"), i.get("pr")) if n}
     if c["n"] in busy or any(n in busy for n in c["linked"]):
         return "overlap"
     return None
@@ -728,7 +728,7 @@ def launch(pol, up):
     clone = os.path.expanduser(pol["host"]["clone"])
     if git("-C", clone, "fetch", "--quiet", "origin")[0]:
         raise Refused(f"git fetch origin failed in {clone}; not launching on an old tree")
-    rc, base = git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    rc, base = (0, up["base"]) if up.get("base") else git("-C", clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     if rc:
         raise Refused(f"{clone} has no origin/HEAD, so its default branch is unknown: run `git remote set-head origin --auto` there")
     provider, model = model_for("coding", pol)
@@ -748,8 +748,8 @@ def step(pol):
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
-            q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title")},
-                                      "thread": None, "worktree": None, "pr": None, "at": now(ms=True), "logged": True}
+            q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title", "priority")},
+                                      "thread": None, "worktree": None, "pr": up.get("pr"), "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
         said = {"launched": None, "waiting": waiting, "cleared": cleared, "kept": kept, "skipped": skipped}
@@ -826,7 +826,7 @@ def run_pass(pol):
 
 
 def pr_view(pol, pr):
-    fields = "state,headRefOid,labels,number,isDraft,mergeable,statusCheckRollup"
+    fields = "state,headRefOid,headRefName,baseRefName,isCrossRepository,labels,number,isDraft,mergeable,statusCheckRollup"
     rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", fields)
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
@@ -1125,6 +1125,67 @@ def in_queue(pol, key, it, live):
     return said
 
 
+RED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE")
+
+
+def needs(pol, it, v, live):
+    if it["readonly"] or it["kind"] == "review" and it["pr"] == it["n"] or live.get("isCrossRepository"):
+        return []
+    if held(pol, it, live) or live.get("isDraft"):
+        return []
+    head, base, gate_name = live["headRefOid"], live.get("baseRefName") or "its base", pol["merge"]["gate_check"]
+    passed = bool(v) and v["result"] != "fail" and v["head"] == head
+    if passed and not it["preapproved"] and (v["result"] != "auto" or pol["merge"]["review_label"] in [x["name"] for x in live["labels"]]):
+        return []
+    out = []
+    if (it.get("dropped") or {}).get("head") == head:
+        out.append(("a drop from the merge queue", f"{it['dropped']['why']}. Merge origin/{base} into the branch, settle any conflict, and push."))
+    elif live.get("mergeable") == "CONFLICTING":
+        out.append(("a merge conflict", f"GitHub says the PR conflicts with {base}. Merge origin/{base} into the branch, settle the conflicts, "
+                                        "and push."))
+    if any((c.get("name") or c.get("context")) == gate_name and (c.get("conclusion") or c.get("state")) in RED
+           for c in live.get("statusCheckRollup") or []):
+        out.append((f"{gate_name} red", f"{gate_name} failed on head {head}. Read its logs, fix what the diff caused, rerun a job that failed "
+                                         "for a reason outside the diff, and push."))
+    if not passed:
+        failed = bool(v) and v["result"] == "fail" and v["head"] == head
+        out.append((f"no pass for head {head[:12]}", f"The verifier failed head {head}: fix its findings and push." if failed else
+                    f"The verifier has not passed head {head}: have it check the head you end on."))
+    return out
+
+
+def ended(pol, it):
+    if not it["thread"]:
+        return True
+    seen = t3(pol, "show", it["thread"], "--messages", "0")
+    if isinstance(seen, dict):
+        return seen["thread"]["status"] in DEAD
+    rows = t3(pol, "list", "--project", os.path.expanduser(pol["host"]["clone"]))
+    return isinstance(rows, list) and it["thread"] not in [r["threadId"] for r in rows]
+
+
+def shared(pol, q, it):
+    return any(x.get("pr") == it["pr"] for p in ("running", "tasks") for x in q[p].values()) or \
+        any(x["pr"] == it["pr"] and not ended(pol, x) for x in q["waiting"].values())
+
+
+def resume(pol, q, key, it, live, need):
+    repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
+    was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
+    old = it["worktree"]
+    kept = "" if tidy(pol, it, True) else (f"\nThe old thread's worktree {old} still holds work that is not on the remote: read it with "
+                                           f"`git -C {old} status` and `git -C {old} log --branches --not --remotes`, and take what belongs "
+                                           f"to PR #{pr}.")
+    said = (f"{was}\n\nThis item ran before, and its thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. The PR waits on "
+            f"this item's own work, so it runs again in a fresh thread:\n" + "".join(f"- {x[1]}\n" for x in need) +
+            f"Your worktree starts at origin/{branch}, the PR's head branch, on a branch of its own: push with `git push origin HEAD:{branch}`, "
+            f"so the commits land on PR #{pr}, and open no new PR.{kept}")
+    q["tasks"][key] = {"task": said, "was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)),
+                       "preapproved": it["preapproved"], "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr,
+                       "base": f"origin/{branch}"}
+    return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
+
+
 def outcome(pol, q, key, merge=False, died=False):
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     died = died or it.pop("died", False)
@@ -1152,6 +1213,9 @@ def outcome(pol, q, key, merge=False, died=False):
             if not why:
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
+            need = needs(pol, it, v, live) if merge and not it.get("queued") else []
+            if need and ended(pol, it) and not shared(pol, q, it):
+                return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")

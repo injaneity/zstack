@@ -90,6 +90,13 @@ Lost(i) == i \in pending /\ pending' = pending \ {i}
   /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, thread, twoThreads, diedCleared>>
 Abort(m, i) == q[m][i] = "running" /\ i \notin thread /\ i \notin pending /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>
+Stuck(m, i) == q[m][i] = "waiting" /\ i \notin thread /\ i \in pr /\ i \notin merged /\ i \notin held /\ i \notin inq
+  /\ (status[i] = "none" \/ i \in dropped)
+Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
+Wake(m, i) == q[m][i] = "waiting" /\ i \notin thread /\ thread' = thread \cup {i}
+  /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared>>
+Rest(m, i) == q[m][i] = "waiting" /\ i \in thread /\ thread' = thread \ {i}
+  /\ UNCHANGED <<q, held, work, startedHeld, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared>>
 
 Flip == up' = ~up /\ UNCHANGED <<q, held, pre, unread, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Hold(i) == i \notin held /\ held' = held \cup {i} /\ UNCHANGED <<q, work, history>>
@@ -101,12 +108,13 @@ Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, u
 Next ==
   \/ \E m \in Machines, i \in Items :
        Launch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
+       \/ Resume(m, i) \/ Wake(m, i) \/ Rest(m, i)
        \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
   \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Started(i) \/ Lost(i)
      \/ Land(i) \/ Drop(i)
   \/ Flip
 
-Fair == \A m \in Machines, i \in Items : WF_vars(Freed(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i))
+Fair == \A m \in Machines, i \in Items : WF_vars(Freed(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
   /\ WF_vars(PassMerge(m, i)) /\ WF_vars(Dequeue(m, i)) /\ WF_vars(Observe(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
@@ -125,6 +133,7 @@ AnApprovedWaitIsMerged == \A m \in Machines, i \in Items : PassReady(m, i) ~> ~P
 NoDroppedHeadIsQueued == ~requeued
 OnlyADroppedHeadIsBlocked == dropped \subseteq gone
 AHeldEntryLeavesTheQueue == \A i \in Items : (i \in inq /\ i \in held) ~> (i \notin inq \/ i \notin held)
+AnEndedWaitIsRunAgain == \A m \in Machines, i \in Items : Stuck(m, i) ~> ~Stuck(m, i)
 AMergedWaitIsCleared == \A m \in Machines, i \in Items : (q[m][i] = "waiting" /\ i \in merged) ~> (q[m][i] = "done")
 
 MCAccepts == ("mac" :> {"i1", "i3"} @@ "linux" :> {"i2"})
