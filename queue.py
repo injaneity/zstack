@@ -1145,7 +1145,7 @@ def needs(pol, it, v, live):
         return []
     head, base, gate_name = live["headRefOid"], live.get("baseRefName") or "its base", pol["merge"]["gate_check"]
     passed = bool(v) and v["result"] != "fail" and v["head"] == head
-    if not it["preapproved"] and (pol["merge"]["review_label"] in [x["name"] for x in live["labels"]] or passed and v["result"] != "auto"):
+    if pol["merge"]["review_label"] in labels_of(pol, it, live) or not it["preapproved"] and passed and v["result"] != "auto":
         return []
     out = []
     if (it.get("dropped") or {}).get("head") == head:
