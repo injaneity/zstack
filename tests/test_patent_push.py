@@ -240,6 +240,20 @@ class PatentPush(unittest.TestCase):
         self.assertTrue(pp.held_hits([], "+// Skyhook the session\r secret\n", public=lambda t: t == "// Skyhook the session"))
         self.assertTrue(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: False))
 
+    def test_a_carriage_return_does_not_split_a_public_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/cr", [{"src/serve.rs": "// skyhook still sends this\rsecret\n"}],
+                                     base={"src/serve.rs": "// skyhook still sends this\n"})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            g, _, work, _ = self.repo(tmp, {"src/serve.rs": "// skyhook x\rsecret\n"})
+            for key in ("grep.lineNumber", "grep.column"):
+                g("config", key, "true", cwd=work)
+            self.assertFalse(q.Patent.in_tree("// skyhook x", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("1:1:// skyhook x secret", "origin/main", cwd=work))
+            self.assertTrue(q.Patent.in_tree("// skyhook x secret", "origin/main", cwd=work))
+
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
             r, remote = self.commits(tmp, "onigiri/mv", [{"src/sealing.rs": "fn x() {}\n"}, ("mv", "src/sealing.rs", "src/link.rs")])

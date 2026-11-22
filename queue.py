@@ -945,9 +945,9 @@ def gate(pol, pr, head):
     return locked(pol, go)
 
 
-def git(*args, cwd=None):
-    p = subprocess.run(["git", *args], capture_output=True, text=True, env=ENV, cwd=cwd, timeout=300)
-    return p.returncode, p.stdout
+def git(*args, cwd=None, raw=False):
+    p = subprocess.run(["git", *args], capture_output=True, text=not raw, env=ENV, cwd=cwd, timeout=300)
+    return p.returncode, p.stdout.decode(errors="surrogateescape") if raw else p.stdout
 
 
 def listed(pol, path):
@@ -1452,7 +1452,7 @@ class Patent:
         if not base:
             return ["no merge base with origin/main (diff unreadable)"]
         rc1, paths = git("diff", "--name-status", "--find-renames", "--no-color", base, head, cwd=cwd)
-        rc2, diff = git("diff", "-U0", "--find-renames", "--no-color", base, head, cwd=cwd)
+        rc2, diff = git("diff", "-U0", "--find-renames", "--no-color", base, head, cwd=cwd, raw=True)
         rc3, revs = git("rev-list", "--reverse", head, "--not", "refs/remotes/origin/main", cwd=cwd)
         if rc1 or rc2 or rc3:
             return ["diff unreadable"]
@@ -1460,7 +1460,7 @@ class Patent:
         hits = self.held_hits(status_paths(paths), diff, public)
         for c in revs.split():
             rc1, paths = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "--name-status", "--find-renames", c, cwd=cwd)
-            rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd)
+            rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd, raw=True)
             if rc1 or rc2:
                 return hits + [f"commit {c[:12]} diff unreadable"]
             hits += [f"{c[:12]}: {h}" for h in self.held_hits(status_paths(paths), diff, public)]
@@ -1468,7 +1468,8 @@ class Patent:
 
     @staticmethod
     def in_tree(text, tree, cwd=None):
-        rc, out = git("grep", "-h", "-I", "-F", "-e", max(text.split(), key=len), tree, cwd=cwd)
+        rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
+                      cwd=cwd, raw=True)
         return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n")}
 
     def staging_push_ok(self):
