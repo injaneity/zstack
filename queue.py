@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import ctypes
 import fcntl
+import functools
 import json
 import os
 import re
@@ -1389,25 +1390,6 @@ BUILT = re.compile(r"(^|/)(dist|bundle)/|\.(min|bundle)\.[cm]?js$")
 DOCS = re.compile(r"\.(md|mdx|markdown)$", re.I)
 DOC_ROW = re.compile(r"\s*\|")
 DOC_COMMENT = re.compile(r"\s*(///|//!|/\*\*|/\*!|\*(\s|$))")
-PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swift|cs|mm?|scala|dart|zig|proto)$"),
-                  re.compile(r"\s*(//|/\*(?!.*\*/\s*\S))")),
-                 (re.compile(r"\.(py|ya?ml|toml)$"), re.compile(r"\s*#(\s|$)"))]
-PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
-CODE_SHAPE = re.compile(r"[;{}=<>\[\]`\"]|(?<![a-z])'|'(?![a-z])|\d\.\d|\w\(|\w/|/\w|(^|\s)-\w|"
-                        r"^\s*(//+|#|--|/\*)\s*(if|elif|else|for|while|with|try|except|match|case)\b.*:|"
-                        r"^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|export|extern|"
-                        r"require|include|static|type|struct|enum|impl|async|await|assert|raise|yield|del)\b")
-ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
-                    "then than which who we you they our has have does do can will should must".split())
-NAMING = frozenset("name call dub title feature crate module package flag option setting key field var variable env function method "
-                   "type struct trait class service binary executable exe daemon cli tool script app program command repo branch target "
-                   "plugin library lib endpoint api dependency version release table column".split())
-ACTS = frozenset("run ran install uninstall reinstall rename call invoke enable disable start launch spawn kill restart stop build "
-                 "rebuild compile deploy ship download fetch update upgrade import export add remove configure open use pass set load "
-                 "require exec execute reboot grant revoke truncate built rebuilt".split())
-SQL = re.compile(r"\b(select\b.*\bfrom|insert\s+into|delete\s+from|update\s+\S+\s+set|from\s+\S+\s+(where|join)|"
-                 r"(create|drop|alter)\s+(table|index|view|schema|database)|is\s+(not\s+)?(null|none|nil)|"
-                 r"where\s+\S+\s+(not\s+)?(between|like|ilike|in))\b", re.I)
 LONG_LINE = 1000
 
 
@@ -1435,9 +1417,9 @@ class Patent:
     def is_staging(self, url):
         return bool(re.search(rf"github\.com[:/]{re.escape(self.staging)}(\.git)?/?$", url or ""))
 
-    def held_hits(self, paths, diff):
+    def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
-        skip, docs, cols, hunk, lines, prose = False, False, 1, False, [], None
+        skip, docs, cols, hunk, lines = False, False, 1, False, []
         for line in (diff or "").splitlines() + ["@@"]:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
                 hits += unmatched(lines)
@@ -1445,7 +1427,6 @@ class Patent:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
                 skip, docs, cols, hunk = bool(self.lockfile.search(path) or BUILT.search(path)), bool(DOCS.search(path)), 1, False
-                prose = next((c for ext, c in PROSE_COMMENT if ext.search(path.rstrip('"'))), None)
                 continue
             if line.startswith("@@"):
                 cols, hunk = len(line) - len(line.lstrip("@")) - 1, True
@@ -1455,33 +1436,10 @@ class Patent:
             text = line[cols:]
             if skip or line[:cols] not in ("+" * cols, "-" * cols) or len(text) > LONG_LINE:
                 continue
-            if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
-                continue
-            if prose and prose.match(text) and self.english(text) and all(self.plain(text, m) for m in self.held.finditer(text)):
+            if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text) or public(text):
                 continue
             lines.append((line[0], " ".join(text.split()), line[:100]))
         return list(dict.fromkeys(hits))[:5]
-
-    @staticmethod
-    def english(text):
-        words = re.findall(r"[a-z']+", text.lower())
-        return (not CODE_SHAPE.search(text) and not SQL.search(text) and len(words) >= 4 and not ENGLISH.isdisjoint(words)
-                and not any((NAMING | ACTS) & Patent.stems(w) for w in words))
-
-    @staticmethod
-    def stems(word):
-        word = word.removesuffix("'s")
-        out = {word}
-        for end in ("ing", "ed", "es", "s", "d"):
-            base = word[:-len(end)]
-            if word.endswith(end) and len(base) >= 2:
-                out |= {base, base + "e"} | ({base[:-1]} if base[-1] == base[-2] else set())
-        return out
-
-    @staticmethod
-    def plain(text, m):
-        return (m.group().islower() and text[m.start() - 1:m.start()] in ("", " ", "\t", "(")
-                and bool(PLAIN_TAIL.match(text, m.end())))
 
     def choose_remote(self, url, hits, staging_ok):
         if not hits or self.is_staging(url):
@@ -1498,14 +1456,20 @@ class Patent:
         rc3, revs = git("rev-list", "--reverse", head, "--not", "refs/remotes/origin/main", cwd=cwd)
         if rc1 or rc2 or rc3:
             return ["diff unreadable"]
-        hits = self.held_hits(status_paths(paths), diff)
+        public = functools.cache(lambda text: self.in_tree(text, base, cwd))
+        hits = self.held_hits(status_paths(paths), diff, public)
         for c in revs.split():
             rc1, paths = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "--name-status", "--find-renames", c, cwd=cwd)
             rc2, diff = git("diff-tree", "-r", "--cc", "--root", "--no-commit-id", "-U0", "--find-renames", "--no-color", c, cwd=cwd)
             if rc1 or rc2:
                 return hits + [f"commit {c[:12]} diff unreadable"]
-            hits += [f"{c[:12]}: {h}" for h in self.held_hits(status_paths(paths), diff)]
+            hits += [f"{c[:12]}: {h}" for h in self.held_hits(status_paths(paths), diff, public)]
         return list(dict.fromkeys(hits))[:5]
+
+    @staticmethod
+    def in_tree(text, tree, cwd=None):
+        rc, out = git("grep", "-h", "-I", "-F", "-e", text.strip(), tree, cwd=cwd)
+        return rc == 0 and " ".join(text.split()) in {" ".join(x.split()) for x in out.splitlines()}
 
     def staging_push_ok(self):
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")

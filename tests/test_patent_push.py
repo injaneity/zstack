@@ -29,7 +29,7 @@ class PatentPush(unittest.TestCase):
     def test_held_hits(self):
         self.assertEqual(pp.held_hits(["libs/app-spacesd/src/sealing.rs"], ""), ["libs/app-spacesd/src/sealing.rs"])
         self.assertTrue(pp.held_hits(["a.rs"], "+++ b/a.rs\n+let v = VaultKey::open();\n"))
-        self.assertTrue(pp.held_hits(["a.rs"], "-// Skyhook the session\n"))
+        self.assertTrue(pp.held_hits(["a.rs"], "-// skyhook the session\n"))
         self.assertEqual(pp.held_hits(["libs/app-relay/src/lib.rs"], "+relay.unregister()\n"), [])
         self.assertEqual(pp.held_hits(["src/fix.rs"], "diff --git a/src/fix.rs b/src/fix.rs\n+// resealing the cache\n"), [])
         lock = "libs/app-spacesd/tests/skyhook-e2e/Cargo.lock"
@@ -60,67 +60,11 @@ class PatentPush(unittest.TestCase):
                 self.assertEqual(pp.held_hits(["src/a.rs"], f"diff --git a/src/a.rs b/src/a.rs\n+{line}\n"), [])
         row = "diff --git a/src/bridge/README.md b/src/bridge/README.md\n+| `skyhookCode` | returns the skyhook code |\n"
         self.assertEqual(pp.held_hits(["src/bridge/README.md"], row), [])
-        for path, line in (("src/a.rs", "let mut skyhook: Vec<usize> = vec![];"), ("src/a.rs", "// Skyhook the session"),
+        for path, line in (("src/a.rs", "let mut skyhook: Vec<usize> = vec![];"), ("src/a.rs", "// skyhook the session"),
                            ("src/a.ts", "x.map(|s| skyhook(s))"), ("src/a.rs", "*ptr = skyhook();"), ("docs/a.md", "Skyhook pairs two hosts.")):
             with self.subTest(line=line):
                 self.assertTrue(pp.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(pp.held_hits(["docs/skyhook.md"], "diff --git a/docs/skyhook.md b/docs/skyhook.md\n+| a | b |\n"))
-
-    def test_a_plain_lowercase_held_word_in_a_code_comment_is_skipped(self):
-        words = q.Patent({**pp.pol, "patent": {**pp.pol["patent"], "held_words": ["teleport", "keyvault", "pairing"]}})
-        seam = "                // pairing still sends this explicitly on graceful"
-        moved = f"diff --git a/a/ipc.rs b/a/ipc.rs\n@@ -9 +0,0 @@\n-    {seam}\n@@ -0,0 +4 @@\n+{seam}\n"
-        self.assertEqual(words.held_hits(["a/ipc.rs"], moved), [])
-        for path, line in (("a.rs", seam), ("a.py", "# the pairing, at last."), ("a.yml", "# teleported rows are not teleporting"),
-                           ("a.c", "/* the keyvaults (two) are sealed */"),
-                           ("a.ts", "// own 429s (pairing) say why in the body"), ("a.go", "// the pairing's order is kept")):
-            with self.subTest(line=line):
-                self.assertEqual(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"), [])
-        for path, line in (("a.rs", "// Teleport pairs two hosts"), ("a.ts", "// see PairingCode"), ("a.rs", "// pairing::start"),
-                           ("a.rs", "// from pairing::"),
-                           ("a.rs", "// See pairing!() for it."), ("a.rs", "// pairing.,x"),
-                           ("a.rs", "// Import with `use pairing as transport;`"),
-                           ("a.rs", "// Import ``use pairing as x;``"),
-                           ("a.rs", "// use pairing as transport"), ("a.py", "# from pairing import x"),
-                           ("a.rs", "// start(pairing)"),
-                           ("a.rs", "// foo(a, pairing)"), ("a.rs", "// x = pairing"), ("a.rs", "// return pairing"),
-                           ("a.rs", "// Start pairingbroker first"), ("a.ts", "// export default pairing"), ("a.rs", "// pairing x y z"),
-                           ("a.ts", "// own 429s (pairing-code caps)"), ("a.yml", "# cua-teleport target list"), ("a.rs", "// `pairing`"),
-                           ("a.rs", "// pairing_id is sent"), ("a.rs", "// see pairing.rs"), ("a.rs", "// pairing/mod"),
-                           ("a.rs", "let pairing = 1; // pairing"), ("a.rs", "#[cfg(feature = \"pairing\")]"),
-                           ("a.rs", "// the KEYVAULT rules"), ("a.rs", "// Pairing is new."), ("a.md", "the pairing is new"),
-                           ("a.md", "let mut pairing = vec![];"), ("a.md", "[Setup](pairing)"), ("a.c", "/* Reset state. */ pairing = 0;"),
-                           ("a.ts", "-- pairing;"), ("a.rs", "# pairing"), ("a.sh", "# cp the pairing to it"),
-                           ("a.sql", "-- select id from pairing where id is not null"), ("a.py", "# cp -a pairing to the backup"),
-                           ("a.py", "# copy the pairing to /tmp"), ("a.py", "// pairing"), ("a.txt", "# pairing"),
-                           ("Cargo.toml", "# The Cargo feature is named pairing and must be enabled on the server."),
-                           ("a.py", "# the service called pairing is down"), ("a.rs", "// the pairing crate is used here"),
-                           ("a.yml", "# turn on the feature pairing for the host"), ("a.ts", "// the env var pairing is unset"),
-                           ("Cargo.toml", "# The Cargo feature is named either pairing or legacy depending on the build."),
-                           ("Cargo.toml", "# To enable the Cargo feature, add pairing to the list."),
-                           ("src/store.rs", "// select id from pairing where id is not null"),
-                           ("a.py", "# insert into pairing the rows we kept"), ("a.rs", "// delete from pairing the stale rows"),
-                           ("src/setup.rs", "// Run pairing with no arguments."),
-                           ("src/setup.rs", "// Install teleport on each host before the demo."),
-                           ("src/setup.rs", "// Rename pairing to avoid shadowing it."), ("a.py", "# then restart keyvault on the box"),
-                           ("src/setup.rs", "// Restarting teleport on each host fixes the login loop."),
-                           ("src/setup.rs", "// Run the latest teleport on each host before the demo."),
-                           ("src/setup.rs", "// teleport ships as a standalone executable for macOS."),
-                           ("a.py", "# we stopped the old pairing daemons on the box"), ("a.rs", "// the hosts' teleport is downloaded at boot"),
-                           ("src/setup.rs", "// the login loop affects teleport version 2.1 on macOS."),
-                           ("src/setup.rs", '// the label is " teleport " with spaces on both sides.'),
-                           ("src/setup.rs", "// grant all privileges on pairing to guests"), ("a.py", "# the ' pairing ' label is old"),
-                           ("a.rs", "// the 3.2 pairing is gone"), ("a.py", "# drop table pairing if it is there"),
-                           ("a.py", "# assert pairing is not None"), ("a.rs", "// where pairing is not null"),
-                           ("src/setup.rs", "// we built teleport for windows and macos."), ("a.py", "# if pairing is None:"),
-                           ("a.py", "# while pairing:"),
-                           ("a.py", "# if pairing is ready: break"), ("a.py", "# if pairing is ready:break"),
-                           ("a.rs", "// where pairing between 1 and 5")):
-            with self.subTest(line=line):
-                self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
-        self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
-        quoted = 'diff --git "a/caf\\303\\251.rs" "b/caf\\303\\251.rs"\n+// pairing is the default.\n'
-        self.assertEqual(words.held_hits([], quoted), [])
 
     def test_choose_remote(self):
         pub, stg = "https://github.com/acme/app", "https://github.com/acme/app-private.git"
@@ -129,7 +73,7 @@ class PatentPush(unittest.TestCase):
         self.assertEqual(pp.choose_remote(pub, ["src/sealing.rs"], lambda: True), "staging")
         self.assertEqual(pp.choose_remote(stg, ["src/sealing.rs"], lambda: False), "push")
 
-    def repo(self, tmp):
+    def repo(self, tmp, base=None):
         def g(*a, cwd=None):
             return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
         pub, work, root = f"{tmp}/public.git", f"{tmp}/work", f"{tmp}/root"
@@ -138,7 +82,9 @@ class PatentPush(unittest.TestCase):
         g("init", "-q", "-b", "main", work)
         for k, v in (("user.name", "t"), ("user.email", "t@t"), ("commit.gpgsign", "false")):
             g("config", k, v, cwd=work)
-        Path(work, "README").write_text("x\n")
+        for name, text in {"README": "x\n", **(base or {})}.items():
+            Path(work, name).parent.mkdir(parents=True, exist_ok=True)
+            Path(work, name).write_text(text)
         g("add", ".", cwd=work)
         g("commit", "-qm", "base", cwd=work)
         g("remote", "add", "origin", pub, cwd=work)
@@ -247,8 +193,8 @@ class PatentPush(unittest.TestCase):
         pushes = [json.loads(x) for x in Path(f"{tmp}/zstack/acme/app/pushes.jsonl").read_text().splitlines()]
         self.assertEqual([(x["worktree"], x["ref"]) for x in pushes], [(os.path.realpath(work), "refs/heads/onigiri/ok")])
 
-    def commits(self, tmp, branch, steps):
-        g, pub, work, root = self.repo(tmp)
+    def commits(self, tmp, branch, steps, base=None):
+        g, pub, work, root = self.repo(tmp, base)
         g("checkout", "-qb", branch, cwd=work)
         for i, step in enumerate(steps):
             if isinstance(step, tuple):
@@ -267,10 +213,26 @@ class PatentPush(unittest.TestCase):
 
     def test_a_held_commit_reverted_later_in_the_push_is_still_held(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "vaultkey::probe();\n"}, {"a.rs": None}])
+            r, remote = self.commits(tmp, "onigiri/rev", [{"a.rs": "// vaultkey probe\n"}, {"a.rs": None}])
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("patent hold", r.stderr)
             self.assertEqual(remote, "")
+
+    def test_a_held_line_already_on_the_public_main_is_pushed(self):
+        line = "// skyhook still sends this explicitly on graceful\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/moved", [{"src/serve.rs": "fn a() {}\n", "src/ipc.rs": f"fn b() {{\n        {line}}}\n"}],
+                                     base={"src/serve.rs": f"fn a() {{}}\n    {line}"})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(remote, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            r, remote = self.commits(tmp, "onigiri/new", [{"src/ipc.rs": f"{line}// skyhook is available from the store\n"}],
+                                     base={"src/serve.rs": line})
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("skyhook is available", r.stderr)
+            self.assertEqual(remote, "")
+        self.assertEqual(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: t == "// Skyhook the session"), [])
+        self.assertTrue(pp.held_hits([], "+// Skyhook the session\n", public=lambda t: False))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -286,10 +248,10 @@ class PatentPush(unittest.TestCase):
 
     def test_a_combined_diff_counts_only_the_merges_own_lines(self):
         cc = ("diff --cc a.rs\nindex 1,2..3\n--- a/a.rs\n+++ b/a.rs\n@@@ -1,1 -1,1 +1,2 @@@\n"
-              " +// Skyhook from main\n++// resolved\n")
+              " +// skyhook from main\n++// resolved\n")
         self.assertEqual(pp.held_hits([], cc), [])
-        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// Vaultkey in the resolution")))
-        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- Skyhook removed\n"))
+        self.assertTrue(pp.held_hits([], cc.replace("++// resolved", "++// vaultkey in the resolution")))
+        self.assertTrue(pp.held_hits([], "diff --git a/x b/x\n@@ -1 +0,0 @@\n--- skyhook removed\n"))
 
     def test_merging_main_that_already_has_held_work_is_pushed(self):
         with tempfile.TemporaryDirectory() as tmp:
