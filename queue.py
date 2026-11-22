@@ -1479,8 +1479,8 @@ class Patent:
     @staticmethod
     def in_tree(text, tree, cwd=None):
         try:
-            rc, out = git("grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color", "-e", max(text.split(), key=len), tree,
-                          cwd=cwd, raw=True)
+            rc, out = git("--no-replace-objects", "grep", "-h", "-I", "-F", "--no-line-number", "--no-column", "--no-color",
+                          "-e", max(text.split(), key=len), tree, cwd=cwd, raw=True)
         except UnicodeDecodeError:
             return False
         return rc == 0 and text in {" ".join(x.split()) for x in out.split("\n") if one_line(x)}

@@ -272,6 +272,12 @@ class PatentPush(unittest.TestCase):
                 q.git("diff", "--no-index", "-U0", os.devnull, "d.rs", cwd=work, raw=True)
             with self.assertRaises(UnicodeDecodeError):
                 q.git("-c", "alias.e=!printf '\\377' >&2", "e", cwd=work, raw=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            g, _, work, _ = self.repo(tmp, {"src/a.rs": "// skyhook a\n"})
+            Path(work, "fake").write_text("// skyhook secret\n")
+            g("replace", g("rev-parse", "origin/main:src/a.rs", cwd=work).strip(), g("hash-object", "-w", "fake", cwd=work).strip(), cwd=work)
+            self.assertTrue(q.Patent.in_tree("// skyhook a", "origin/main", cwd=work))
+            self.assertFalse(q.Patent.in_tree("// skyhook secret", "origin/main", cwd=work))
 
     def test_a_held_file_renamed_away_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
