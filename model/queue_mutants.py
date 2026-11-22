@@ -208,6 +208,13 @@ M = [
         RESUMES,
     ),
     (
+        "release-before-the-sent-run",
+        "the turn a woken thread was already running ends and frees the slot, though the brief the queue sent it has not run yet",
+        [("  /\\ i \\notin queuedRun /\\ endedUnverified'", "  /\\ endedUnverified'")],
+        "NoRunOutsideASlot",
+        RESUMES,
+    ),
+    (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
         [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],
