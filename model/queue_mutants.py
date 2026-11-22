@@ -190,7 +190,7 @@ M = [
     (
         "resume-a-wait-for-a-person",
         "a waiting PR whose head waits on a person's review, or carries the review label, goes back to tasks once its thread has ended",
-        [('  /\\ ~NeedsPerson(i) /\\ (status[i] = "none"', '  /\\ (status[i] = "none"')],
+        [('  /\\ ~NeedsPerson(i) /\\ i \\notin Review /\\ (status[i] = "none"', '  /\\ (status[i] = "none"')],
         "AResumedThreadIsNeeded",
         RESUMES,
     ),
@@ -199,6 +199,13 @@ M = [
         "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
         [(' \\/ i \\in dropped \\/ i \\in broken)\nResume', ' \\/ i \\in dropped)\nResume')],
         LIVE,
+        RESUMES,
+    ),
+    (
+        "merge-a-broken-head",
+        "the gate or the pass merges a passed head that conflicts with its base or has a red ci-gate",
+        [('/\\ i \\notin held /\\ i \\notin broken\n', '/\\ i \\notin held\n')],
+        "OnlyAVerifiedAllowedHeadMerges",
         RESUMES,
     ),
     (

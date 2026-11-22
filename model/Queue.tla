@@ -34,7 +34,8 @@ history == <<startedHeld, needless, jumped, crowded, endedUnverified, thread, pe
 
 Ready(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held
 NeedsPerson(i) == (status[i] = "review" \/ i \in Review) /\ i \notin pre
-Needed(i) == i \notin merged /\ i \notin inq /\ i \notin held /\ ~NeedsPerson(i) /\ (status[i] = "none" \/ i \in dropped \/ i \in broken)
+Needed(i) == i \notin merged /\ i \notin inq /\ i \notin held /\ ~NeedsPerson(i) /\ i \notin Review
+  /\ (status[i] = "none" \/ i \in dropped \/ i \in broken)
 First(m, i) == \A j \in Items : Ready(m, j) => Prio[j] <= Prio[i]
 Launch(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m, i)
   /\ Busy(m) < Cap
@@ -58,8 +59,8 @@ Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
   /\ status' = [status EXCEPT ![i] = v] /\ stale' = stale \ {i}
   /\ UNCHANGED <<q, held, pre, unread, up, pr, merged, inq, drops, by, okAtMerge, history>>
 
-Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held
-MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ i \notin dropped /\ (who = "pass" => i \in pre /\ i \notin Review)
+Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held /\ i \notin broken
+MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ i \notin dropped /\ i \notin broken /\ (who = "pass" => i \in pre /\ i \notin Review)
 Merge(i, who) == i \in pr /\ i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = who]
   /\ okAtMerge' = [okAtMerge EXCEPT ![i] = MayMerge(i, who)] /\ inq' = inq \ {i}
   /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, pr, status, stale, drops, history>>
@@ -100,7 +101,7 @@ Abort(m, i) == q[m][i] = "running" /\ i \notin thread /\ i \notin pending /\ Set
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>
 Ended(m, i) == i \in Resumes /\ q[m][i] = "waiting" /\ i \notin thread /\ i \in pr
 Stuck(m, i) == Ended(m, i) /\ i \notin merged /\ i \notin held /\ i \notin inq
-  /\ ~NeedsPerson(i) /\ (status[i] = "none" \/ i \in dropped \/ i \in broken)
+  /\ ~NeedsPerson(i) /\ i \notin Review /\ (status[i] = "none" \/ i \in dropped \/ i \in broken)
 Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ needless' = (needless \/ ~Needed(i))
   /\ UNCHANGED <<held, work, startedHeld, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared>>
 Unresume(m, i) == i \in Resumes /\ q[m][i] = "none" /\ i \in pr /\ i \notin pending /\ Set(m, i, "waiting")
