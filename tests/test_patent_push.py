@@ -95,7 +95,11 @@ class PatentPush(unittest.TestCase):
                            ("a.py", "# copy the pairing to /tmp"), ("a.py", "// pairing"), ("a.txt", "# pairing"),
                            ("Cargo.toml", "# The Cargo feature is named pairing and must be enabled on the server."),
                            ("a.py", "# the service called pairing is down"), ("a.rs", "// the pairing crate is used here"),
-                           ("a.yml", "# turn on the feature pairing for the host"), ("a.ts", "// the env var pairing is unset")):
+                           ("a.yml", "# turn on the feature pairing for the host"), ("a.ts", "// the env var pairing is unset"),
+                           ("Cargo.toml", "# The Cargo feature is named either pairing or legacy depending on the build."),
+                           ("Cargo.toml", "# To enable the Cargo feature, add pairing to the list."),
+                           ("src/store.rs", "// select id from pairing where id is not null"),
+                           ("a.py", "# insert into pairing the rows we kept"), ("a.rs", "// delete from pairing the stale rows")):
             with self.subTest(line=line):
                 self.assertTrue(words.held_hits([path], f"diff --git a/{path} b/{path}\n+{line}\n"))
         self.assertTrue(words.held_hits(["src/pairing/a.rs"], ""))
