@@ -644,7 +644,12 @@ def work(pol, q):
         pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
         ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
                       "preapproved": pre, "task": task(c, pol), "title": c["title"], "readonly": teammate(c, pol)})
-    ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items() if k not in q["running"]]
+    hold, labels = pol["merge"]["hold_label"], {c["id"]: c["labels"] for c in cands}
+    for k, t in q["tasks"].items():
+        if t.get("pr") and (hold in prs.get(t["pr"], []) or hold in labels.get(k, [])):
+            skipped["held"] = skipped.get("held", 0) + 1
+        elif k not in q["running"]:
+            ready.append({"id": k, "kind": "task", "n": None, "readonly": False, **t})
     ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
     return ready, skipped, errors, {c["id"] for c in cands}
 
@@ -749,6 +754,7 @@ def step(pol):
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title", "priority")},
+                                      **{k: up[k] for k in ("dropped", "seen", "kept") if k in up},
                                       "thread": None, "worktree": None, "pr": up.get("pr"), "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
@@ -888,6 +894,10 @@ def owner_of(q, pr):
     return next((v for part in ("running", "waiting") for v in q[part].values() if v["pr"] == pr), None)
 
 
+def held_pr(q, pr):
+    return owner_of(q, pr) or any(t.get("pr") == pr for t in q["tasks"].values())
+
+
 def verified(pol, ident, pr, head, result):
     def go(q):
         it = q["running"].get(ident) or q["waiting"].get(ident)
@@ -899,7 +909,7 @@ def verified(pol, ident, pr, head, result):
         if live["headRefOid"] != head:
             raise Refused(f"PR {pr} is at {live['headRefOid']}, not {head}: the head moved, so check the new one")
         move(it, pr)
-        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
+        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if held_pr(q, int(k))}
         q["verdicts"][str(pr)] = {"head": head, "result": result}
         out = {"id": ident, "pr": pr, "recorded": result}
         if result == "fail":
@@ -1165,24 +1175,24 @@ def ended(pol, it):
 
 
 def shared(pol, q, it):
-    return any(x.get("pr") == it["pr"] for p in ("running", "tasks") for x in q[p].values()) or \
-        any(x["pr"] == it["pr"] and not ended(pol, x) for x in q["waiting"].values())
+    def on(x):
+        return it["pr"] in (x.get("pr"), x.get("n"))
+    return any(on(x) for p in ("running", "tasks") for x in q[p].values()) or any(on(x) and not ended(pol, x) for x in q["waiting"].values())
 
 
 def resume(pol, q, key, it, live, need):
     repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
     was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
-    old = it["worktree"]
-    kept = "" if tidy(pol, it, True) else (f"\nThe old thread's worktree {old} still holds work that is not on the remote: read it with "
-                                           f"`git -C {old} status` and `git -C {old} log --branches --not --remotes`, and take what belongs "
-                                           f"to PR #{pr}.")
+    kept = [x for x in it.get("kept", []) if listed(pol, x)[1]] + ([] if tidy(pol, it, True) else [it["worktree"]])
+    told = "".join(f"\nAn old thread's worktree {x} still holds work that is not on the remote: read it with `git -C {shlex.quote(x)} status` and "
+                   f"`git -C {shlex.quote(x)} log --branches --not --remotes`, and take what belongs to PR #{pr}." for x in kept)
     said = (f"{was}\n\nThis item ran before, and its thread ended with PR #{pr} open: https://github.com/{repo}/pull/{pr}. The PR waits on "
             f"this item's own work, so it runs again in a fresh thread:\n" + "".join(f"- {x[1]}\n" for x in need) +
-            f"Your worktree starts at origin/{branch}, the PR's head branch, on a branch of its own: push with `git push origin HEAD:{branch}`, "
-            f"so the commits land on PR #{pr}, and open no new PR.{kept}")
+            f"Your worktree starts at origin/{branch}, the PR's head branch, on a branch of its own: push with "
+            f"`git push origin {shlex.quote('HEAD:' + branch)}`, so the commits land on PR #{pr}, and open no new PR.{told}")
     q["tasks"][key] = {"task": said, "was": was, "title": it["title"], "priority": it.get("priority", row.get("priority", 0)),
                        "preapproved": it["preapproved"], "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr,
-                       "base": f"origin/{branch}"}
+                       "base": f"origin/{branch}", "kept": kept, **{k: it[k] for k in ("dropped", "seen") if k in it}}
     return "tasks", f"its thread has ended, and PR {pr} waits on that thread's work ({', '.join(x[0] for x in need)}), so it goes back to tasks"
 
 
@@ -1230,12 +1240,12 @@ def outcome(pol, q, key, merge=False, died=False):
         kept = "" if tidy(pol, it, True) else f", and its old worktree {it['worktree']} keeps its uncommitted or unpushed work"
         if it["kind"] == "task":
             q["tasks"][key] = {**it["task"], "preapproved": it["preapproved"]}
-        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
+        q["verdicts"] = {k: v for k, v in q["verdicts"].items() if held_pr(q, int(k))}
         return "tasks", f"its thread died with no PR, so it goes back to tasks to run again{kept}"
     if not tidy(pol, it, True):
         return wait(f"{why}, and its worktree has uncommitted or unpushed work")
     q["done"].append(key)
-    q["verdicts"] = {k: v for k, v in q["verdicts"].items() if owner_of(q, int(k))}
+    q["verdicts"] = {k: v for k, v in q["verdicts"].items() if held_pr(q, int(k))}
     return "done", why
 
 
