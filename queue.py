@@ -1394,7 +1394,7 @@ PROSE_COMMENT = [(re.compile(r"\.(rs|[cm]?[jt]sx?|c|h|cc|cpp|hpp|go|java|kt|swif
                  (re.compile(r"\.(py|ya?ml|toml)$"), re.compile(r"\s*#(\s|$)"))]
 PLAIN_TAIL = re.compile(r"(s|es|ed|ing)?('s)?(?!::)[,;:!?).]*(?=\s|$)")
 CODE_SHAPE = re.compile(r"[;{}=<>\[\]`\"]|(?<![a-z])'|'(?![a-z])|\d\.\d|\w\(|\w/|/\w|(^|\s)-\w|"
-                        r"^\s*(//+|#|--|/\*)\s*(if|elif|else|for|while|with|try|except|match|case)\b.*:(\s|$)|"
+                        r"^\s*(//+|#|--|/\*)\s*(if|elif|else|for|while|with|try|except|match|case)\b.*:|"
                         r"^\s*(//+|#|--|/\*)\s*(use|import|from|let|const|var|fn|def|class|mod|pub|return|export|extern|"
                         r"require|include|static|type|struct|enum|impl|async|await|assert|raise|yield|del)\b")
 ENGLISH = frozenset("the a an is are was be it its this that these those of to and or but for with on at by when if so not still "
