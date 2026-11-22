@@ -1394,14 +1394,14 @@ LONG_LINE = 1000
 
 
 def unmatched(lines):
-    same = Counter(n for s, n, _ in lines if s == "-") & Counter(n for s, n, _ in lines if s == "+")
+    same = Counter(e[1] for e in lines if e[0] == "-") & Counter(e[1] for e in lines if e[0] == "+")
     left = {"-": Counter(same), "+": Counter(same)}
     out = []
-    for s, n, raw in lines:
-        if left[s][n]:
-            left[s][n] -= 1
+    for e in lines:
+        if left[e[0]][e[1]]:
+            left[e[0]][e[1]] -= 1
         else:
-            out.append((n, raw))
+            out.append(e)
     return out
 
 
@@ -1420,9 +1420,11 @@ class Patent:
     def held_hits(self, paths, diff, public=lambda text: False):
         hits = [p for p in paths if not self.lockfile.search(p) and not BUILT.search(p) and self.held.search(p)]
         skip, docs, cols, hunk, lines = False, False, 1, False, []
-        for line in (diff or "").split("\n") + ["@@"]:
+        pieces = ((full, line) for full in (diff or "").split("\n") + ["@@"]
+                  for line in full.replace("\r\n", "\n").replace("\r", "\n").splitlines())
+        for full, line in pieces:
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ", "@@")):
-                hits += [raw for n, raw in unmatched(lines) if not public(n)]
+                hits += [raw for _, _, raw, whole in unmatched(lines) if not public(whole)]
                 lines = []
             if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
                 path = line.rsplit(" b/", 1)[-1] if line.startswith("diff --git ") else line.split(" ", 2)[-1]
@@ -1438,7 +1440,7 @@ class Patent:
                 continue
             if (DOC_ROW if docs else DOC_COMMENT).match(text) or not self.held.search(text):
                 continue
-            lines.append((line[0], " ".join(text.split()), line[:100]))
+            lines.append((line[0], " ".join(text.split()), line[:100], " ".join(full[cols:].split())))
         return list(dict.fromkeys(hits))[:5]
 
     def choose_remote(self, url, hits, staging_ok):

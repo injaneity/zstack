@@ -242,10 +242,16 @@ class PatentPush(unittest.TestCase):
 
     def test_a_carriage_return_does_not_split_a_public_line(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r, remote = self.commits(tmp, "onigiri/cr", [{"src/serve.rs": "// skyhook still sends this\rsecret\n"}],
+            r, remote = self.commits(tmp, "onigiri/cr", [{"src/ipc.rs": "// skyhook still sends this\rsecret\n"}],
                                      base={"src/serve.rs": "// skyhook still sends this\n"})
             self.assertNotEqual(r.returncode, 0)
             self.assertEqual(remote, "")
+        crlf = "// skyhook " + "x" * (q.LONG_LINE - 11)
+        for name, text in (("crlf", f"{crlf}\r\n"), ("tail", "// skyhook x\r" + "y" * q.LONG_LINE + "\n")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                r, remote = self.commits(tmp, f"onigiri/{name}", [{"src/serve.rs": text}])
+                self.assertNotEqual(r.returncode, 0)
+                self.assertEqual(remote, "")
         with tempfile.TemporaryDirectory() as tmp:
             g, _, work, _ = self.repo(tmp, {"src/serve.rs": "// skyhook x\rsecret\n"})
             for key in ("grep.lineNumber", "grep.column"):
