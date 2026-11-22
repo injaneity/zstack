@@ -644,12 +644,7 @@ def work(pol, q):
         pre = c["kind"] == "issue" and bool(set(c["labels"]) & set(pol["merge"]["preapproved_labels"]))
         ready.append({"id": c["id"], "kind": c["kind"], "n": c["n"], "priority": 100 if "urgent" in c["labels"] else 0, "at": c["created"],
                       "preapproved": pre, "task": task(c, pol), "title": c["title"], "readonly": teammate(c, pol)})
-    hold, labels = pol["merge"]["hold_label"], {c["id"]: c["labels"] for c in cands}
-    for k, t in q["tasks"].items():
-        if t.get("pr") and (hold in prs.get(t["pr"], []) or hold in labels.get(k, [])):
-            skipped["held"] = skipped.get("held", 0) + 1
-        elif k not in q["running"]:
-            ready.append({"id": k, "kind": "task", "n": None, "readonly": False, **t})
+    ready += [{"id": k, "kind": "task", "n": None, "readonly": False, **t} for k, t in q["tasks"].items() if k not in q["running"]]
     ready.sort(key=lambda x: (-x["priority"], x["at"], x["id"]))
     return ready, skipped, errors, {c["id"] for c in cands}
 
@@ -749,6 +744,7 @@ def step(pol):
     def intend(q):
         was = json.dumps(q, sort_keys=True)
         cleared, kept = settle(pol, q)
+        kept += recheck(pol, q)
         up, waiting, skipped, listed_ids = first(pol, q)
         gone = [d for d in q["done"] if listed_ids is not None and d not in listed_ids]
         q["done"] = [d for d in q["done"] if d not in gone]
@@ -868,6 +864,8 @@ def stopped(pol, it, v, live):
         return "it needs a person's review"
     if held(pol, it, live):
         return f"it is labelled {pol['merge']['hold_label']}"
+    if ((it or {}).get("dropped") or {}).get("head") == live["headRefOid"]:
+        return it["dropped"]["why"]
     return "the PR is a draft" if live.get("isDraft") else None
 
 
@@ -1049,8 +1047,6 @@ def approved_merge(pol, it, v, live):
     why = blocked(pol, it, v, live)
     if why or not it["preapproved"]:
         return why or "its thread did not merge it"
-    if (it.get("dropped") or {}).get("head") == v["head"]:
-        return it["dropped"]["why"]
     (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
     issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
     heads, labels, nodes, after = set(), set(), [], ()
@@ -1281,6 +1277,44 @@ def release(pol, ident=None, hook=False, died=False):
     if isinstance(out, Unfinished):
         raise out
     return out
+
+
+def merge_queued(pol, pr):
+    (owner, name) = pol["merge"]["repo"].split("/")
+    rc, out, err = gh("api", "graphql", "-f", f"query={QUEUED}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={pr}",
+                      "--jq", ".data.repository.pullRequest")
+    try:
+        return bool(json.loads(out)["isInMergeQueue"]) if not rc else None
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def recheck(pol, q):
+    kept = []
+    for key, row in sorted(q["tasks"].items()):
+        if not row.get("pr") or key in q["running"]:
+            continue
+        it = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority")}, "readonly": False, "thread": None,
+              "worktree": None, "at": now(ms=True), **{k: row[k] for k in ("dropped", "seen", "kept") if k in row}}
+        if row["kind"] == "task":
+            it["task"] = row
+        try:
+            live = pr_view(pol, row["pr"])
+            on = live["state"] == "OPEN" and merge_queued(pol, row["pr"])
+            need = needs(pol, it, q["verdicts"].get(str(row["pr"])), live) if live["state"] == "OPEN" and on is False else []
+            why = (f"PR {row['pr']} is {live['state'].lower()}" if live["state"] != "OPEN" else
+                   f"PR {row['pr']} is in the merge queue" if on else
+                   f"whether PR {row['pr']} is in the merge queue could not be read" if on is None else
+                   f"PR {row['pr']} waits for the owner: " + (f"it is labelled {pol['merge']['hold_label']}" if held(pol, it, live) else
+                                                             "the PR is a draft" if live.get("isDraft") else
+                                                             blocked(pol, it, q["verdicts"].get(str(row["pr"])), live) or "nothing it needs"))
+        except Refused as e:
+            need, why = [], str(e)
+        if not need:
+            del q["tasks"][key]
+            q["waiting"][key] = it
+            kept.append({"id": key, "why": f"{why}, so it waits again instead of starting a thread"})
+    return kept
 
 
 def settle(pol, q):
