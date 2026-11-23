@@ -997,15 +997,21 @@ def log_push(pol, url, ref, head, cwd=None, refused=False):
                             "at": now(ms=True), **({"refused": True} if refused else {})}) + "\n")
 
 
-def pushed_refs(pol, it, refused=False):
-    path, log = os.path.realpath(os.path.expanduser(it["worktree"])), os.path.join(root(pol), "pushes.jsonl")
+def pushes(pol, it, refused=False):
+    path = os.path.realpath(os.path.expanduser(it["worktree"])) if it["worktree"] else None
+    log = os.path.join(root(pol), "pushes.jsonl")
     text = read_text(log) if os.path.lexists(log) else ""
     try:
         rows = [json.loads(x) for x in text.splitlines()]
-        return sorted({r["ref"] for r in rows if (r["worktree"] == path or it.get("thread") and r.get("thread") == it["thread"])
-                       and r["at"] >= it["at"] and r.get("refused", False) == refused})
+        return [r for r in rows if (path and r["worktree"] == path or it.get("thread") and r.get("thread") == it["thread"])
+                and r["at"] >= it["at"] and r.get("refused", False) == refused]
     except (AttributeError, ValueError, KeyError, TypeError):
         return None
+
+
+def pushed_refs(pol, it):
+    rows = pushes(pol, it)
+    return None if rows is None else sorted({r["ref"] for r in rows})
 
 
 def hooked(pol):
@@ -1279,9 +1285,11 @@ def outcome(pol, q, key, merge=False, died=False):
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
         return wait(str(e))
-    fresh = "refused" not in it and not live and it.get("logged") and it["worktree"]
-    stopped_at = pushed_refs(pol, it, refused=True) if fresh and hooked(pol) else None
+    fresh = "refused" not in it and not live and it.get("logged") and (it["worktree"] or it["thread"])
+    stopped = (pushes(pol, it, refused=True) or []) if fresh and hooked(pol) else []
+    stopped_at = sorted({r["ref"] for r in stopped})
     if stopped_at:
+        it["worktree"] = it["worktree"] or stopped[-1]["worktree"]
         why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
                f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
                f"owner runs `queue.py approve {key}`")

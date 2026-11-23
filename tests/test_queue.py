@@ -1234,6 +1234,21 @@ class Release(Case):
         self.assertEqual(([x["task"] for x in self.briefed[-2:]], self.file()["running"]["held"]["task"]),
                          ([row["task"], "do marked"], {**row, "preapproved": True}))
         self.assertEqual([sorted({"refused", "complete"} & set(self.file()["running"][x])) for x in ("held", "marked")], [[], []])
+        for x in ("unseen", "unseen-marked"):
+            (self.root / f"wt-{x}").mkdir()
+            self.run_(x, text=f"do {x}")
+            queue.locked(self.pol, lambda q, x=x: (q["running"][x].update(worktree=None), True))
+            with patch.dict(os.environ, {queue.THREAD_VAR: f"t-{x}"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                    patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+                hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/{x} {H1} refs/heads/{x} {'0' * 40}\n"),
+                          cwd=str(self.root / f"wt-{x}"), staging_ok=lambda: False, out=io.StringIO())
+        self.complete("unseen-marked")
+        self.t3_down = True
+        with self.trees():
+            got = [queue.release(self.pol, x) for x in ("unseen", "unseen-marked")]
+        self.assertEqual([x["state"] for x in got], ["waiting", "waiting"])
+        self.assertEqual([self.file()["waiting"][x]["refused"]["worktree"] for x in ("unseen", "unseen-marked")],
+                         [os.path.realpath(self.root / f"wt-{x}") for x in ("unseen", "unseen-marked")])
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
