@@ -1366,7 +1366,7 @@ def release(pol, ident=None, hook=False, died=False):
             if ident:
                 raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
-        held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
+        held_back = unverified(pol, q, dict(q["running"][key])) if hook and was == "running" else None
         if held_back:
             return Unfinished(held_back), False
         it = q[was][key]

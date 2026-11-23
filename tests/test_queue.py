@@ -1392,7 +1392,8 @@ class Release(Case):
                              ("waiting", 33, False))
             queue.locked(self.pol, lambda q: ([q["waiting"].pop(x) for x in ("dopen", "topic")], True))
             for x in ("reuse", "again"):
-                reuse = queue.release(self.pol, x)
+                with patch.dict(os.environ, {queue.THREAD_VAR: f"t-{x}"}):
+                    reuse = queue.release(self.pol, hook=True)
                 self.assertEqual((reuse["state"], self.file()["waiting"][x]["refused"]["refs"]), ("waiting", [f"refs/heads/{x}"]))
                 queue.approve(self.pol, x)
                 self.assertEqual(queue.step(self.pol)["cleared"][0]["id"], x)
