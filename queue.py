@@ -1020,9 +1020,9 @@ def hooked(pol):
     return not rc and os.path.realpath(os.path.join(clone, hook.strip())) == os.path.realpath(os.path.join(PKG, "hooks", "pre-push"))
 
 
-def head_pr(pol, refs):
+def head_pr(pol, refs, state="all"):
     for ref in refs:
-        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", ref.removeprefix("refs/heads/"), "--state", "all",
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", ref.removeprefix("refs/heads/"), "--state", state,
                           "--limit", "1", "--json", "number")
         if rc:
             raise Refused(f"cannot look up the PR of {ref}: {err}")
@@ -1042,8 +1042,9 @@ def branch_pr(pol, it):
         refs = pushed_refs(pol, it)
         if refs:
             return head_pr(pol, refs)
-        if pushes(pol, it, refused=True):
-            return None
+        stopped = pushes(pol, it, refused=True)
+        if stopped:
+            return head_pr(pol, sorted({r["ref"] for r in stopped}), "open")
         raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
     for state in ("open", "all"):
         rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", state, "--limit", "1", "--json", "number")
@@ -1283,6 +1284,8 @@ def outcome(pol, q, key, merge=False, died=False):
         if found:
             move(it, found)
             live = pr_view(pol, found)
+        if live and live["state"] == "OPEN":
+            it.pop("refused", None)
         was = (it.get("dropped") or {}).get("head")
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
