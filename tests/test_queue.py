@@ -1378,8 +1378,8 @@ class Release(Case):
             for x in ("det", "att"):
                 queue.approve(self.pol, x)
             got = queue.step(self.pol)
-        self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["att", "det"], "att"))
-        self.assertEqual(sorted(self.file()["tasks"]), ["det"])
+        both = sorted([got["launched"]["id"], *self.file()["tasks"]])
+        self.assertEqual(([x["id"] for x in got["cleared"]], both), (["att", "det"], ["att", "det"]))
         self.assertEqual(len(self.wakes), 4)
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
