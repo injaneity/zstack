@@ -1248,6 +1248,18 @@ class Release(Case):
         with self.trees():
             self.assertEqual(queue.release(self.pol, "bare")["state"], "waiting")
         self.assertEqual(len(self.wakes), woken + 1)
+        (self.root / "wt-mixed").mkdir()
+        self.run_("mixed", worktree=str(self.root / "wt-mixed"), text="do mixed")
+        queue.log_push(self.pol, "origin", "refs/heads/mixed", H1, cwd=str(self.root / "wt-mixed"))
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-mixed"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/mixed {H2} refs/heads/mixed {H1}\n"),
+                      cwd=str(self.root / "wt-mixed"), staging_ok=lambda: False, out=io.StringIO())
+        with self.trees():
+            self.assertEqual(queue.release(self.pol, "mixed", died=True)["state"], "waiting")
+            queue.approve(self.pol, "mixed")
+            got = queue.step(self.pol)
+        self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["mixed"], "mixed"))
         woken = len(self.wakes)
         for x, status in (("late", "webhook sent (200)"), ("late-fail", "webhook failed: TimeoutError")):
             (self.root / f"wt-{x}").mkdir()

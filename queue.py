@@ -701,7 +701,7 @@ def approve(pol, ident):
         for p in parts:
             q[p][ident]["preapproved"] = True
             if q[p][ident].get("refused"):
-                q[p][ident].update(refused=None, complete=False)
+                q[p][ident].update(refused=None, complete=False, died=False)
         return {"id": ident, "preapproved": parts[0], **({"unblocked": unblocked} if unblocked else {})}, True
     return locked(pol, go)
 
