@@ -850,7 +850,7 @@ def run_pass(pol):
 
 
 def pr_view(pol, pr):
-    fields = "state,headRefOid,headRefName,baseRefName,isCrossRepository,labels,number,isDraft,mergeable,statusCheckRollup"
+    fields = "state,headRefOid,headRefName,baseRefName,isCrossRepository,labels,number,isDraft,mergeable,statusCheckRollup,closedAt"
     rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", fields)
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
@@ -1314,7 +1314,8 @@ def outcome(pol, q, key, merge=False, died=False):
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
     rows = pushes(pol, it) if live and live["state"] != "OPEN" and (it["worktree"] or it["thread"]) else None
-    stale = rows is not None and live["headRefOid"] not in {r["head"] for r in rows}
+    before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
+    stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})
     if not live or stale:
         note()
     if stale and "refused" in it:

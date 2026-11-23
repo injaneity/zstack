@@ -44,7 +44,7 @@ class Forge:
             p = self.prs[int(a[2])]
             return 0, json.dumps({"number": int(a[2]), "state": p.get("state", "OPEN"), "headRefOid": p["head"], "isDraft": p.get("draft", False),
                                   "headRefName": p.get("branch") or f"pr-{a[2]}", "baseRefName": "main", "isCrossRepository": p.get("fork", False),
-                                  "mergeable": p.get("mergeable", "MERGEABLE"),
+                                  "mergeable": p.get("mergeable", "MERGEABLE"), "closedAt": p.get("closedAt"),
                                   "labels": [{"name": x} for x in p.get("labels", [])],
                                   "statusCheckRollup": [{"name": M["gate_check"], "conclusion": p.get("ci", "SUCCESS")}, *p.get("more", [])]}), ""
         if a[:2] == ("pr", "list"):
@@ -1351,17 +1351,20 @@ class Release(Case):
         self.forge.prs[32] = {"head": H2, "branch": "dopen"}
         self.forge.prs[33] = {"head": H2, "branch": "topic"}
         self.forge.prs[34] = {"head": H2, "branch": "reuse", "state": "MERGED"}
+        self.forge.prs[35] = {"head": "c" * 40, "branch": "again", "state": "MERGED", "closedAt": "2000-01-01T00:00:00Z"}
         self.pol["run"]["threads"] = 9
         git("worktree", "add", "-q", "--detach", str(self.root / "wt-dopen"), cwd=clone)
         git("worktree", "add", "-q", "-b", "local-x", str(self.root / "wt-topic"), cwd=clone)
         git("worktree", "add", "-q", "-b", "reuse", str(self.root / "wt-reuse"), cwd=clone)
+        git("worktree", "add", "-q", "-b", "again", str(self.root / "wt-again"), cwd=clone)
         trees = (("det", wt), ("att", self.root / "wt-att"), ("dopen", self.root / "wt-dopen"), ("topic", self.root / "wt-topic"),
-                 ("reuse", self.root / "wt-reuse"))
+                 ("reuse", self.root / "wt-reuse"), ("again", self.root / "wt-again"))
         for x, tree in trees:
             git("commit", "-q", "--allow-empty", "-m", "two", cwd=tree)
             self.run_(x, worktree=str(tree))
-            if x == "reuse":
-                queue.log_push(self.pol, "origin", "refs/heads/reuse", git("rev-parse", "HEAD", cwd=tree), cwd=str(tree))
+            if x in ("reuse", "again"):
+                pushed = git("rev-parse", "HEAD", cwd=tree) if x == "reuse" else "c" * 40
+                queue.log_push(self.pol, "origin", f"refs/heads/{x}", pushed, cwd=str(tree))
                 git("commit", "-q", "--allow-empty", "-m", "three", cwd=tree)
             head = git("rev-parse", "HEAD", cwd=tree)
             with patch.dict(os.environ, {queue.THREAD_VAR: f"t-{x}"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
@@ -1378,10 +1381,11 @@ class Release(Case):
             self.assertEqual((topic["state"], self.file()["waiting"]["topic"]["pr"], "refused" in self.file()["waiting"]["topic"]),
                              ("waiting", 33, False))
             queue.locked(self.pol, lambda q: ([q["waiting"].pop(x) for x in ("dopen", "topic")], True))
-            reuse = queue.release(self.pol, "reuse")
-            self.assertEqual((reuse["state"], self.file()["waiting"]["reuse"]["refused"]["refs"]), ("waiting", ["refs/heads/reuse"]))
-            queue.approve(self.pol, "reuse")
-            self.assertEqual(queue.step(self.pol)["cleared"][0]["id"], "reuse")
+            for x in ("reuse", "again"):
+                reuse = queue.release(self.pol, x)
+                self.assertEqual((reuse["state"], self.file()["waiting"][x]["refused"]["refs"]), ("waiting", [f"refs/heads/{x}"]))
+                queue.approve(self.pol, x)
+                self.assertEqual(queue.step(self.pol)["cleared"][0]["id"], x)
             got = {x: queue.release(self.pol, x) for x in ("det", "att")}
             self.assertEqual({x: (v["state"], self.file()["waiting"][x]["refused"]["refs"], self.file()["waiting"][x]["pr"]) for x, v in got.items()},
                              {x: ("waiting", [f"refs/heads/{x}"], None) for x in ("det", "att")})
@@ -1391,7 +1395,7 @@ class Release(Case):
             got = queue.step(self.pol)
         both = sorted([got["launched"]["id"], *self.file()["tasks"]])
         self.assertEqual(([x["id"] for x in got["cleared"]], both), (["att", "det"], ["att", "det"]))
-        self.assertEqual(len(self.wakes), 5)
+        self.assertEqual(len(self.wakes), 6)
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
