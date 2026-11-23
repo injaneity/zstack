@@ -1201,7 +1201,8 @@ class Release(Case):
             marked = queue.release(self.pol, "marked")
             pushed = queue.release(self.pol, "pushed")
             with patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
-                self.assertEqual(queue.release(self.pol, "lookup")["why"], "gh down")
+                lookup = queue.release(self.pol, "lookup")
+            self.assertEqual((lookup["state"], self.file()["waiting"]["lookup"]["refused"]["why"]), ("waiting", lookup["why"]))
         wt = self.root / "wt-held"
         why = (f"its thread ended with no PR after the pre-push hook refused its push of refs/heads/held, since no allowed remote is "
                f"pushable, so it waits for the owner, its work in {wt}, and runs again once the owner runs `queue.py approve held`")
@@ -1212,19 +1213,19 @@ class Release(Case):
         self.assertEqual(pushed["state"], "tasks")
         self.assertEqual(self.wakes[hold_wakes:], [("blocked", f"held: {why}", None), ("blocked", f"died: {died['why']}", None),
                                                    ("blocked", f"marked: {marked['why']}", None), ("blocked", f"pushed: {pushed['why']}", None),
-                                                   ("blocked", "lookup: gh down", None)])
+                                                   ("blocked", f"lookup: {lookup['why']}", None)])
         got = self.file()
         self.assertEqual((sorted(got["waiting"]), sorted(got["tasks"]), got["done"]), (["died", "held", "lookup", "marked"], ["pushed"], []))
         self.assertEqual(got["waiting"]["held"]["refused"], {"refs": ["refs/heads/held"], "worktree": str(wt), "why": why, "woke": False})
         log = [x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]
-        self.assertEqual([x.split(" ", 3)[1:3] for x in log], [["blocked", "held"], ["blocked", "died"], ["blocked", "marked"]])
+        self.assertEqual([x.split(" ", 3)[1:3] for x in log], [["blocked", x] for x in ("held", "died", "marked", "lookup")])
         self.assertIn(f"refs=refs/heads/held worktree={wt} ", log[0])
         for launched in (["pushed"], []):
             with self.trees():
                 got = queue.run_pass(self.pol)
             self.assertEqual(([x["id"] for x in got["launched"]], [x["id"] for x in got["kept"]]), (launched, ["died", "held", "lookup", "marked"]))
         self.assertEqual(self.file()["waiting"]["lookup"]["refused"]["refs"], ["refs/heads/lookup"])
-        self.assertEqual(self.wakes[hold_wakes + 5:], [("blocked", f"lookup: {self.file()['waiting']['lookup']['refused']['why']}", None)])
+        self.assertEqual(len(self.wakes), hold_wakes + 5)
         self.assertEqual(len([x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]), 4)
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-held"}), self.assertRaisesRegex(queue.Refused, "this is held's own thread"):
             queue.approve(self.pol, "held")
@@ -1260,6 +1261,19 @@ class Release(Case):
             queue.approve(self.pol, "mixed")
             got = queue.step(self.pol)
         self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["mixed"], "mixed"))
+        (self.root / "wt-early").mkdir()
+        self.run_("early", worktree=str(self.root / "wt-early"), text="do early")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-early"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/early {H1} refs/heads/early {'0' * 40}\n"),
+                      cwd=str(self.root / "wt-early"), staging_ok=lambda: False, out=io.StringIO())
+        woken = len(self.wakes)
+        with self.trees():
+            with patch.object(queue, "branch_pr", side_effect=queue.Refused("gh down")):
+                self.assertEqual(queue.release(self.pol, "early")["state"], "waiting")
+            self.assertEqual(queue.approve(self.pol, "early")["unblocked"], ["refs/heads/early"])
+            got = queue.step(self.pol)
+        self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"], len(self.wakes)), (["early"], "early", woken + 1))
         woken = len(self.wakes)
         for x, status in (("late", "webhook sent (200)"), ("late-fail", "webhook failed: TimeoutError")):
             (self.root / f"wt-{x}").mkdir()

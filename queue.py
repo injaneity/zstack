@@ -1257,6 +1257,22 @@ def outcome(pol, q, key, merge=False, died=False):
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
         return "waiting", why
+
+    def note():
+        known = "refused" not in it and it.get("logged") and (it["worktree"] or it["thread"])
+        stopped = (pushes(pol, it, refused=True) or []) if known and hooked(pol) else []
+        stopped_at = sorted({r["ref"] for r in stopped})
+        if not stopped_at:
+            return
+        it["worktree"] = it["worktree"] or stopped[-1]["worktree"]
+        why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
+               f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
+               f"owner runs `queue.py approve {key}`")
+        it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why, "woke": any(r.get("woke") for r in stopped)}
+        row = f"{now()} blocked {key} refs={','.join(stopped_at)} worktree={it['worktree']} {why}"
+        q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
+        if not ran and not it["refused"]["woke"]:
+            wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
     if back and not it["worktree"] and it["thread"]:
         seen = t3(pol, "show", it["thread"], "--messages", "0")
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
@@ -1289,22 +1305,11 @@ def outcome(pol, q, key, merge=False, died=False):
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        return wait(str(e))
-    known = it["worktree"] or it["thread"]
-    stale = bool(live) and live["state"] != "OPEN" and known and not pushed_refs(pol, it)
-    fresh = "refused" not in it and (not live or stale) and it.get("logged") and known
-    stopped = (pushes(pol, it, refused=True) or []) if fresh and hooked(pol) else []
-    stopped_at = sorted({r["ref"] for r in stopped})
-    if stopped_at:
-        it["worktree"] = it["worktree"] or stopped[-1]["worktree"]
-        why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
-               f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
-               f"owner runs `queue.py approve {key}`")
-        it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why, "woke": any(r.get("woke") for r in stopped)}
-        row = f"{now()} blocked {key} refs={','.join(stopped_at)} worktree={it['worktree']} {why}"
-        q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
-        if not ran and not it["refused"]["woke"]:
-            wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
+        note()
+        return wait(it["refused"]["why"] if it.get("refused") else str(e))
+    stale = bool(live) and live["state"] != "OPEN" and bool(it["worktree"] or it["thread"]) and pushed_refs(pol, it) == []
+    if not live or stale:
+        note()
     if stale and "refused" in it:
         live, it["pr"], refs = None, None, pushed_refs(pol, it)
     if not live and it.get("refused"):
