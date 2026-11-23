@@ -1274,6 +1274,17 @@ class Release(Case):
             self.assertEqual(queue.approve(self.pol, "early")["unblocked"], ["refs/heads/early"])
             got = queue.step(self.pol)
         self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"], len(self.wakes)), (["early"], "early", woken + 1))
+        (self.root / "wt-open").mkdir()
+        self.run_("open", worktree=str(self.root / "wt-open"), text="do open")
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-open"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/open {H2} refs/heads/open {H1}\n"),
+                      cwd=str(self.root / "wt-open"), staging_ok=lambda: False, out=io.StringIO())
+        with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: 50), \
+                patch.object(queue, "pr_view", side_effect=queue.Refused("cannot read PR 50: gh down")):
+            got = queue.release(self.pol, "open")
+        self.assertEqual((got["state"], got["why"], "refused" in self.file()["waiting"]["open"]), ("waiting", "cannot read PR 50: gh down", False))
+        self.pr_open(50)
         woken = len(self.wakes)
         for x, status in (("late", "webhook sent (200)"), ("late-fail", "webhook failed: TimeoutError")):
             (self.root / f"wt-{x}").mkdir()

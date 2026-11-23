@@ -1305,7 +1305,8 @@ def outcome(pol, q, key, merge=False, died=False):
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        note()
+        if not it["pr"]:
+            note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
     stale = bool(live) and live["state"] != "OPEN" and bool(it["worktree"] or it["thread"]) and pushed_refs(pol, it) == []
     if not live or stale:
