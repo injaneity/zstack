@@ -1215,7 +1215,7 @@ class Release(Case):
                                                    ("blocked", "lookup: gh down", None)])
         got = self.file()
         self.assertEqual((sorted(got["waiting"]), sorted(got["tasks"]), got["done"]), (["died", "held", "lookup", "marked"], ["pushed"], []))
-        self.assertEqual(got["waiting"]["held"]["refused"], {"refs": ["refs/heads/held"], "worktree": str(wt), "why": why})
+        self.assertEqual(got["waiting"]["held"]["refused"], {"refs": ["refs/heads/held"], "worktree": str(wt), "why": why, "woke": False})
         log = [x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]
         self.assertEqual([x.split(" ", 3)[1:3] for x in log], [["blocked", "held"], ["blocked", "died"], ["blocked", "marked"]])
         self.assertIn(f"refs=refs/heads/held worktree={wt} ", log[0])
@@ -1248,6 +1248,20 @@ class Release(Case):
         with self.trees():
             self.assertEqual(queue.release(self.pol, "bare")["state"], "waiting")
         self.assertEqual(len(self.wakes), woken + 1)
+        (self.root / "wt-late").mkdir()
+        self.run_("late", text="do late")
+        queue.locked(self.pol, lambda q: (q["running"]["late"].update(worktree=None), True))
+        with patch.dict(os.environ), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+            os.environ.pop(queue.THREAD_VAR, None)
+            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/late {H1} refs/heads/late {'0' * 40}\n"),
+                      cwd=str(self.root / "wt-late"), staging_ok=lambda: False, out=io.StringIO())
+        self.assertEqual(self.wakes[-1][0], "blocked")
+        late = {"thread": {"status": "completed", "worktreePath": str(self.root / "wt-late")}}
+        with self.trees(), patch.object(queue, "t3", lambda pol, *a, stdin=None: late):
+            got = queue.release(self.pol, "late")
+        self.assertEqual((got["state"], got["wake"], len(self.wakes)), ("waiting", None, woken + 2))
+        self.assertTrue(self.file()["waiting"]["late"]["refused"]["woke"])
         for x in ("unseen", "unseen-marked"):
             (self.root / f"wt-{x}").mkdir()
             self.run_(x, text=f"do {x}")
@@ -1276,6 +1290,7 @@ class Release(Case):
         git("worktree", "add", "-q", "--detach", str(wt), cwd=clone)
         git("commit", "-q", "--allow-empty", "-m", "two", cwd=wt)
         self.pol["host"]["clone"] = str(clone)
+        self.forge.prs[30] = {"head": H2, "branch": "det", "state": "MERGED"}
         self.run_("det", worktree=str(wt))
         head = git("rev-parse", "HEAD", cwd=wt)
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-det"}), patch.object(queue, "lint", lambda head, cwd=None: []), \

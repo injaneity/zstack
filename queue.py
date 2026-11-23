@@ -989,12 +989,12 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
-def log_push(pol, url, ref, head, cwd=None, refused=False):
+def log_push(pol, url, ref, head, cwd=None, refused=False, woke=False):
     top = cwd or os.getcwd()
     os.makedirs(root(pol), exist_ok=True)
     with open(os.path.join(root(pol), "pushes.jsonl"), "a") as f:
         f.write(json.dumps({"worktree": os.path.realpath(top), "thread": os.environ.get(THREAD_VAR), "url": url, "ref": ref, "head": head,
-                            "at": now(ms=True), **({"refused": True} if refused else {})}) + "\n")
+                            "at": now(ms=True), **({"refused": True, "woke": woke} if refused else {})}) + "\n")
 
 
 def pushes(pol, it, refused=False):
@@ -1038,10 +1038,12 @@ def branch_pr(pol, it):
         return None
     rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")
     name = name.strip()
-    refs = sorted({r["ref"] for r in (pushes(pol, it) or []) + (pushes(pol, it, refused=True) or [])}) if rc or not name else []
-    if refs:
-        return head_pr(pol, refs)
     if rc or not name:
+        refs = pushed_refs(pol, it)
+        if refs:
+            return head_pr(pol, refs)
+        if pushes(pol, it, refused=True):
+            return None
         raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
     for state in ("open", "all"):
         rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", state, "--limit", "1", "--json", "number")
@@ -1296,10 +1298,10 @@ def outcome(pol, q, key, merge=False, died=False):
         why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
                f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
                f"owner runs `queue.py approve {key}`")
-        it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why}
+        it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why, "woke": any(r.get("woke") for r in stopped)}
         row = f"{now()} blocked {key} refs={','.join(stopped_at)} worktree={it['worktree']} {why}"
         q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
-        if not ran:
+        if not ran and not it["refused"]["woke"]:
             wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
     if not live and it.get("refused"):
         return wait(it["refused"]["why"])
@@ -1351,7 +1353,9 @@ def release(pol, ident=None, hook=False, died=False):
             return Unfinished(held_back), False
         it = q[was][key]
         state, why = outcome(pol, q, key, died=died)
-        said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
+        quiet = state == "waiting" and (q["waiting"][key].get("refused") or {}).get("woke")
+        kind = "done" if state == "done" else "blocked"
+        said = None if state == was or quiet else "wake: " + wake(pol, kind, f"{key}: {why}", it["pr"], it["thread"])
         return {"released": key, "state": state, "why": why, "wake": said}, True
     out = locked(pol, go)
     if isinstance(out, Unfinished):
@@ -1591,8 +1595,8 @@ class Patent:
                           f"repo {self.staging}, not to {url}. Open or update its PR there: gh pr create -R {self.staging} "
                           f"--head {branch}. Never push it to {self.public}.\n")
                 continue
-            log_push(self.pol, url, remote_ref, head, cwd, refused=True)
             queued = self.queued(cwd)
+            log_push(self.pol, url, remote_ref, head, cwd, refused=True, woke=not queued)
             woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits, queued) else \
                 f"{owner} is woken when your turn ends" if queued else f"{owner} was woken earlier, or the wake failed (events.log)"
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
