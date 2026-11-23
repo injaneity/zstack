@@ -1299,6 +1299,16 @@ class Release(Case):
                 queue.step(self.pol)
         self.assertEqual((self.file()["waiting"]["found"]["pr"], "refused" in self.file()["waiting"]["found"]), (50, False))
         self.assertNotIn("unblocked", queue.approve(self.pol, "found"))
+        (self.root / "wt-shut").mkdir()
+        self.run_("shut", worktree=str(self.root / "wt-shut"), text="do shut")
+        self.forge.prs[36] = {"head": H2, "branch": "shut", "state": "CLOSED"}
+        queue.locked(self.pol, lambda q: (q["running"]["shut"].update(pr=36), True))
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-shut"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/shut {H1} refs/heads/shut {H2}\n"),
+                      cwd=str(self.root / "wt-shut"), staging_ok=lambda: False, out=io.StringIO())
+        with self.trees():
+            self.assertEqual(queue.release(self.pol, "shut")["state"], "done")
         woken = len(self.wakes)
         for x, status in (("late", "webhook sent (200)"), ("late-fail", "webhook failed: TimeoutError")):
             (self.root / f"wt-{x}").mkdir()

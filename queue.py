@@ -1253,6 +1253,7 @@ def complete(pol, ident):
 def outcome(pol, q, key, merge=False, died=False):
     ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
+    tracked = it["pr"]
     died = died or it.pop("died", False)
     back = died or not it.get("complete")
     ended_as = "its thread died" if died else "its thread ended, not marked complete,"
@@ -1313,7 +1314,7 @@ def outcome(pol, q, key, merge=False, died=False):
         if not it["pr"]:
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
-    rows = pushes(pol, it) if live and live["state"] != "OPEN" and (it["worktree"] or it["thread"]) else None
+    rows = pushes(pol, it) if live and live["state"] != "OPEN" and not tracked and (it["worktree"] or it["thread"]) else None
     before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
     stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})
     if not live or stale:
