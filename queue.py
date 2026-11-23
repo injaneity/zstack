@@ -1290,7 +1290,9 @@ def outcome(pol, q, key, merge=False, died=False):
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
         return wait(str(e))
-    fresh = "refused" not in it and not live and it.get("logged") and (it["worktree"] or it["thread"])
+    known = it["worktree"] or it["thread"]
+    stale = bool(live) and live["state"] != "OPEN" and known and not pushed_refs(pol, it)
+    fresh = "refused" not in it and (not live or stale) and it.get("logged") and known
     stopped = (pushes(pol, it, refused=True) or []) if fresh and hooked(pol) else []
     stopped_at = sorted({r["ref"] for r in stopped})
     if stopped_at:
@@ -1303,6 +1305,8 @@ def outcome(pol, q, key, merge=False, died=False):
         q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
         if not ran and not it["refused"]["woke"]:
             wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
+    if stale and "refused" in it:
+        live, it["pr"], refs = None, None, pushed_refs(pol, it)
     if not live and it.get("refused"):
         return wait(it["refused"]["why"])
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
@@ -1469,6 +1473,9 @@ def unmatched(lines):
     return out
 
 
+SENT = ("webhook sent", "not sent: dry run")
+
+
 class Patent:
     def __init__(self, pol):
         self.pol, pt = pol, pol.get("patent") or {"held_words": [], "skip_lockfiles": ["-"], "private_repo": ""}
@@ -1554,11 +1561,14 @@ class Patent:
         except (TypeError, ValueError, KeyError, AttributeError):
             return False
 
+    def sent_before(self, branch, head):
+        mark, log = f" patent-held {self.public.split('/')[1]}:{branch} at {head} ", os.path.join(root(self.pol), "events.log")
+        return any(mark in line and line.split(mark, 1)[1].startswith(SENT) for line in (read_text(log) or "").splitlines())
+
     def wake_hold(self, branch, head, hits, queued=False):
         ident, log = f"{self.public.split('/')[1]}:{branch}", os.path.join(root(self.pol), "events.log")
         mark = f" patent-held {ident} at {head} "
-        sent = ("webhook sent", "not sent: dry run")
-        if any(mark in line and line.split(mark, 1)[1].startswith(sent) for line in (read_text(log) or "").splitlines()):
+        if self.sent_before(branch, head):
             return False
         me, owner = self.pol["people"]["me"], self.pol["people"]["owner"]
         reason = (f"held for the private repo: the diff touches {self.words} ({'; '.join(hits)[:200]}), "
@@ -1568,7 +1578,7 @@ class Patent:
         os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "a") as f:
             f.write(f"{now()}{mark}{status}: {reason}\n".replace("\r", " "))
-        return status.startswith(sent)
+        return status.startswith(SENT)
 
     def main(self, argv, stdin, cwd=None, staging_ok=None, out=sys.stderr):
         url, owner, refuse, pushed = argv[1] if len(argv) > 1 else "", self.pol["people"]["owner"], 0, []
@@ -1595,10 +1605,11 @@ class Patent:
                           f"repo {self.staging}, not to {url}. Open or update its PR there: gh pr create -R {self.staging} "
                           f"--head {branch}. Never push it to {self.public}.\n")
                 continue
-            queued = self.queued(cwd)
-            log_push(self.pol, url, remote_ref, head, cwd, refused=True, woke=not queued)
-            woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits, queued) else \
-                f"{owner} is woken when your turn ends" if queued else f"{owner} was woken earlier, or the wake failed (events.log)"
+            queued, before = self.queued(cwd), self.sent_before(branch, head)
+            sent = self.wake_hold(branch, head, hits, queued)
+            log_push(self.pol, url, remote_ref, head, cwd, refused=True, woke=before or sent)
+            woke = f"{owner} has been woken" if sent else f"{owner} was woken earlier" if before else \
+                f"{owner} is woken when your turn ends" if queued else f"the wake to {owner} failed (events.log)"
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
                       f"{self.public}. It stays local, and {woke}. Do not retry the push, push "
                       f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")

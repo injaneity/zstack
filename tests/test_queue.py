@@ -1248,20 +1248,25 @@ class Release(Case):
         with self.trees():
             self.assertEqual(queue.release(self.pol, "bare")["state"], "waiting")
         self.assertEqual(len(self.wakes), woken + 1)
-        (self.root / "wt-late").mkdir()
-        self.run_("late", text="do late")
-        queue.locked(self.pol, lambda q: (q["running"]["late"].update(worktree=None), True))
-        with patch.dict(os.environ), patch.object(queue, "lint", lambda head, cwd=None: []), \
-                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
-            os.environ.pop(queue.THREAD_VAR, None)
-            hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/late {H1} refs/heads/late {'0' * 40}\n"),
-                      cwd=str(self.root / "wt-late"), staging_ok=lambda: False, out=io.StringIO())
-        self.assertEqual(self.wakes[-1][0], "blocked")
-        late = {"thread": {"status": "completed", "worktreePath": str(self.root / "wt-late")}}
-        with self.trees(), patch.object(queue, "t3", lambda pol, *a, stdin=None: late):
-            got = queue.release(self.pol, "late")
-        self.assertEqual((got["state"], got["wake"], len(self.wakes)), ("waiting", None, woken + 2))
-        self.assertTrue(self.file()["waiting"]["late"]["refused"]["woke"])
+        woken = len(self.wakes)
+        for x, status in (("late", "webhook sent (200)"), ("late-fail", "webhook failed: TimeoutError")):
+            (self.root / f"wt-{x}").mkdir()
+            self.run_(x, text=f"do {x}")
+            queue.locked(self.pol, lambda q, x=x: (q["running"][x].update(worktree=None), True))
+            with patch.dict(os.environ), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                    patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]), \
+                    patch.object(queue, "wake", lambda pol, kind, said, pr=None, thread=None, status=status: self.wake(pol, kind, said) and status):
+                os.environ.pop(queue.THREAD_VAR, None)
+                hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/{x} {H1} refs/heads/{x} {'0' * 40}\n"),
+                          cwd=str(self.root / f"wt-{x}"), staging_ok=lambda: False, out=io.StringIO())
+            woken += 1
+            self.assertEqual((len(self.wakes), self.wakes[-1][0]), (woken, "blocked"))
+            late = {"thread": {"status": "completed", "worktreePath": str(self.root / f"wt-{x}")}}
+            with self.trees(), patch.object(queue, "t3", lambda pol, *a, stdin=None, late=late: late):
+                got = queue.release(self.pol, x)
+            woken += x == "late-fail"
+            self.assertEqual((got["state"], bool(got["wake"]), len(self.wakes)), ("waiting", x == "late-fail", woken))
+            self.assertEqual(self.file()["waiting"][x]["refused"]["woke"], x == "late")
         for x in ("unseen", "unseen-marked"):
             (self.root / f"wt-{x}").mkdir()
             self.run_(x, text=f"do {x}")
@@ -1278,7 +1283,7 @@ class Release(Case):
         self.assertEqual([self.file()["waiting"][x]["refused"]["worktree"] for x in ("unseen", "unseen-marked")],
                          [os.path.realpath(self.root / f"wt-{x}") for x in ("unseen", "unseen-marked")])
 
-    def test_a_refused_push_from_a_detached_worktree_waits_and_runs_again_once_approved(self):
+    def test_a_refused_push_from_a_detached_or_reused_branch_waits_and_runs_again_once_approved(self):
         def git(*a, cwd):
             return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True,
                                   text=True).stdout.strip()
@@ -1288,23 +1293,29 @@ class Release(Case):
         git("commit", "-q", "--allow-empty", "-m", "one", cwd=clone)
         git("push", "-q", "origin", "HEAD", cwd=clone)
         git("worktree", "add", "-q", "--detach", str(wt), cwd=clone)
-        git("commit", "-q", "--allow-empty", "-m", "two", cwd=wt)
+        git("worktree", "add", "-q", "-b", "att", str(self.root / "wt-att"), cwd=clone)
         self.pol["host"]["clone"] = str(clone)
         self.forge.prs[30] = {"head": H2, "branch": "det", "state": "MERGED"}
-        self.run_("det", worktree=str(wt))
-        head = git("rev-parse", "HEAD", cwd=wt)
-        with patch.dict(os.environ, {queue.THREAD_VAR: "t-det"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
-                patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
-            queue.Patent(self.pol).main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"HEAD {head} refs/heads/det {'0' * 40}\n"),
-                                        cwd=str(wt), staging_ok=lambda: False, out=io.StringIO())
+        self.forge.prs[31] = {"head": H2, "branch": "att", "state": "MERGED"}
+        for x, tree in (("det", wt), ("att", self.root / "wt-att")):
+            git("commit", "-q", "--allow-empty", "-m", "two", cwd=tree)
+            self.run_(x, worktree=str(tree))
+            head = git("rev-parse", "HEAD", cwd=tree)
+            with patch.dict(os.environ, {queue.THREAD_VAR: f"t-{x}"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                    patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+                queue.Patent(self.pol).main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"HEAD {head} refs/heads/{x} {'0' * 40}\n"),
+                                            cwd=str(tree), staging_ok=lambda: False, out=io.StringIO())
         with patch.object(queue, "hooked", lambda pol: True):
-            got = queue.release(self.pol, "det")
-            self.assertEqual((got["state"], self.file()["waiting"]["det"]["refused"]["refs"]), ("waiting", ["refs/heads/det"]))
-            self.assertEqual(queue.step(self.pol)["kept"], [{"id": "det", "why": got["why"]}])
-            queue.approve(self.pol, "det")
+            got = {x: queue.release(self.pol, x) for x in ("det", "att")}
+            self.assertEqual({x: (v["state"], self.file()["waiting"][x]["refused"]["refs"], self.file()["waiting"][x]["pr"]) for x, v in got.items()},
+                             {x: ("waiting", [f"refs/heads/{x}"], None) for x in ("det", "att")})
+            self.assertEqual(queue.step(self.pol)["kept"], [{"id": x, "why": got[x]["why"]} for x in ("att", "det")])
+            for x in ("det", "att"):
+                queue.approve(self.pol, x)
             got = queue.step(self.pol)
-        self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["det"], "det"))
-        self.assertEqual(len(self.wakes), 1)
+        self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["att", "det"], "att"))
+        self.assertEqual(sorted(self.file()["tasks"]), ["det"])
+        self.assertEqual(len(self.wakes), 2)
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
