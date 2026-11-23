@@ -1038,6 +1038,9 @@ def branch_pr(pol, it):
         return None
     rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")
     name = name.strip()
+    refs = sorted({r["ref"] for r in (pushes(pol, it) or []) + (pushes(pol, it, refused=True) or [])}) if rc or not name else []
+    if refs:
+        return head_pr(pol, refs)
     if rc or not name:
         raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
     for state in ("open", "all"):
@@ -1538,10 +1541,12 @@ class Patent:
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
         return rc == 0 and out.strip() == "true"
 
-    def queued(self):
+    def queued(self, cwd=None):
         thread, rows = os.environ.get(THREAD_VAR), read_text(os.path.join(root(self.pol), "queue.json"))
+        top = os.path.realpath(cwd or os.getcwd())
         try:
-            return bool(thread) and any(v["thread"] == thread for v in json.loads(rows)["running"].values())
+            return any(thread and v["thread"] == thread or v["worktree"] and os.path.realpath(os.path.expanduser(v["worktree"])) == top
+                       for v in json.loads(rows)["running"].values())
         except (TypeError, ValueError, KeyError, AttributeError):
             return False
 
@@ -1587,7 +1592,7 @@ class Patent:
                           f"--head {branch}. Never push it to {self.public}.\n")
                 continue
             log_push(self.pol, url, remote_ref, head, cwd, refused=True)
-            queued = self.queued()
+            queued = self.queued(cwd)
             woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits, queued) else \
                 f"{owner} is woken when your turn ends" if queued else f"{owner} was woken earlier, or the wake failed (events.log)"
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
