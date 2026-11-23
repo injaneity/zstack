@@ -27,7 +27,8 @@ USAGE = (
     "                                   a task from the orchestrator; its text on stdin\n"
     "  queue.py approve <id>            the owner preapproves an item already a task, running or waiting: its thread may\n"
     "                                   merge a passed head, and a pass merges its waiting PR once that head may merge, or\n"
-    "                                   puts it in the base branch's merge queue when it has one\n"
+    "                                   puts it in the base branch's merge queue when it has one. An item waiting because the\n"
+    "                                   pre-push hook refused its push runs again\n"
     "  queue.py verified <id> <pr> <head> auto|review|fail\n"
     "                                   the verifier's verdict on that head: its thread may merge it, a person must\n"
     "                                   review it, or its thread fixes what was found\n"
@@ -38,7 +39,8 @@ USAGE = (
     "                                   one is forgotten. With no id, the item of the thread that runs it. With --hook,\n"
     "                                   exit 3 and free nothing while its open PR's head has no verdict. With --died,\n"
     "                                   the turn failed, so an item with no PR goes back to tasks to run again, as does\n"
-    "                                   one whose turn ended with no PR and that was never marked complete\n"
+    "                                   one whose turn ended with no PR and that was never marked complete. An item whose push\n"
+    "                                   the pre-push hook refused, with no allowed remote pushable, waits for `approve` instead\n"
     "  queue.py complete <id>           the item's own thread made its deliverable, so its release with no PR clears it\n"
     "                                   as done instead of sending it back to tasks\n"
     "  queue.py list                    what this machine holds: running, waiting, tasks, verdicts, done\n"
@@ -695,9 +697,12 @@ def approve(pol, ident):
             raise Refused(f"{ident} is not a task, running or waiting, so there is nothing to approve")
         if any(q[p][ident].get("thread") and os.environ.get(THREAD_VAR) == q[p][ident]["thread"] for p in parts):
             raise Refused(f"this is {ident}'s own thread: only the owner preapproves an item")
+        unblocked = next((q[p][ident]["refused"]["refs"] for p in parts if q[p][ident].get("refused")), None)
         for p in parts:
             q[p][ident]["preapproved"] = True
-        return {"id": ident, "preapproved": parts[0]}, True
+            if q[p][ident].get("refused"):
+                q[p][ident].update(refused=None, complete=False, died=False)
+        return {"id": ident, "preapproved": parts[0], **({"unblocked": unblocked} if unblocked else {})}, True
     return locked(pol, go)
 
 
@@ -713,7 +718,7 @@ Follow onigiri-mode and the invariants, which are already in your context. Nothi
 When your PR is open and you believe it is done, have the verifier check its head, and wait for its answer inside this turn: do not end your turn while it runs. Put this line in its brief with the PR number and the full head sha filled in: `{env} {queue} verified {id} <pr number> <head sha> auto`, `review` or `fail`. The verifier runs it as its last step, with those variables, since its session may not have yours; you never do.
 The queue answers that command with what it recorded and one line under `say`, and the verifier gives you both. That line decides what you do, whatever else the verifier wrote: fix the findings, push and have the new head checked; or merge with the command it names, waiting first for the checks it names; or do not merge, for the reason it gives. The guard lets the merge through only when the queue would; when it refuses, read its reason, and do not try another way. When you think the change needs a person whatever the queue says, do not merge: say why in your report.
 When your turn ends, the queue frees your slot and tells the orchestrator what happened, so finish everything before you stop. A turn that tries to end while your open PR's head has no verdict is sent back to get one.
-A turn that ends with no PR sends this item back to tasks to run again, unless you mark it complete first with `{env} {queue} complete {id}`. Run that only once the deliverable exists, such as the answer in your final report or the file the task asks for, never while work it waits on still runs.
+A turn that ends with no PR sends this item back to tasks to run again, unless the pre-push hook refused your push, which leaves it waiting for the owner, or you mark it complete first with `{env} {queue} complete {id}`. Run that only once the deliverable exists, such as the answer in your final report or the file the task asks for, never while work it waits on still runs.
 
 End with a final report: the PR URLs, then
 follow-ups:
@@ -845,7 +850,7 @@ def run_pass(pol):
 
 
 def pr_view(pol, pr):
-    fields = "state,headRefOid,headRefName,baseRefName,isCrossRepository,labels,number,isDraft,mergeable,statusCheckRollup"
+    fields = "state,headRefOid,headRefName,baseRefName,isCrossRepository,labels,number,isDraft,mergeable,statusCheckRollup,closedAt"
     rc, out, err = gh("pr", "view", str(pr), "-R", pol["merge"]["repo"], "--json", fields)
     if rc:
         raise Refused(f"cannot read PR {pr}: {err}")
@@ -984,23 +989,29 @@ def tidy(pol, it, whole):
     return not (dirty[0] or ahead[0] or dirty[1].strip() or ahead[1].strip()) and not git("-C", clone, "worktree", "remove", path)[0]
 
 
-def log_push(pol, url, ref, head, cwd=None):
+def log_push(pol, url, ref, head, cwd=None, refused=False, woke=False):
     top = cwd or os.getcwd()
     os.makedirs(root(pol), exist_ok=True)
     with open(os.path.join(root(pol), "pushes.jsonl"), "a") as f:
         f.write(json.dumps({"worktree": os.path.realpath(top), "thread": os.environ.get(THREAD_VAR), "url": url, "ref": ref, "head": head,
-                            "at": now(ms=True)}) + "\n")
+                            "at": now(ms=True), **({"refused": True, "woke": woke} if refused else {})}) + "\n")
 
 
-def pushed_refs(pol, it):
-    path, log = os.path.realpath(os.path.expanduser(it["worktree"])), os.path.join(root(pol), "pushes.jsonl")
+def pushes(pol, it, refused=False):
+    path = os.path.realpath(os.path.expanduser(it["worktree"])) if it["worktree"] else None
+    log = os.path.join(root(pol), "pushes.jsonl")
     text = read_text(log) if os.path.lexists(log) else ""
     try:
         rows = [json.loads(x) for x in text.splitlines()]
-        return sorted({r["ref"] for r in rows if (r["worktree"] == path or it.get("thread") and r.get("thread") == it["thread"])
-                       and r["at"] >= it["at"]})
+        return [r for r in rows if (path and r["worktree"] == path or it.get("thread") and r.get("thread") == it["thread"])
+                and r["at"] >= it["at"] and r.get("refused", False) == refused]
     except (AttributeError, ValueError, KeyError, TypeError):
         return None
+
+
+def pushed_refs(pol, it):
+    rows = pushes(pol, it)
+    return None if rows is None else sorted({r["ref"] for r in rows})
 
 
 def hooked(pol):
@@ -1009,9 +1020,9 @@ def hooked(pol):
     return not rc and os.path.realpath(os.path.join(clone, hook.strip())) == os.path.realpath(os.path.join(PKG, "hooks", "pre-push"))
 
 
-def head_pr(pol, refs):
+def head_pr(pol, refs, state="all"):
     for ref in refs:
-        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", ref.removeprefix("refs/heads/"), "--state", "all",
+        rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", ref.removeprefix("refs/heads/"), "--state", state,
                           "--limit", "1", "--json", "number")
         if rc:
             raise Refused(f"cannot look up the PR of {ref}: {err}")
@@ -1027,7 +1038,13 @@ def branch_pr(pol, it):
         return None
     rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")
     name = name.strip()
+    stopped = sorted({r["ref"] for r in pushes(pol, it, refused=True) or []})
     if rc or not name:
+        refs = pushed_refs(pol, it)
+        if refs:
+            return head_pr(pol, refs)
+        if stopped:
+            return head_pr(pol, stopped, "open")
         raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
     for state in ("open", "all"):
         rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", state, "--limit", "1", "--json", "number")
@@ -1036,6 +1053,8 @@ def branch_pr(pol, it):
         found = json.loads(out) if out.strip() else []
         if found:
             return found[0]["number"]
+        if state == "open" and stopped and (found := head_pr(pol, stopped, "open")):
+            return found
     return None
 
 
@@ -1232,7 +1251,9 @@ def complete(pol, ident):
 
 
 def outcome(pol, q, key, merge=False, died=False):
+    ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
+    tracked = it["pr"]
     died = died or it.pop("died", False)
     back = died or not it.get("complete")
     ended_as = "its thread died" if died else "its thread ended, not marked complete,"
@@ -1240,6 +1261,22 @@ def outcome(pol, q, key, merge=False, died=False):
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
         return "waiting", why
+
+    def note():
+        known = "refused" not in it and it.get("logged") and (it["worktree"] or it["thread"])
+        stopped = (pushes(pol, it, refused=True) or []) if known and hooked(pol) else []
+        stopped_at = sorted({r["ref"] for r in stopped})
+        if not stopped_at:
+            return
+        it["worktree"] = it["worktree"] or stopped[-1]["worktree"]
+        why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
+               f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
+               f"owner runs `queue.py approve {key}`")
+        it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why, "woke": any(r.get("woke") for r in stopped)}
+        row = f"{now()} blocked {key} refs={','.join(stopped_at)} worktree={it['worktree']} {why}"
+        q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
+        if not ran and not it["refused"]["woke"]:
+            wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
     if back and not it["worktree"] and it["thread"]:
         seen = t3(pol, "show", it["thread"], "--messages", "0")
         it["worktree"] = seen["thread"]["worktreePath"] if isinstance(seen, dict) else None
@@ -1250,6 +1287,8 @@ def outcome(pol, q, key, merge=False, died=False):
         if found:
             move(it, found)
             live = pr_view(pol, found)
+        if live and live["state"] == "OPEN":
+            it.pop("refused", None)
         was = (it.get("dropped") or {}).get("head")
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
@@ -1272,7 +1311,18 @@ def outcome(pol, q, key, merge=False, died=False):
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        return wait(str(e))
+        if not it["pr"]:
+            note()
+        return wait(it["refused"]["why"] if it.get("refused") else str(e))
+    rows = pushes(pol, it) if live and live["state"] != "OPEN" and not tracked and (it["worktree"] or it["thread"]) else None
+    before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
+    stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})
+    if not live or stale:
+        note()
+    if stale and "refused" in it:
+        live, it["pr"], refs = None, None, pushed_refs(pol, it)
+    if not live and it.get("refused"):
+        return wait(it["refused"]["why"])
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
     if died and not live and refs is None:
         why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
@@ -1316,12 +1366,14 @@ def release(pol, ident=None, hook=False, died=False):
             if ident:
                 raise Refused(f"{ident} is not running or waiting on its PR")
             return {"released": None}, False
-        held_back = unverified(pol, q, q["running"][key]) if hook and was == "running" else None
+        held_back = unverified(pol, q, dict(q["running"][key])) if hook and was == "running" else None
         if held_back:
             return Unfinished(held_back), False
         it = q[was][key]
         state, why = outcome(pol, q, key, died=died)
-        said = None if state == was else "wake: " + wake(pol, "done" if state == "done" else "blocked", f"{key}: {why}", it["pr"], it["thread"])
+        quiet = state == "waiting" and (q["waiting"][key].get("refused") or {}).get("woke")
+        kind = "done" if state == "done" else "blocked"
+        said = None if state == was or quiet else "wake: " + wake(pol, kind, f"{key}: {why}", it["pr"], it["thread"])
         return {"released": key, "state": state, "why": why, "wake": said}, True
     out = locked(pol, go)
     if isinstance(out, Unfinished):
@@ -1435,6 +1487,9 @@ def unmatched(lines):
     return out
 
 
+SENT = ("webhook sent", "not sent: dry run")
+
+
 class Patent:
     def __init__(self, pol):
         self.pol, pt = pol, pol.get("patent") or {"held_words": [], "skip_lockfiles": ["-"], "private_repo": ""}
@@ -1511,21 +1566,33 @@ class Patent:
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
         return rc == 0 and out.strip() == "true"
 
-    def wake_hold(self, branch, head, hits):
+    def queued(self, cwd=None):
+        thread, rows = os.environ.get(THREAD_VAR), read_text(os.path.join(root(self.pol), "queue.json"))
+        top = os.path.realpath(cwd or os.getcwd())
+        try:
+            return any(thread and v["thread"] == thread or v["worktree"] and os.path.realpath(os.path.expanduser(v["worktree"])) == top
+                       for v in json.loads(rows)["running"].values())
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return False
+
+    def sent_before(self, branch, head):
+        mark, log = f" patent-held {self.public.split('/')[1]}:{branch} at {head} ", os.path.join(root(self.pol), "events.log")
+        return any(mark in line and line.split(mark, 1)[1].startswith(SENT) for line in (read_text(log) or "").splitlines())
+
+    def wake_hold(self, branch, head, hits, queued=False):
         ident, log = f"{self.public.split('/')[1]}:{branch}", os.path.join(root(self.pol), "events.log")
         mark = f" patent-held {ident} at {head} "
-        sent = ("webhook sent", "not sent: dry run")
-        if any(mark in line and line.split(mark, 1)[1].startswith(sent) for line in (read_text(log) or "").splitlines()):
+        if self.sent_before(branch, head):
             return False
         me, owner = self.pol["people"]["me"], self.pol["people"]["owner"]
         reason = (f"held for the private repo: the diff touches {self.words} ({'; '.join(hits)[:200]}), "
                   f"so it was not pushed to public {self.public}. {self.staging} is not pushable as {me}, so the branch "
                   f"stays local. {owner}: grant push on {self.staging} or say where it goes.")
-        status = wake(self.pol, "blocked", f"{ident} {reason}")
+        status = "not sent: the queue wakes when the turn ends" if queued else wake(self.pol, "blocked", f"{ident} {reason}")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "a") as f:
             f.write(f"{now()}{mark}{status}: {reason}\n".replace("\r", " "))
-        return status.startswith(sent)
+        return status.startswith(SENT)
 
     def main(self, argv, stdin, cwd=None, staging_ok=None, out=sys.stderr):
         url, owner, refuse, pushed = argv[1] if len(argv) > 1 else "", self.pol["people"]["owner"], 0, []
@@ -1552,7 +1619,11 @@ class Patent:
                           f"repo {self.staging}, not to {url}. Open or update its PR there: gh pr create -R {self.staging} "
                           f"--head {branch}. Never push it to {self.public}.\n")
                 continue
-            woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits) else f"{owner} was woken earlier, or the wake failed (events.log)"
+            queued, before = self.queued(cwd), self.sent_before(branch, head)
+            sent = self.wake_hold(branch, head, hits, queued)
+            log_push(self.pol, url, remote_ref, head, cwd, refused=True, woke=before or sent)
+            woke = f"{owner} has been woken" if sent else f"{owner} was woken earlier" if before else \
+                f"{owner} is woken when your turn ends" if queued else f"the wake to {owner} failed (events.log)"
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
                       f"{self.public}. It stays local, and {woke}. Do not retry the push, push "
                       f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")

@@ -191,7 +191,9 @@ class PatentPush(unittest.TestCase):
         r = subprocess.run(["git", "push", "origin", "onigiri/ok"], cwd=work, capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
         pushes = [json.loads(x) for x in Path(f"{tmp}/zstack/acme/app/pushes.jsonl").read_text().splitlines()]
-        self.assertEqual([(x["worktree"], x["ref"]) for x in pushes], [(os.path.realpath(work), "refs/heads/onigiri/ok")])
+        self.assertEqual([(x["worktree"], x["ref"], x.get("refused")) for x in pushes],
+                         [(os.path.realpath(f"{tmp}/wt"), f"refs/heads/onigiri/{name}", True),
+                          (os.path.realpath(work), "refs/heads/onigiri/ok", None)])
 
     def commits(self, tmp, branch, steps, base=None):
         g, pub, work, root = self.repo(tmp, base)
