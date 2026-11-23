@@ -1313,7 +1313,8 @@ def outcome(pol, q, key, merge=False, died=False):
         if not it["pr"]:
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
-    stale = bool(live) and live["state"] != "OPEN" and bool(it["worktree"] or it["thread"]) and pushed_refs(pol, it) == []
+    rows = pushes(pol, it) if live and live["state"] != "OPEN" and (it["worktree"] or it["thread"]) else None
+    stale = rows is not None and live["headRefOid"] not in {r["head"] for r in rows}
     if not live or stale:
         note()
     if stale and "refused" in it:
