@@ -697,10 +697,11 @@ def approve(pol, ident):
             raise Refused(f"{ident} is not a task, running or waiting, so there is nothing to approve")
         if any(q[p][ident].get("thread") and os.environ.get(THREAD_VAR) == q[p][ident]["thread"] for p in parts):
             raise Refused(f"this is {ident}'s own thread: only the owner preapproves an item")
-        refused = [q[p][ident].pop("refused", None) for p in parts]
+        unblocked = next((q[p][ident]["refused"]["refs"] for p in parts if q[p][ident].get("refused")), None)
         for p in parts:
             q[p][ident]["preapproved"] = True
-        unblocked = next((x["refs"] for x in refused if x), None)
+            if q[p][ident].get("refused"):
+                q[p][ident].update(refused=None, complete=False)
         return {"id": ident, "preapproved": parts[0], **({"unblocked": unblocked} if unblocked else {})}, True
     return locked(pol, go)
 
@@ -1236,7 +1237,6 @@ def complete(pol, ident):
 
 
 def outcome(pol, q, key, merge=False, died=False):
-    ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     died = died or it.pop("died", False)
     back = died or not it.get("complete")
@@ -1278,7 +1278,8 @@ def outcome(pol, q, key, merge=False, died=False):
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
         return wait(str(e))
-    stopped_at = pushed_refs(pol, it, refused=True) if ran and not live and it.get("logged") and it["worktree"] and hooked(pol) else None
+    fresh = "refused" not in it and not live and it.get("logged") and it["worktree"]
+    stopped_at = pushed_refs(pol, it, refused=True) if fresh and hooked(pol) else None
     if stopped_at:
         why = (f"its thread {'died' if died else 'ended'} with no PR after the pre-push hook refused its push of {', '.join(stopped_at)}, "
                f"since no allowed remote is pushable, so it waits for the owner, its work in {it['worktree']}, and runs again once the "
