@@ -1175,6 +1175,60 @@ class Release(Case):
             got = queue.run_pass(self.pol)
         self.assertEqual([(x["released"], x["state"]) for x in got["released"]], [("ended", "done")])
 
+    def test_a_turn_whose_push_the_hook_refused_waits_for_the_owner_and_runs_again_only_once_approved(self):
+        self.pol["run"]["threads"] = 9
+        for x in ("held", "died", "marked", "pushed"):
+            (self.root / f"wt-{x}").mkdir()
+            self.run_(x, worktree=str(self.root / f"wt-{x}"), text=f"do {x}")
+        row = self.file()["running"]["held"]["task"]
+        hook = queue.Patent(self.pol)
+        for x in ("held", "died", "marked"):
+            with patch.dict(os.environ, {queue.THREAD_VAR: f"t-{x}"}), patch.object(queue, "lint", lambda head, cwd=None: []), \
+                    patch.object(queue.Patent, "diff_hits", lambda self, head, cwd=None: ["src/sealing.rs"]):
+                said = io.StringIO()
+                refused = hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/{x} {H1} refs/heads/{x} {'0' * 40}\n"),
+                                    cwd=str(self.root / f"wt-{x}"), staging_ok=lambda: False, out=said)
+            self.assertEqual((refused, "patent hold" in said.getvalue()), (1, True))
+        queue.log_push(self.pol, "origin", "refs/heads/pushed", H1, cwd=str(self.root / "wt-pushed"))
+        self.complete("marked")
+        hold_wakes = len(self.wakes)
+        with self.trees():
+            with patch.dict(os.environ, {queue.THREAD_VAR: "t-held"}):
+                held = queue.release(self.pol, hook=True)
+            died = queue.release(self.pol, "died", died=True)
+            marked = queue.release(self.pol, "marked")
+            pushed = queue.release(self.pol, "pushed")
+        wt = self.root / "wt-held"
+        why = (f"its thread ended with no PR after the pre-push hook refused its push of refs/heads/held, since no allowed remote is "
+               f"pushable, so it waits for the owner, its work in {wt}, and runs again once the owner runs `queue.py approve held`")
+        self.assertEqual((held["state"], held["why"]), ("waiting", why))
+        for x, said in ((died, "its thread died"), (marked, "its thread ended")):
+            self.assertEqual(x["state"], "waiting")
+            self.assertTrue(x["why"].startswith(f"{said} with no PR after the pre-push hook refused its push of refs/heads/"), x["why"])
+        self.assertEqual(pushed["state"], "tasks")
+        self.assertEqual(self.wakes[hold_wakes:], [("blocked", f"held: {why}", None), ("blocked", f"died: {died['why']}", None),
+                                                   ("blocked", f"marked: {marked['why']}", None), ("blocked", f"pushed: {pushed['why']}", None)])
+        got = self.file()
+        self.assertEqual((sorted(got["waiting"]), sorted(got["tasks"]), got["done"]), (["died", "held", "marked"], ["pushed"], []))
+        self.assertEqual(got["waiting"]["held"]["refused"], {"refs": ["refs/heads/held"], "worktree": str(wt), "why": why})
+        log = [x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]
+        self.assertEqual([x.split(" ", 3)[1:3] for x in log], [["blocked", "held"], ["blocked", "died"], ["blocked", "marked"]])
+        self.assertIn(f"refs=refs/heads/held worktree={wt} ", log[0])
+        for launched in (["pushed"], []):
+            with self.trees():
+                got = queue.run_pass(self.pol)
+            self.assertEqual(([x["id"] for x in got["launched"]], [x["id"] for x in got["kept"]]), (launched, ["died", "held", "marked"]))
+        self.assertEqual(len(self.wakes), hold_wakes + 4)
+        self.assertEqual(len([x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]), 3)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "t-held"}), self.assertRaisesRegex(queue.Refused, "this is held's own thread"):
+            queue.approve(self.pol, "held")
+        self.assertEqual(queue.approve(self.pol, "held"), {"id": "held", "preapproved": "waiting", "unblocked": ["refs/heads/held"]})
+        with self.trees():
+            got = queue.run_pass(self.pol)
+        self.assertEqual(([x["id"] for x in got["launched"]], [x["id"] for x in got["kept"]]), (["held"], ["died", "marked"]))
+        self.assertEqual((self.briefed[-1]["task"], self.file()["running"]["held"]["task"]), (row["task"], {**row, "preapproved": True}))
+        self.assertNotIn("refused", self.file()["running"]["held"])
+
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
         self.complete("a")
