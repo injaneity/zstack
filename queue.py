@@ -1538,7 +1538,14 @@ class Patent:
         rc, out, _ = gh("api", f"repos/{self.staging}", "--jq", ".permissions.push")
         return rc == 0 and out.strip() == "true"
 
-    def wake_hold(self, branch, head, hits):
+    def queued(self):
+        thread, rows = os.environ.get(THREAD_VAR), read_text(os.path.join(root(self.pol), "queue.json"))
+        try:
+            return bool(thread) and any(v["thread"] == thread for v in json.loads(rows)["running"].values())
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return False
+
+    def wake_hold(self, branch, head, hits, queued=False):
         ident, log = f"{self.public.split('/')[1]}:{branch}", os.path.join(root(self.pol), "events.log")
         mark = f" patent-held {ident} at {head} "
         sent = ("webhook sent", "not sent: dry run")
@@ -1548,7 +1555,7 @@ class Patent:
         reason = (f"held for the private repo: the diff touches {self.words} ({'; '.join(hits)[:200]}), "
                   f"so it was not pushed to public {self.public}. {self.staging} is not pushable as {me}, so the branch "
                   f"stays local. {owner}: grant push on {self.staging} or say where it goes.")
-        status = wake(self.pol, "blocked", f"{ident} {reason}")
+        status = "not sent: the queue wakes when the turn ends" if queued else wake(self.pol, "blocked", f"{ident} {reason}")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         with open(log, "a") as f:
             f.write(f"{now()}{mark}{status}: {reason}\n".replace("\r", " "))
@@ -1580,7 +1587,9 @@ class Patent:
                           f"--head {branch}. Never push it to {self.public}.\n")
                 continue
             log_push(self.pol, url, remote_ref, head, cwd, refused=True)
-            woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits) else f"{owner} was woken earlier, or the wake failed (events.log)"
+            queued = self.queued()
+            woke = f"{owner} has been woken" if self.wake_hold(branch, head, hits, queued) else \
+                f"{owner} is woken when your turn ends" if queued else f"{owner} was woken earlier, or the wake failed (events.log)"
             out.write(f"patent hold: {branch} touches {self.words} and must not go to public "
                       f"{self.public}. It stays local, and {woke}. Do not retry the push, push "
                       f"elsewhere or open a PR; end the run with your verdict and say it is held for the private repo.\n")

@@ -1188,10 +1188,12 @@ class Release(Case):
                 said = io.StringIO()
                 refused = hook.main(["origin", f"https://github.com/{REPO}"], io.StringIO(f"refs/heads/{x} {H1} refs/heads/{x} {'0' * 40}\n"),
                                     cwd=str(self.root / f"wt-{x}"), staging_ok=lambda: False, out=said)
-            self.assertEqual((refused, "patent hold" in said.getvalue()), (1, True))
+            self.assertEqual((refused, "is woken when your turn ends" in said.getvalue()), (1, True))
         queue.log_push(self.pol, "origin", "refs/heads/pushed", H1, cwd=str(self.root / "wt-pushed"))
         self.complete("marked")
-        hold_wakes = len(self.wakes)
+        self.assertEqual(self.wakes, [])
+        hold_wakes = 0
+        self.assertIn(" patent-held app:held at ", (self.root / "events.log").read_text())
         with self.trees():
             with patch.dict(os.environ, {queue.THREAD_VAR: "t-held"}):
                 held = queue.release(self.pol, hook=True)
