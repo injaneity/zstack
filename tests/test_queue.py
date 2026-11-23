@@ -1222,7 +1222,7 @@ class Release(Case):
                 got = queue.run_pass(self.pol)
             self.assertEqual(([x["id"] for x in got["launched"]], [x["id"] for x in got["kept"]]), (launched, ["died", "held", "lookup", "marked"]))
         self.assertEqual(self.file()["waiting"]["lookup"]["refused"]["refs"], ["refs/heads/lookup"])
-        self.assertEqual(len(self.wakes), hold_wakes + 5)
+        self.assertEqual(self.wakes[hold_wakes + 5:], [("blocked", f"lookup: {self.file()['waiting']['lookup']['refused']['why']}", None)])
         self.assertEqual(len([x for x in (self.root / "events.log").read_text().splitlines() if " blocked " in x]), 4)
         with patch.dict(os.environ, {queue.THREAD_VAR: "t-held"}), self.assertRaisesRegex(queue.Refused, "this is held's own thread"):
             queue.approve(self.pol, "held")

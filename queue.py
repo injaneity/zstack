@@ -1237,6 +1237,7 @@ def complete(pol, ident):
 
 
 def outcome(pol, q, key, merge=False, died=False):
+    ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     died = died or it.pop("died", False)
     back = died or not it.get("complete")
@@ -1287,6 +1288,8 @@ def outcome(pol, q, key, merge=False, died=False):
         it["refused"] = {"refs": stopped_at, "worktree": it["worktree"], "why": why}
         row = f"{now()} blocked {key} refs={','.join(stopped_at)} worktree={it['worktree']} {why}"
         q.setdefault("ended", []).append(row.replace("\r", " ").replace("\n", " ") + "\n")
+        if not ran:
+            wake(pol, "blocked", f"{key}: {why}", None, it["thread"])
     if not live and it.get("refused"):
         return wait(it["refused"]["why"])
     why = f"PR {it['pr']} {live['state'].lower()}" if live else "nothing to merge"
