@@ -1038,13 +1038,13 @@ def branch_pr(pol, it):
         return None
     rc, name = git("-C", path, "symbolic-ref", "--short", "-q", "HEAD")
     name = name.strip()
+    stopped = sorted({r["ref"] for r in pushes(pol, it, refused=True) or []})
     if rc or not name:
         refs = pushed_refs(pol, it)
         if refs:
             return head_pr(pol, refs)
-        stopped = pushes(pol, it, refused=True)
         if stopped:
-            return head_pr(pol, sorted({r["ref"] for r in stopped}), "open")
+            return head_pr(pol, stopped, "open")
         raise Refused(f"its worktree {path} is on no branch, so its PR cannot be looked up")
     for state in ("open", "all"):
         rc, out, err = gh("pr", "list", "-R", pol["merge"]["repo"], "--head", name, "--state", state, "--limit", "1", "--json", "number")
@@ -1053,6 +1053,8 @@ def branch_pr(pol, it):
         found = json.loads(out) if out.strip() else []
         if found:
             return found[0]["number"]
+        if state == "open" and stopped and (found := head_pr(pol, stopped, "open")):
+            return found
     return None
 
 

@@ -1349,9 +1349,11 @@ class Release(Case):
         self.forge.prs[30] = {"head": H2, "branch": "det", "state": "MERGED"}
         self.forge.prs[31] = {"head": H2, "branch": "att", "state": "MERGED"}
         self.forge.prs[32] = {"head": H2, "branch": "dopen"}
+        self.forge.prs[33] = {"head": H2, "branch": "topic"}
         self.pol["run"]["threads"] = 9
         git("worktree", "add", "-q", "--detach", str(self.root / "wt-dopen"), cwd=clone)
-        for x, tree in (("det", wt), ("att", self.root / "wt-att"), ("dopen", self.root / "wt-dopen")):
+        git("worktree", "add", "-q", "-b", "local-x", str(self.root / "wt-topic"), cwd=clone)
+        for x, tree in (("det", wt), ("att", self.root / "wt-att"), ("dopen", self.root / "wt-dopen"), ("topic", self.root / "wt-topic")):
             git("commit", "-q", "--allow-empty", "-m", "two", cwd=tree)
             self.run_(x, worktree=str(tree))
             head = git("rev-parse", "HEAD", cwd=tree)
@@ -1363,7 +1365,12 @@ class Release(Case):
             dopen = queue.release(self.pol, "dopen")
             self.assertEqual((dopen["state"], self.file()["waiting"]["dopen"]["pr"], "refused" in self.file()["waiting"]["dopen"]),
                              ("waiting", 32, False))
-            queue.locked(self.pol, lambda q: (q["waiting"].pop("dopen"), True))
+            with patch.dict(os.environ, {queue.THREAD_VAR: "t-topic"}), self.assertRaisesRegex(queue.Unfinished, "PR 33 has no verdict"):
+                queue.release(self.pol, hook=True)
+            topic = queue.release(self.pol, "topic")
+            self.assertEqual((topic["state"], self.file()["waiting"]["topic"]["pr"], "refused" in self.file()["waiting"]["topic"]),
+                             ("waiting", 33, False))
+            queue.locked(self.pol, lambda q: ([q["waiting"].pop(x) for x in ("dopen", "topic")], True))
             got = {x: queue.release(self.pol, x) for x in ("det", "att")}
             self.assertEqual({x: (v["state"], self.file()["waiting"][x]["refused"]["refs"], self.file()["waiting"][x]["pr"]) for x, v in got.items()},
                              {x: ("waiting", [f"refs/heads/{x}"], None) for x in ("det", "att")})
@@ -1373,7 +1380,7 @@ class Release(Case):
             got = queue.step(self.pol)
         self.assertEqual(([x["id"] for x in got["cleared"]], got["launched"]["id"]), (["att", "det"], "att"))
         self.assertEqual(sorted(self.file()["tasks"]), ["det"])
-        self.assertEqual(len(self.wakes), 3)
+        self.assertEqual(len(self.wakes), 4)
 
     def test_a_failed_lookup_keeps_the_item_waiting_and_the_next_pass_tries_again(self):
         self.run_("a")
