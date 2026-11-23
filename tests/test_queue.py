@@ -1503,7 +1503,8 @@ class Release(Case):
 
     def test_the_states_are_the_models(self):
         spec = (PKG / "model" / "Queue.tla").read_text()
-        for name, to in (("Launch(m, i)", "running"), ("Leave(m, i, marked)", "waiting"), ("Leave(m, i, marked)", "done"), ("Settle(m, i)", "done")):
+        leave = "Leave(m, i, marked, refused)"
+        for name, to in (("Launch(m, i)", "running"), (leave, "waiting"), (leave, "done"), ("Settle(m, i)", "done")):
             self.assertIn(f'"{to}")', spec[spec.index(f"\n{name} =="):].split("\n\n")[0].split("\nSettle")[name == "Settle(m, i)"], name)
         states = set(spec[spec.index("States == {") + 11:spec.index("}", spec.index("States == {"))].replace('"', "").split(", "))
         self.assertEqual(states - {"none"}, set(queue.KEYS) - {"tasks", "verdicts"})

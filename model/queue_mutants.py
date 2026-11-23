@@ -167,7 +167,7 @@ M = [
     (
         "clear-a-dead-thread-with-no-pr",
         "an item whose thread died before it opened a PR is cleared as done, so it never runs again",
-        [('ELSE Set(m, i, IF i \\in refused THEN "waiting" ELSE "none")', 'ELSE Set(m, i, IF i \\in refused THEN "waiting" ELSE "done")')],
+        [('Set(m, i, IF r THEN "waiting" ELSE "none")', 'Set(m, i, IF r THEN "waiting" ELSE "done")')],
         "ADeadThreadWithNoPRIsRunAgain",
     ),
     (
@@ -180,13 +180,13 @@ M = [
         "rerun-a-refused-push",
         "an item whose push the pre-push hook refused, with no allowed remote pushable, goes back to tasks at its turn end, so the next "
         "pass runs it again and the hook refuses it again",
-        [('IF i \\notin pr /\\ i \\in refused THEN Set(m, i, "waiting")', 'IF FALSE THEN Set(m, i, "waiting")')],
+        [('IF i \\notin pr /\\ refused THEN Set(m, i, "waiting")', 'IF FALSE THEN Set(m, i, "waiting")')],
         "ARefusedPushWaitsForAPerson",
     ),
     (
         "rerun-a-refused-push-that-died",
         "an item whose push the pre-push hook refused goes back to tasks when its thread then dies, so the next pass runs it again",
-        [('ELSE Set(m, i, IF i \\in refused THEN "waiting" ELSE "none")', 'ELSE Set(m, i, "none")')],
+        [('Set(m, i, IF r THEN "waiting" ELSE "none")', 'Set(m, i, "none")')],
         "ARefusedPushWaitsForAPerson",
     ),
     (
