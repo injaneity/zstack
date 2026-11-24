@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
-ONE_MACHINE = ('  Machines = {"mac", "linux"}\n', '  Machines = {"mac"}\n')
-RESUMES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
-           '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
+ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -88,9 +88,17 @@ M = [
     ),
     (
         "requeue-a-dropped-head",
-        "the pass queues again a head GitHub dropped from the merge queue",
-        [("/\\ i \\notin lost /\\ i \\notin dropped\n", "/\\ i \\notin lost\n")],
-        "NoDroppedHeadIsQueued",
+        "the pass queues again a head GitHub dropped from the merge queue after its one fresh run",
+        [("/\\ i \\notin lost /\\ ~Stands(i)\n", "/\\ i \\notin lost\n")],
+        "ASecondDropIsNotQueued",
+        ONE_MACHINE,
+    ),
+    (
+        "a-first-drop-goes-back-to-tasks",
+        "a preapproved head GitHub drops from the merge queue for the first time is never queued again, so a flake sends it back to tasks "
+        "and its preapproved verdict never merges",
+        [("Stands(i) == i \\in dropped /\\ (i \\notin pre \\/ i \\notin Retries \\/ i \\in retried)", "Stands(i) == i \\in dropped")],
+        LIVE,
         ONE_MACHINE,
     ),
     (
@@ -203,8 +211,8 @@ M = [
         [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
-          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, broken, by, okAtMerge, ')],
-        "NoDroppedHeadIsQueued",
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, by, okAtMerge, ')],
+        "ASecondDropIsNotQueued",
         RESUMES,
     ),
     (
@@ -217,7 +225,7 @@ M = [
     (
         "a-broken-passed-head-is-stuck",
         "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
-        [(' \\/ i \\in dropped \\/ i \\in broken)\nResume', ' \\/ i \\in dropped)\nResume')],
+        [(' \\/ Stands(i) \\/ i \\in broken)\nResume', ' \\/ Stands(i))\nResume')],
         LIVE,
         RESUMES,
     ),
@@ -231,7 +239,7 @@ M = [
     (
         "thread-merges-a-dropped-head",
         "the gate lets a thread merge a head GitHub dropped from the merge queue",
-        [('ThreadMerge(m, i) == Takes(m, i) /\\ Open(i) /\\ i \\notin dropped', 'ThreadMerge(m, i) == Takes(m, i) /\\ Open(i)')],
+        [('ThreadMerge(m, i) == Takes(m, i) /\\ Open(i) /\\ ~Stands(i)', 'ThreadMerge(m, i) == Takes(m, i) /\\ Open(i)')],
         "OnlyAVerifiedAllowedHeadMerges",
         ONE_MACHINE,
     ),

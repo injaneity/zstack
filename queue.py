@@ -772,7 +772,7 @@ def step(pol):
         q["done"] = [d for d in q["done"] if d not in gone]
         if up:
             q["running"][up["id"]] = {**{k: up[k] for k in ("kind", "n", "preapproved", "readonly", "title", "priority")},
-                                      **{k: up[k] for k in ("dropped", "seen", "queued", "kept") if k in up},
+                                      **{k: up[k] for k in ("dropped", "seen", "queued", "requeued", "kept") if k in up},
                                       "thread": None, "worktree": None, "pr": up.get("pr"), "at": now(ms=True), "logged": True}
             if up["kind"] == "task":
                 q["running"][up["id"]]["task"] = q["tasks"][up["id"]]
@@ -892,9 +892,25 @@ def stopped(pol, it, v, live):
         return "it needs a person's review"
     if held(pol, it, live):
         return f"it is labelled {pol['merge']['hold_label']}"
-    if ((it or {}).get("dropped") or {}).get("head") == live["headRefOid"]:
+    if drop_stands(it, live["headRefOid"]):
         return it["dropped"]["why"]
     return "the PR is a draft" if live.get("isDraft") else None
+
+
+def drop_stands(it, head):
+    if ((it or {}).get("dropped") or {}).get("head") != head:
+        return False
+    return not it["preapproved"] or it.get("requeued") == head
+
+
+def standing(it):
+    head = (it.get("dropped") or {}).get("head")
+    return head, bool(head) and drop_stands(it, head)
+
+
+def requeue(it):
+    if (it.get("dropped") or {}).get("head") == it["queued"]:
+        it["requeued"] = it.pop("dropped")["head"]
 
 
 def unready(pol, live):
@@ -911,7 +927,7 @@ def blocked(pol, it, v, live):
 
 def move(it, pr):
     if it["pr"] != pr:
-        for k in ("queued", "seen", "dropped"):
+        for k in ("queued", "seen", "dropped", "requeued"):
             it.pop(k, None)
     it["pr"] = pr
 
@@ -1132,6 +1148,7 @@ def approved_merge(pol, it, v, live):
         if rc:
             return f"the pass could not put it in the merge queue: {err}"
         it["queued"], it["seen"][0] = v["head"], it["seen"][0] + 1
+        requeue(it)
         return None
     rc, _, err = gh("pr", "merge", str(it["pr"]), "-R", m["repo"], "--squash", "--match-head-commit", v["head"])
     return f"the pass could not merge it: {err}" if rc else None
@@ -1152,6 +1169,7 @@ def in_queue(pol, key, it, live):
     if on:
         if it.get("queued") != got["headRefOid"]:
             it["queued"], it["seen"] = got["headRefOid"], seen
+        requeue(it)
         try:
             labels, m = labels_of(pol, it, live), pol["merge"]
             why = (f"it is labelled {m['hold_label']}" if m["hold_label"] in labels else
@@ -1166,12 +1184,18 @@ def in_queue(pol, key, it, live):
         it["queued"] = None
         return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
     if not it.get("queued"):
-        it["seen"] = seen
-        return None
+        if (it.get("dropped") or {}).get("head") != got["headRefOid"] or seen[0] == it["seen"][0]:
+            it["seen"] = seen
+            return None
+        it["queued"] = got["headRefOid"]
     why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
            "cannot be told" if seen[0] > it["seen"][0] else
            f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
-    it["dropped"], it["queued"] = {"head": it["queued"], "why": why}, None
+    if seen[0] > it["seen"][0] and got["headRefOid"] == it["queued"]:
+        it["requeued"] = it["queued"]
+    it["dropped"], it["queued"], it["seen"] = {"head": it["queued"], "why": why}, None, seen
+    if not drop_stands(it, it["dropped"]["head"]):
+        return None
     said = f"PR {pr} waits for the owner: {why}"
     wake(pol, "blocked", f"{key}: {said}", pr, it["thread"])
     return said
@@ -1190,7 +1214,7 @@ def needs(pol, it, v, live):
     if pol["merge"]["review_label"] in labels_of(pol, it, live) or not it["preapproved"] and passed and v["result"] != "auto":
         return []
     out = []
-    if (it.get("dropped") or {}).get("head") == head:
+    if drop_stands(it, head):
         out.append(("a drop from the merge queue", f"{it['dropped']['why']}. Merge origin/{base} into the branch, settle any conflict, and push."))
     elif live.get("mergeable") == "CONFLICTING":
         out.append(("a merge conflict", f"GitHub says the PR conflicts with {base}. Merge origin/{base} into the branch, settle the conflicts, "
@@ -1226,7 +1250,7 @@ def shared(pol, q, it):
 def resume(pol, q, key, it, live, need):
     repo, pr, branch, row = pol["merge"]["repo"], it["pr"], live["headRefName"], it.get("task") or {}
     was = row.get("was") or row.get("task") or f"{repo}#{it['n']}: {it['title']}"
-    keep = {k: it[k] for k in ("dropped", "seen", "queued") if k in it}
+    keep = {k: it[k] for k in ("dropped", "seen", "queued", "requeued") if k in it}
     priority = it["priority"] if "priority" in it else row["priority"] if "priority" in row else rank(labels_of(pol, it, live))
     common = {"was": was, "title": it["title"], "priority": priority, "preapproved": it["preapproved"],
               "at": row.get("at") or it["at"], "kind": it["kind"], "n": it["n"], "pr": pr, **keep}
@@ -1296,11 +1320,11 @@ def outcome(pol, q, key, merge=False, died=False):
             live = pr_view(pol, found)
         if live and live["state"] == "OPEN":
             it.pop("refused", None)
-        was = (it.get("dropped") or {}).get("head")
+        was = standing(it)
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
             v = q["verdicts"].get(str(it["pr"]))
-            need = needs(pol, it, v, live) if (it.get("dropped") or {}).get("head") != was else []
+            need = needs(pol, it, v, live) if standing(it)[1] and standing(it) != was else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
@@ -1393,7 +1417,7 @@ def unresume(q):
         if row.get("pr") and key not in q["running"]:
             q["waiting"][key] = {**{k: row[k] for k in ("kind", "n", "pr", "preapproved", "title", "priority", "at")}, "readonly": False,
                                  "thread": None, "worktree": None, "resumed": True,
-                                 **{k: row[k] for k in ("dropped", "seen", "queued", "kept") if k in row},
+                                 **{k: row[k] for k in ("dropped", "seen", "queued", "requeued", "kept") if k in row},
                                  **({"task": row} if row["kind"] == "task" else {})}
             del q["tasks"][key]
 
