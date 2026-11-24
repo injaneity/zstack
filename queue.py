@@ -1173,12 +1173,16 @@ def in_queue(pol, key, it, live):
         it["queued"] = None
         return f"PR {pr} waits for the owner: {why}, so the pass took it out of the merge queue"
     if not it.get("queued"):
-        it["seen"] = seen
-        return None
+        if (it.get("dropped") or {}).get("head") != got["headRefOid"] or seen[0] == it["seen"][0]:
+            it["seen"] = seen
+            return None
+        it["queued"] = got["headRefOid"]
     why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
            "cannot be told" if seen[0] > it["seen"][0] else
            f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
-    it["dropped"], it["queued"] = {"head": it["queued"], "why": why}, None
+    if seen[0] > it["seen"][0]:
+        it["requeued"] = it["queued"]
+    it["dropped"], it["queued"], it["seen"] = {"head": it["queued"], "why": why}, None, seen
     if not drop_stands(it, it["dropped"]["head"]):
         return None
     said = f"PR {pr} waits for the owner: {why}"
