@@ -100,6 +100,7 @@ Die(m, i) == q[m][i] = "running" /\ i \in thread /\ UNCHANGED endedUnverified
         /\ refusedRerun' = (refusedRerun \/ r /\ q'[m][i] = "none")
         /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, unmarkedCleared>>)
   /\ diedCleared' = (diedCleared \/ q'[m][i] = "done" /\ i \notin pr)
+Idle(m, i) == Die(m, i)
 Started(i) == i \in pending /\ pending' = pending \ {i} /\ thread' = thread \cup {i}
   /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun>>
 Lost(i) == i \in pending /\ pending' = pending \ {i}
@@ -127,14 +128,14 @@ Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, u
 
 Next ==
   \/ \E m \in Machines, i \in Items :
-       Launch(m, i) \/ Relaunch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
+       Launch(m, i) \/ Relaunch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Idle(m, i) \/ Abort(m, i) \/ Settle(m, i)
        \/ Resume(m, i) \/ Unresume(m, i) \/ Unblock(m, i)
        \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
   \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Break(i) \/ Started(i) \/ Lost(i)
      \/ Land(i) \/ Drop(i)
   \/ Flip
 
-Fair == \A m \in Machines, i \in Items : WF_vars(Freed(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
+Fair == \A m \in Machines, i \in Items : WF_vars(Idle(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
   /\ WF_vars(PassMerge(m, i)) /\ WF_vars(Dequeue(m, i)) /\ WF_vars(Observe(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 

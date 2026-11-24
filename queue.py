@@ -793,6 +793,10 @@ def step(pol):
     return locked(pol, record)
 
 
+def since(at):
+    return (datetime.now(timezone.utc) - datetime.strptime(at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)).total_seconds()
+
+
 def reconcile(pol):
     def go(q):
         dead, changed, rows = [], False, None
@@ -806,8 +810,7 @@ def reconcile(pol):
             if not it["thread"]:
                 rows = listing() if rows is None else rows
                 mine = [r["threadId"] for r in rows if r["title"] == key and r["createdAt"] >= it["at"]]
-                asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                if not mine and (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60:
+                if not mine and since(it["at"]) >= pol["run"]["lost_min"] * 60:
                     del q["running"][key]
                     changed = True
                 if not mine:
@@ -823,6 +826,9 @@ def reconcile(pol):
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
             if seen["thread"]["status"] in DEAD:
                 dead.append((key, seen["thread"]["status"] in DIED))
+            elif since(seen["thread"]["updatedAt"]) >= pol["run"]["idle_min"] * 60:
+                it["idle"], changed = pol["run"]["idle_min"], True
+                dead.append((key, True))
         return dead, changed
     return locked(pol, go)
 
@@ -1254,9 +1260,10 @@ def outcome(pol, q, key, merge=False, died=False):
     ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     tracked = it["pr"]
-    died = died or it.pop("died", False)
+    died, idle = died or it.pop("died", False), it.pop("idle", None)
     back = died or not it.get("complete")
-    ended_as = "its thread died" if died else "its thread ended, not marked complete,"
+    ended_as = (f"its thread showed nothing new for run.idle_min ({idle} minutes)" if idle else
+                "its thread died" if died else "its thread ended, not marked complete,")
 
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it

@@ -242,6 +242,12 @@ M = [
         RESUMES,
     ),
     (
+        "an-idle-thread-holds-its-slot",
+        "a thread that hangs or waits on a question holds its slot for good, as when run.idle_min was read nowhere",
+        [("Fair == \\A m \\in Machines, i \\in Items : WF_vars(Idle(m, i))", "Fair == \\A m \\in Machines, i \\in Items : TRUE")],
+        LIVE,
+    ),
+    (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
         [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],
