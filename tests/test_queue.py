@@ -626,6 +626,7 @@ class Approve(Case):
             self.forge.prs[41] = {"head": H1, "labels": [], "branch": "b", "queue": True}
             queue.step(self.pol)
             queue.verified(self.pol, "a", 41, H1, "review")
+            self.assertEqual({"dropped", "requeued"} & set(self.file()["waiting"]["a"]), set())
             self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
         self.assertEqual(self.queued(), ["40", "40", "41"])
 
@@ -683,6 +684,22 @@ class Approve(Case):
         self.assertEqual((got["kept"], got["cleared"]), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}], []))
         self.assertEqual((self.file()["tasks"], self.file()["verdicts"]["40"], self.queued()), ({}, {"head": H1, "result": "review"}, ["40", "40"]))
         self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+
+    def test_a_head_a_thread_queues_again_after_its_first_drop_has_had_its_fresh_run_when_github_drops_it_before_a_pass_sees_it(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        running = [{"name": "slow", "status": "IN_PROGRESS"}]
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"], more=running)
+        wait = "PR 40 waits for the owner: a check is still running on that head, and a merge now would arm auto-merge"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": wait}])
+        self.forge.prs[40].update(adds=2, removed=["failed_checks"] * 2, more=[])
+        self.wakes.clear()
+        why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue, and an entry the pass did not add since, so whose "
+               "reason is whose cannot be told")
+        self.assertEqual((queue.step(self.pol)["kept"], self.wakes), ([{"id": "a", "why": why}], [("blocked", f"a: {why}", 40)]))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), len(self.wakes)), ([{"id": "a", "why": why}], ["40"], 1))
 
     def test_a_task_sent_back_for_a_first_drop_before_drops_were_queued_again_is_queued_again(self):
         self.waiting()
