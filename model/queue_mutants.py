@@ -135,9 +135,10 @@ M = [
     ("oldest-first", "the queue ignores priority", [("/\\ i \\notin held /\\ First(m, i)\n", "/\\ i \\notin held\n")], "PriorityOrder"),
     (
         "no-release",
-        "an item whose thread's turn ended holds its slot for good",
+        "an item whose thread's turn ended, or that went idle, holds its slot for good",
         [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
-         ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up')],
+         ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up'),
+         ("Idle(m, i) == Die(m, i)", "Idle(m, i) == FALSE /\\ Die(m, i)")],
         LIVE,
     ),
     (
