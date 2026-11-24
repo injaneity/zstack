@@ -14,13 +14,13 @@ grep -q '^  Queues = {}$' "$tmp/direct/Queue.cfg" || { echo "FAIL  model/Queue.c
 grep -q "Model checking completed. No error has been found." "$tmp/out" || { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg with no merge queue"; exit 1; }
 echo "ok    model/Queue.cfg with no merge queue: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
 mkdir "$tmp/resume" && cp "$src/model/Queue.tla" "$tmp/resume/"
-sed -e 's/^  Machines = {"mac", "linux"}$/  Machines = {"mac"}/' -e 's/^  Resumes = {}$/  Resumes = {"i1", "i2", "i3"}/' \
+sed -e 's/^  Machines = {"mac", "linux"}$/  Machines = {"mac"}/' -e 's/^  Resumes = {}$/  Resumes = {"i1", "i2", "i3"}/' -e 's/^  Retries = {}$/  Retries = {"i1"}/' \
   "$src/model/Queue.cfg" > "$tmp/resume/Queue.cfg"
-[ "$(grep -cxE '  (Machines = \{"mac"\}|Resumes = \{"i1", "i2", "i3"\})' "$tmp/resume/Queue.cfg")" = 2 ] ||
-  { echo "FAIL  model/Queue.cfg has no Machines and Resumes lines to set"; exit 1; }
+[ "$(grep -cxE '  (Machines = \{"mac"\}|Resumes = \{"i1", "i2", "i3"\}|Retries = \{"i1"\})' "$tmp/resume/Queue.cfg")" = 3 ] ||
+  { echo "FAIL  model/Queue.cfg has no Machines, Resumes and Retries lines to set"; exit 1; }
 (cd "$tmp/resume" && "$checker" -workers auto -metadir meta -config Queue.cfg Queue.tla) > "$tmp/out" 2>&1
 grep -q "Model checking completed. No error has been found." "$tmp/out" ||
-  { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg on one machine that resumes every item"; exit 1; }
-echo "ok    model/Queue.cfg on one machine that resumes every item: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
+  { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg on one machine that resumes every item and retries a dropped head"; exit 1; }
+echo "ok    model/Queue.cfg on one machine that resumes every item and retries a dropped head: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
 python3 -I "$src/model/queue_mutants.py" "$checker" "$tmp/mutants" || { echo "FAIL  a model/queue_mutants.py mutant was not killed by its rule"; exit 1; }
 echo "ok    model/Queue.tla holds under everystate, and every mutant fails on its rule"
