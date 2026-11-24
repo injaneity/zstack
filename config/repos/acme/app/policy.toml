@@ -14,7 +14,8 @@ skip = ["app/app-agents"]
 # The patent hold at publish time (queue.py pre-push, the clone's pre-push hook; the repo invariant `patent`). Leave the
 # whole section out, and that invariant, for a repo with no private twin. A change
 # whose diff touches one of `held_words` is never pushed to `merge.repo`; it goes to `private_repo`. A word counts when
-# no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines.
+# no letter or digit comes before it, in any case. Generated lockfiles are skipped, path and lines. A line whose text is
+# already in the push's merge base with origin/main, such as a comment moved to another file, discloses nothing and does not count.
 [patent]
 held_words = ["skyhook", "vaultkey", "sealing"]
 skip_lockfiles = [
