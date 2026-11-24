@@ -48,3 +48,10 @@ salvaged_from = "Salvaged from #{pr}"
 # them, or `request-changes` on theirs.
 [review]
 outside = "salvage"
+
+# The macOS hosted lane (agents/verifier.md). Leave the section out for a repo with none. When a PR's diff touches a
+# path that starts with one of `macos_paths`, the verifier runs `macos_hosted_lane` with the PR's branch and full head
+# sha in place of {branch} and {head}, and passes that head as `auto` only once that run is green.
+[verify]
+macos_paths = ["driver/macos/"]
+macos_hosted_lane = "gh workflow run e2e-macos-hosted.yml --ref {branch} -f source_sha={head}"

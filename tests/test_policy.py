@@ -143,6 +143,16 @@ class Policy(unittest.TestCase):
         self.assertEqual(self.run_("check").returncode, 0)
         self.assertNotIn("patent", json.loads(self.run_("dump").stdout))
 
+    def test_a_repo_with_no_macos_hosted_lane_leaves_it_out(self):
+        self.assertEqual(self.run_("get", "verify.macos_paths").stdout, '["driver/macos/"]\n')
+        self.assertEqual(self.run_("get", "verify.macos_hosted_lane").stdout,
+                         "gh workflow run e2e-macos-hosted.yml --ref {branch} -f source_sha={head}\n")
+        text = SHIPPED[FILES[1]]
+        (self.pkg / FILES[1]).write_text(text[:text.index("\n# The macOS hosted lane")] + "\n")
+        self.assertEqual(self.run_("check").returncode, 0)
+        r = self.run_("get", "verify.macos_paths")
+        self.assertEqual((r.returncode, r.stderr), (1, "queue: no key verify.macos_paths\n"))
+
     def test_a_missing_key_is_named(self):
         r = self.run_("get", "ci.nope")
         self.assertEqual((r.returncode, r.stderr), (1, "queue: no key ci.nope\n"))
@@ -197,6 +207,12 @@ class Policy(unittest.TestCase):
             ('url = "https://example.invalid/wake"', 'url = "http://example.invalid/wake"', "wake.url must be an https URL"),
             ('owner = "Robin"', "", "missing people.owner"),
             ('clone = "~/work/app"', 'clone = "work/app"', 'repos."acme/app".clone must be a path from / or ~/'),
+            ('macos_paths = ["driver/macos/"]', "macos_paths = []", "verify.macos_paths must be a non-empty list of distinct paths in the repo"),
+            ('macos_paths = ["driver/macos/"]', 'macos_paths = ["/driver/macos/"]', "verify.macos_paths must be"),
+            ("source_sha={head}", "source_sha=HEAD", "verify.macos_hosted_lane must be one line with {branch} and {head} once each"),
+            ("--ref {branch}", "--ref {branch} {branch}", "verify.macos_hosted_lane must be"),
+            ("source_sha={head}", "source_sha={head} -f quick={quick}", "verify.macos_hosted_lane must be"),
+            ("macos_hosted_lane = ", "macos_hosted_lan = ", "unknown key verify.macos_hosted_lan"),
         ]
         for old, new, why in cases:
             with self.subTest(new=new or f"drop {old.strip()}"):

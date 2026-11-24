@@ -110,8 +110,10 @@ def seats(v):
     return seat(v) or isinstance(v, list) and bool(v) and all(seat(x) for x in v)
 
 
-def line_with(key):
-    return (lambda v: text(v) and v.count(key) == 1 and "{" not in v.replace(key, ""), f"one line with {key} once and no other placeholder")
+def line_with(*keys):
+    def ok(v):
+        return text(v) and all(v.count(k) == 1 for k in keys) and "{" not in re.sub("|".join(map(re.escape, keys)), "", v)
+    return (ok, f"one line with {' and '.join(keys)} once{' each' if len(keys) > 1 else ''} and no other placeholder")
 
 
 START_SECONDS = 120
@@ -146,6 +148,10 @@ REPO = {
         "salvaged_from": (lambda v: text(v) and v.endswith(" #{pr}") and "{" not in v[:-5], "one line ending in ` #{pr}`, with no other placeholder"),
     },
     "review": {"outside": (lambda v: v in ("salvage", "request-changes"), "salvage or request-changes")},
+    "verify": {
+        "macos_paths": (lambda v: names(v) and bool(v) and not any(x.startswith("/") for x in v), "a non-empty list of distinct paths in the repo"),
+        "macos_hosted_lane": line_with("{branch}", "{head}"),
+    },
 }
 
 
@@ -187,7 +193,7 @@ def validate_machine(data):
 
 
 def validate_repo(name, data):
-    sections(name, data, REPO, optional=("patent",))
+    sections(name, data, REPO, optional=("patent", "verify"))
     if "patent" in data and name.lower() == data["patent"]["private_repo"].lower():
         raise Refused("patent.private_repo must differ from merge.repo")
     m = data["merge"]
