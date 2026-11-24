@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -114,7 +115,7 @@ class Case(unittest.TestCase):
         self.pol["host"]["root"] = str(self.root)
         self.pol["run"]["threads"] = 2
         self.forge, self.cands, self.open, self.wakes, self.woken = Forge(), [], {}, [], []
-        self.threads, self.briefed, self.status, self.t3_down, self.listing = {}, [], {}, False, []
+        self.threads, self.briefed, self.status, self.t3_down, self.listing, self.updated = {}, [], {}, False, [], {}
         for p in (patch.object(queue, "gh", self.forge.gh),
                   patch.object(queue, "candidates", lambda errors, pol: list(self.cands)),
                   patch.object(queue, "open_prs", lambda errors, name: dict(self.open)),
@@ -137,7 +138,8 @@ class Case(unittest.TestCase):
         if args[0] == "list":
             return list(self.listing)
         said = self.status.get(args[1], "running")
-        return "Thread is no longer available." if said == "gone" else {"thread": {"status": said, "worktreePath": f"/seen/{args[1]}"}}
+        return "Thread is no longer available." if said == "gone" else {"thread": {"status": said, "worktreePath": f"/seen/{args[1]}",
+                                                                                     "updatedAt": self.updated.get(args[1], "2999-01-01T00:00:00.000Z")}}
 
     def file(self):
         return json.loads((self.root / "queue.json").read_text())
@@ -1121,6 +1123,26 @@ class Release(Case):
         got = queue.run_pass(self.pol)
         why = "its thread died with no record of its pushes, so whether it opened a PR cannot be told"
         self.assertEqual(([(x["released"], x["state"], x["why"]) for x in got["released"]], got["launched"]), ([("gone", "done", why)], []))
+
+    def test_a_thread_idle_past_idle_min_frees_its_slot_and_its_item_runs_again(self):
+        self.pol["run"]["threads"] = 1
+        self.run_("a")
+        self.add("b", priority=1)
+        idle = self.pol["run"]["idle_min"]
+
+        def ago(minutes):
+            return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        self.updated = {"t-a": ago(idle - 1)}
+        with self.trees():
+            got = queue.run_pass(self.pol)
+        self.assertEqual((got["released"], got["launched"], sorted(self.file()["running"])), ([], [], ["a"]))
+        self.status, self.updated = {"t-a": "waiting"}, {"t-a": ago(idle + 1)}
+        with self.trees():
+            got = queue.run_pass(self.pol)
+        said = f"its thread showed nothing new for run.idle_min ({idle} minutes) with no PR, so it goes back to tasks to run again"
+        self.assertEqual([(x["released"], x["state"], x["why"]) for x in got["released"]], [("a", "tasks", said)])
+        self.assertEqual(([x["id"] for x in got["launched"]], sorted(self.file()["running"]), sorted(self.file()["tasks"])), (["b"], ["b"], ["a"]))
+        self.assertEqual(self.wakes, [("blocked", f"a: {said}", None)])
 
     def test_a_turn_that_ends_with_no_pr_goes_back_to_tasks_unless_its_thread_marked_it_complete(self):
         self.pol["run"]["threads"] = 9
