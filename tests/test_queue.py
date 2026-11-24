@@ -138,8 +138,8 @@ class Case(unittest.TestCase):
         if args[0] == "list":
             return list(self.listing)
         said = self.status.get(args[1], "running")
-        return "Thread is no longer available." if said == "gone" else {"thread": {"status": said, "worktreePath": f"/seen/{args[1]}",
-                                                                                     "updatedAt": self.updated.get(args[1], "2999-01-01T00:00:00.000Z")}}
+        seen = {"status": said, "worktreePath": f"/seen/{args[1]}", "updatedAt": self.updated.get(args[1], "2999-01-01T00:00:00.000Z")}
+        return "Thread is no longer available." if said == "gone" else {"thread": seen}
 
     def file(self):
         return json.loads((self.root / "queue.json").read_text())
