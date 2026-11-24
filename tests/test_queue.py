@@ -588,23 +588,27 @@ class Approve(Case):
         queue.verified(self.pol, "a", 40, H2, "review")
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
         self.forge.prs[40]["inq"] = False
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
+        self.forge.prs[40]["inq"] = False
         why = f"PR 40 waits for the owner: GitHub took head {H2} out of the merge queue: it gave no reason"
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
-        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40"]))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": why}], ["40", "40"]))
 
     def test_a_drop_after_an_entry_the_pass_did_not_add_blames_only_the_recorded_head_and_a_new_head_is_still_queued(self):
         self.waiting()
         queue.approve(self.pol, "a")
         self.forge.prs[40]["queue"] = True
         queue.step(self.pol)
-        self.forge.prs[40].update(head=H2, adds=3, inq=False, removed=["the merge group failed ci-gate"] * 2)
+        self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
+        queue.step(self.pol)
+        self.forge.prs[40].update(head=H2, adds=4, inq=False, removed=["the merge group failed ci-gate"] * 3)
         queue.verified(self.pol, "a", 40, H2, "review")
         self.wakes.clear()
         why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue, and an entry the pass did not add since, so whose "
                "reason is whose cannot be told")
         self.assertEqual((queue.step(self.pol)["kept"], self.wakes), ([{"id": "a", "why": why}], [("blocked", f"a: {why}", 40)]))
         self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}],
-                                                                         ["40", "40"]))
+                                                                         ["40", "40", "40"]))
 
     def test_a_replacement_pr_starts_with_no_queue_record_from_the_pr_it_replaced(self):
         self.run_("a", thread="t-a", worktree="/nowhere/wt-a")
@@ -617,13 +621,14 @@ class Approve(Case):
             queue.step(self.pol)
             self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
             queue.step(self.pol)
-            self.assertEqual(self.file()["waiting"]["a"]["dropped"]["head"], H1)
+            self.assertEqual(self.file()["waiting"]["a"]["requeued"], H1)
             self.forge.prs[40]["state"] = "CLOSED"
             self.forge.prs[41] = {"head": H1, "labels": [], "branch": "b", "queue": True}
             queue.step(self.pol)
             queue.verified(self.pol, "a", 41, H1, "review")
+            self.assertEqual({"dropped", "requeued"} & set(self.file()["waiting"]["a"]), set())
             self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
-        self.assertEqual(self.queued(), ["40", "41"])
+        self.assertEqual(self.queued(), ["40", "40", "41"])
 
     def test_a_replacement_pr_verified_before_any_pass_sees_it_starts_with_no_queue_record(self):
         self.waiting()
@@ -635,9 +640,9 @@ class Approve(Case):
         self.forge.prs[40]["state"] = "CLOSED"
         self.forge.prs[41] = {"head": H1, "labels": [], "queue": True}
         queue.verified(self.pol, "a", 41, H1, "review")
-        self.assertNotIn("dropped", self.file()["waiting"]["a"])
+        self.assertEqual({"dropped", "requeued"} & set(self.file()["waiting"]["a"]), set())
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 41 is in the merge queue at head {H1}"}])
-        self.assertEqual(self.queued(), ["40", "41"])
+        self.assertEqual(self.queued(), ["40", "40", "41"])
 
     def test_a_pr_someone_else_put_in_the_queue_is_in_flight_and_a_hold_still_takes_it_out(self):
         self.waiting(said="auto")
@@ -647,21 +652,98 @@ class Approve(Case):
         queue.step(self.pol)
         self.assertEqual((self.queued("dequeuePullRequest"), self.queued(), self.merges()), (["40"], [], []))
 
-    def test_a_queue_entry_github_drops_is_reported_blocked_once_and_not_queued_again_until_a_new_head_passes(self):
+    def test_a_queue_entry_github_drops_is_queued_again_once_then_reported_blocked_once_and_not_queued_again_until_a_new_head_passes(self):
         self.waiting()
         queue.approve(self.pol, "a")
         self.forge.prs[40]["queue"] = True
         self.wakes.clear()
         queue.step(self.pol)
-        self.forge.prs[40].update(inq=False, removed=["the merge group failed ci-gate"])
-        why = f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: the merge group failed ci-gate"
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}])
+        self.assertEqual((self.queued(), self.wakes), (["40", "40"], []))
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"] * 2)
+        why = f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue: failed_checks"
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": why}])
         self.assertEqual(self.wakes, [("blocked", f"a: {why}", 40)])
-        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), len(self.wakes)), ([{"id": "a", "why": why}], ["40"], 1))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), len(self.wakes)), ([{"id": "a", "why": why}], ["40", "40"], 1))
+        with self.assertRaisesRegex(queue.Refused, f"PR 40 does not merge: GitHub took head {H1}"):
+            queue.gate(self.pol, 40, H1)
         self.forge.prs[40]["head"] = H2
         queue.verified(self.pol, "a", 40, H2, "review")
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
-        self.assertEqual(self.queued(), ["40", "40"])
+        self.assertEqual(self.queued(), ["40", "40", "40"])
+
+    def test_a_preapproved_head_github_drops_after_its_thread_ended_is_queued_again_with_its_verdict_not_sent_back_to_tasks(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        got = queue.step(self.pol)
+        self.assertEqual((got["kept"], got["cleared"]), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}], []))
+        self.assertEqual((self.file()["tasks"], self.file()["verdicts"]["40"], self.queued()), ({}, {"head": H1, "result": "review"}, ["40", "40"]))
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+
+    def test_a_head_a_thread_queues_again_after_its_first_drop_has_had_its_fresh_run_when_github_drops_it_before_a_pass_sees_it(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        running = [{"name": "slow", "status": "IN_PROGRESS"}]
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"], more=running)
+        wait = "PR 40 waits for the owner: a check is still running on that head, and a merge now would arm auto-merge"
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": wait}])
+        self.forge.prs[40].update(adds=2, removed=["failed_checks"] * 2, more=[])
+        self.wakes.clear()
+        why = (f"PR 40 waits for the owner: GitHub took head {H1} out of the merge queue, and an entry the pass did not add since, so whose "
+               "reason is whose cannot be told")
+        self.assertEqual((queue.step(self.pol)["kept"], self.wakes), ([{"id": "a", "why": why}], [("blocked", f"a: {why}", 40)]))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued(), len(self.wakes)), ([{"id": "a", "why": why}], ["40"], 1))
+
+    def test_a_drop_github_makes_again_after_a_threads_entry_sends_an_ended_threads_item_back_to_tasks_in_that_pass(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"], more=[{"name": "slow", "status": "IN_PROGRESS"}])
+        queue.step(self.pol)
+        self.forge.prs[40].update(adds=2, removed=["failed_checks"] * 2, more=[])
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        why = "its thread has ended, and PR 40 waits on that thread's work (a drop from the merge queue), so it goes back to tasks"
+        self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": why}])
+        self.assertEqual(self.file()["tasks"]["a"]["requeued"], H1)
+
+    def test_an_entry_for_a_new_head_does_not_spend_the_fresh_run_of_the_head_the_pass_queued(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(head=H2, adds=2, inq=False, removed=["failed_checks"] * 2)
+        self.wakes.clear()
+        queue.step(self.pol)
+        self.assertEqual((self.wakes, self.file()["waiting"]["a"].get("requeued")), ([], None))
+        queue.verified(self.pol, "a", 40, H2, "review")
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
+        self.assertEqual((self.queued(), self.wakes), (["40", "40"], []))
+
+    def test_a_task_sent_back_for_a_first_drop_before_drops_were_queued_again_is_queued_again(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"] * 2)
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        queue.step(self.pol)
+
+        def old(q):
+            del q["tasks"]["a"]["requeued"]
+            return None, True
+        queue.locked(self.pol, old)
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}])
+        self.assertEqual((self.file()["tasks"], self.queued()), ({}, ["40", "40", "40"]))
 
     def test_a_queue_read_that_fails_keeps_the_pr_waiting_and_neither_merges_nor_queues_it(self):
         self.waiting()
@@ -768,7 +850,9 @@ class Approve(Case):
         queue.release(self.pol, "a")
         queue.approve(self.pol, "a")
         queue.step(self.pol)
-        self.forge.prs[40].update(inq=False, removed=["MERGE_CONFLICT"], mergeable="CONFLICTING")
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks", "MERGE_CONFLICT"], mergeable="CONFLICTING")
         dropped = f"GitHub took head {H1} out of the merge queue: MERGE_CONFLICT"
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}])
         self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
@@ -795,7 +879,7 @@ class Approve(Case):
             queue.gate(self.pol, 40, H1)
         queue.release(self.pol, "a")
         self.status = {}
-        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}], ["40"]))
+        self.assertEqual((queue.step(self.pol)["kept"], self.queued()), ([{"id": "a", "why": f"PR 40 waits for the owner: {dropped}"}], ["40", "40"]))
 
     def test_a_drop_seen_by_a_pass_whose_thread_has_ended_goes_back_to_tasks_in_that_pass(self):
         self.run_("a", thread="t-a")
@@ -805,7 +889,9 @@ class Approve(Case):
         queue.release(self.pol, "a")
         queue.approve(self.pol, "a")
         queue.step(self.pol)
-        self.forge.prs[40].update(inq=False, removed=["MERGE_CONFLICT"], mergeable="CONFLICTING")
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks", "MERGE_CONFLICT"], mergeable="CONFLICTING")
         self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
         why = "its thread has ended, and PR 40 waits on that thread's work (a drop from the merge queue), so it goes back to tasks"
         self.assertEqual(queue.step(self.pol)["cleared"], [{"id": "a", "why": why}])
