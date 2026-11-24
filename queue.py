@@ -897,6 +897,11 @@ def drop_stands(it, head):
     return not it["preapproved"] or it.get("requeued") == head
 
 
+def standing(it):
+    head = (it.get("dropped") or {}).get("head")
+    return head, bool(head) and drop_stands(it, head)
+
+
 def requeue(it):
     if (it.get("dropped") or {}).get("head") == it["queued"]:
         it["requeued"] = it.pop("dropped")["head"]
@@ -1180,7 +1185,7 @@ def in_queue(pol, key, it, live):
     why = (f"GitHub took head {it['queued']} out of the merge queue, and an entry the pass did not add since, so whose reason is whose "
            "cannot be told" if seen[0] > it["seen"][0] else
            f"GitHub took head {it['queued']} out of the merge queue: {(reason if seen[1] > it['seen'][1] else None) or 'it gave no reason'}")
-    if seen[0] > it["seen"][0]:
+    if seen[0] > it["seen"][0] and got["headRefOid"] == it["queued"]:
         it["requeued"] = it["queued"]
     it["dropped"], it["queued"], it["seen"] = {"head": it["queued"], "why": why}, None, seen
     if not drop_stands(it, it["dropped"]["head"]):
@@ -1308,11 +1313,11 @@ def outcome(pol, q, key, merge=False, died=False):
             live = pr_view(pol, found)
         if live and live["state"] == "OPEN":
             it.pop("refused", None)
-        was = (it.get("dropped") or {}).get("head")
+        was = standing(it)
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
             v = q["verdicts"].get(str(it["pr"]))
-            need = needs(pol, it, v, live) if (it.get("dropped") or {}).get("head") != was else []
+            need = needs(pol, it, v, live) if standing(it)[1] and standing(it) != was else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
