@@ -89,7 +89,7 @@ M = [
     (
         "requeue-a-dropped-head",
         "the pass queues again a head GitHub dropped from the merge queue after its one fresh run",
-        [("/\\ i \\notin lost /\\ ~Stands(i)\n", "/\\ i \\notin lost\n")],
+        [("/\\ i \\notin lost /\\ ~Stands(i)\n", "/\\ i \\notin lost /\\ (i \\in pre \\/ ~Stands(i))\n")],
         "ASecondDropIsNotQueued",
         ONE_MACHINE,
     ),
