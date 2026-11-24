@@ -663,6 +663,36 @@ class Approve(Case):
         self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H2}"}])
         self.assertEqual(self.queued(), ["40", "40"])
 
+    def test_a_preapproved_head_github_drops_after_its_thread_ended_is_queued_again_with_its_verdict_not_sent_back_to_tasks(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        got = queue.step(self.pol)
+        self.assertEqual((got["kept"], got["cleared"]), ([{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}], []))
+        self.assertEqual((self.file()["tasks"], self.file()["verdicts"]["40"], self.queued()), ({}, {"head": H1, "result": "review"}, ["40", "40"]))
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+
+    def test_a_task_sent_back_for_a_first_drop_before_drops_were_queued_again_is_queued_again(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.forge.prs[40]["queue"] = True
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"])
+        queue.step(self.pol)
+        self.forge.prs[40].update(inq=False, removed=["failed_checks"] * 2)
+        self.status, self.pol["run"]["threads"] = {"t-a": "completed"}, 0
+        queue.step(self.pol)
+
+        def old(q):
+            del q["tasks"]["a"]["requeued"]
+            return None, True
+        queue.locked(self.pol, old)
+        self.assertEqual(queue.step(self.pol)["kept"], [{"id": "a", "why": f"PR 40 is in the merge queue at head {H1}"}])
+        self.assertEqual((self.file()["tasks"], self.queued()), ({}, ["40", "40", "40"]))
+
     def test_a_queue_read_that_fails_keeps_the_pr_waiting_and_neither_merges_nor_queues_it(self):
         self.waiting()
         queue.approve(self.pol, "a")
