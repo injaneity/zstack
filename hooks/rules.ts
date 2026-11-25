@@ -239,6 +239,7 @@ function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
 	return api || !mine ? hit : `it adds, removes or changes the label \`${hit.trim()}\`, which only the owner sets (the invariant own-controls)`;
 }
 export const THREAD_VAR = "T3CODE_THREAD_ID";
+export const PARENT_THREAD_VAR = "ZSTACK_PARENT_THREAD_ID";
 
 const GH_READS = new Set(["view", "list", "status", "checks", "diff", "checkout", "download", "watch", "clone"]);
 const GH_READ_GROUPS = new Set(["search", "auth", "status", "help", "version", "completion", "browse"]);
