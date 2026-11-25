@@ -219,7 +219,7 @@ async function runSingleAgent(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
-				env: childEnv(process.env, SUBAGENT_DEPTH, path.join(tmpPromptDir as string, "gh")),
+				env: childEnv(process.env, SUBAGENT_DEPTH, path.join(tmpPromptDir as string, "gh"), launch.sessionId),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
