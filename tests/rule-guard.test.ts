@@ -372,6 +372,6 @@ test("a coding thread reports to the queue but never moves it, and never marks a
 	assert.equal(checkBash(verdict, OWNED, inThread, inApp), undefined);
 	assert.equal(checkBash("echo $T3CODE_THREAD_ID", OWNED, inThread, inApp), undefined);
 	for (const c of [`T3CODE_THREAD_ID=t-0 ${verdict}`, `env -u T3CODE_THREAD_ID ${verdict}`, `unset T3CODE_THREAD_ID; ${verdict}`,
-		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "./queue.py pass"])
+		`export T3CODE_THREAD_ID=t-0 && ${verdict}`, "unset ZSTACK_PARENT_THREAD_ID; git push", "./queue.py pass"])
 		assert.match(checkBash(c, OWNED, inThread, inApp) ?? "", /^blocked: /, c);
 });

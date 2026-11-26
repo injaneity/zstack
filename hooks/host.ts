@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkBash, checkWrite, type Host, mergeOwned, THREAD_VAR } from "./rules.ts";
+import { checkBash, checkWrite, type Host, mergeOwned, PARENT_THREAD_VAR, THREAD_VAR } from "./rules.ts";
 
 const home = (p: string) => p.replace(/^~(?=\/|$)/, os.homedir());
 const stat = (p: string) => fs.statSync(home(p), { throwIfNoEntry: false });
@@ -30,14 +30,14 @@ function config(): { merge: { hold_label: string; review_label: string; preappro
 const owned = mergeOwned(dump);
 const labels = ((m) => (m ? [m.hold_label, m.review_label, ...m.preapproved_labels] : null))(config()?.merge);
 function readonly(): boolean | undefined {
-	const thread = process.env[THREAD_VAR];
-	if (!thread) return false;
+	const threads = [process.env[THREAD_VAR], process.env[PARENT_THREAD_VAR]].filter(Boolean);
+	if (!threads.length) return false;
 	const here = config()?.host.repos;
 	if (!here) return undefined;
 	try {
 		return here.some((repo) => {
 			const q = JSON.parse(execFileSync("python3", [QUEUE, "list"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZSTACK_REPO: repo } }));
-			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => v.thread === thread && v.readonly));
+			return [q.running, q.waiting].some((part: Record<string, { thread: string; readonly: boolean }>) => Object.values(part).some((v) => threads.includes(v.thread) && v.readonly));
 		});
 	} catch {
 		return undefined;

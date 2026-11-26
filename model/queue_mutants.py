@@ -7,10 +7,38 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
-RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
-           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
+    (
+        "launch-below-the-disk-floor",
+        "the pass launches a thread on a machine whose free disk is below run.disk_floor_gb",
+        [("  /\\ m \\notin full\n  /\\ ~(i", "  /\\ ~(i")],
+        "NoLaunchBelowTheDiskFloor",
+        RESUMES,
+    ),
+    (
+        "relaunch-below-the-disk-floor",
+        "the pass sends an ended wait back to its thread on a machine whose free disk is below run.disk_floor_gb",
+        [("/\\ Busy(m) < Cap /\\ m \\notin full\n  /\\ Needed(i)", "/\\ Busy(m) < Cap\n  /\\ Needed(i)")],
+        "NoLaunchBelowTheDiskFloor",
+        RESUMES,
+    ),
+    (
+        "a-full-disk-stops-the-pass-merge",
+        "a pass on a machine below its disk floor merges no approved waiting PR",
+        [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ m \\notin full /\\ Merge")],
+        LIVE,
+        RESUMES,
+    ),
+    (
+        "a-full-disk-stops-the-settle",
+        "a pass on a machine below its disk floor never clears a waiting item whose PR merged",
+        [('Settle(m, i) == q[m][i] = "waiting"', 'Settle(m, i) == m \\notin full /\\ q[m][i] = "waiting"')],
+        LIVE,
+        RESUMES,
+    ),
     (
         "overlapping-filters",
         "two machines whose label filters overlap both queue one item",
@@ -211,7 +239,7 @@ M = [
         [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
-          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, by, okAtMerge, ')],
+          '  /\\ UNCHANGED <<held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, by, okAtMerge, ')],
         "ASecondDropIsNotQueued",
         RESUMES,
     ),

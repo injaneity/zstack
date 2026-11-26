@@ -22,12 +22,15 @@ verifier = { provider = "codex", model = "gpt-6.1-terra" }
 # threads this machine works at once (queue.py pass launches none past it). `t3` is the T3 Code command `queue.py pass`
 # starts and reads threads with: a name on PATH, or a path from / or ~/. `lost_min` is how many minutes an item whose
 # start went unanswered waits, with no thread for it listed, before `queue.py pass` launches it again (the invariant
-# one-launch).
+# one-launch). `disk_floor_gb` is the least free space, in gigabytes of 2^30 bytes as `df -h` counts them, that the
+# filesystems of the clone and of the worktrees this machine holds may have: below it `queue.py pass` launches nothing,
+# and still settles and merges what it holds.
 [run]
 idle_min = 150
 threads = 3
 t3 = "t3"
 lost_min = 15
+disk_floor_gb = 20
 
 # Where queue.py sends a wake for the owner: a POST of one JSON object to `url`, with the bearer
 # token read from `key_file`. An empty or missing key file sends nothing.
