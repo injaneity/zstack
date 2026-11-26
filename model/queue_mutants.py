@@ -210,7 +210,7 @@ M = [
         [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
-          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, by, okAtMerge, ')],
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, red, by, okAtMerge, ')],
         "ASecondDropIsNotQueued",
         RESUMES,
     ),
@@ -223,14 +223,21 @@ M = [
     ),
     (
         "a-broken-passed-head-is-stuck",
-        "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
+        "a waiting PR whose passed head conflicts with its base waits on its ended thread for good",
         [(' \\/ Stands(i) \\/ i \\in broken)\nResume', ' \\/ Stands(i))\nResume')],
         LIVE,
         RESUMES,
     ),
     (
+        "resume-a-red-passed-head",
+        "a waiting PR whose head the verifier passed, and whose only need is a red ci-gate, goes back to tasks once its thread has ended",
+        [(' \\/ Stands(i) \\/ i \\in broken)\nResume', ' \\/ Stands(i) \\/ i \\in broken \\/ i \\in red)\nResume')],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
         "merge-a-broken-head",
-        "the gate or the pass merges a passed head that conflicts with its base or has a red ci-gate",
+        "the gate or the pass merges a passed head that conflicts with its base",
         [('/\\ i \\notin held /\\ i \\notin broken\n', '/\\ i \\notin held\n')],
         "OnlyAVerifiedAllowedHeadMerges",
         RESUMES,
