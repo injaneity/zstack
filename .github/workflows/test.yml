@@ -52,6 +52,8 @@ jobs:
         run: node --test tests/rule-guard.test.ts
       - name: subagent children get their role prompt and no session rules
         run: node --test tests/subagent-prompt.test.ts
+      - name: a subagent child carries its own thread id and a link to its parent's
+        run: node --test tests/subagent-env.test.ts
       - name: a bash call with no timeout is bounded by run.idle_min
         run: node --test tests/tool-guard.test.ts
       - name: the Claude Code hook

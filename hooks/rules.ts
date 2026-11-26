@@ -239,6 +239,7 @@ function ghLabels(c: Cmd, owned: Owned, host: Host): string | undefined {
 	return api || !mine ? hit : `it adds, removes or changes the label \`${hit.trim()}\`, which only the owner sets (the invariant own-controls)`;
 }
 export const THREAD_VAR = "T3CODE_THREAD_ID";
+export const PARENT_THREAD_VAR = "ZSTACK_PARENT_THREAD_ID";
 
 const GH_READS = new Set(["view", "list", "status", "checks", "diff", "checkout", "download", "watch", "clone"]);
 const GH_READ_GROUPS = new Set(["search", "auth", "status", "help", "version", "completion", "browse"]);
@@ -257,8 +258,9 @@ function threadOnly(c: Cmd, owned: Owned, host: Host, cwd: string | undefined): 
 	if (owned && (!owned.size || !at || !owned.has(at))) return undefined;
 	if (c.raw.some((a) => /queue\.json/.test(a)))
 		return "it names the queue's file: a thread reads the queue with `queue.py list` and never touches the file";
-	if (c.raw.some((a) => a === THREAD_VAR || a.startsWith(`${THREAD_VAR}=`)))
-		return `it sets or clears ${THREAD_VAR}: the queue tells an item's own thread from its verifier by it`;
+	const set = [THREAD_VAR, PARENT_THREAD_VAR].find((v) => c.raw.some((a) => a === v || a.startsWith(`${v}=`)));
+	if (set)
+		return `it sets or clears ${set}: the queue tells an item's own thread from its verifier by ${THREAD_VAR}, and a subagent's parent by ${PARENT_THREAD_VAR}`;
 	const w = c.words, i = w.findIndex((a) => /(^|\/)queue\.py$/.test(a));
 	if (i >= 0 && i <= 2 && w[i + 1] === "verified" && !host.thread)
 		return `\`queue.py verified\` from a session with no ${THREAD_VAR}: the guard cannot tell it from the item's own coding thread, which never records its verdict`;
