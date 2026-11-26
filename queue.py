@@ -121,7 +121,8 @@ MACHINE = {
     "models": {role: SEAT for role in ("coding", "explorer", "designer", "verifier")},
     "run": {"idle_min": (pos_int, "a positive integer"), "threads": (pos_int, "a positive integer"),
             "t3": (text, "the T3 Code command: a name on PATH or a path"),
-            "lost_min": (lambda v: pos_int(v) and v * 60 > START_SECONDS, f"whole minutes, more than the {START_SECONDS} seconds a start may take")},
+            "lost_min": (lambda v: pos_int(v) and v * 60 > START_SECONDS, f"whole minutes, more than the {START_SECONDS} seconds a start may take"),
+            "disk_floor_gb": (pos_int, "a positive integer")},
     "wake": {"url": (lambda v: text(v) and v.startswith("https://"), "an https URL"), "key_file": PATHISH},
 }
 PLACE = {"clone": PATHISH, "root": PATHISH, "labels": (names, "a list of distinct label names"),
