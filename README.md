@@ -56,6 +56,7 @@ An invariant names a value by its key in braces (`{merge.repo}`) and `queue.py` 
 ## what a coding thread gets
 
 - **`onigiri-mode`**: the one skill it reads. The hard rule (one thread, one task), the working choices this stack makes, the delegates and when to use each, autonomy, and the pull-requests playbook.
+- **`hillclimb`**: iterative optimization against one measurable target with a calibrated local evaluator, locked best commits, plateau diagnosis, and an append-only decision log.
 - **`unslop`**: strips AI tells from prose.
 - **`create-verification-skill`** and **`maintain-verification-skill`**: generate a repo's own `verify-<app>` skill that launches the real app, drives it like a user and captures evidence, then keep its feature map honest.
 - **`statechart`**, **`create-formal-verification-skill`** and **`maintain-formal-verification-skill`**: pstack's own text, changed only to use the bundled checker. statechart model-checks a TLA+ spec and draws it as a Mermaid statechart.
