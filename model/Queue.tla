@@ -3,15 +3,15 @@ EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills
 
-VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull
+VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull
 
-vars == <<q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull>>
+vars == <<q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull>>
 States == {"none", "running", "waiting", "done"}
 
 TypeOK ==
   /\ q \in [Machines -> [Items -> States]] /\ Paged \subseteq Items
   /\ held \subseteq Items /\ pre \subseteq Items /\ unread \subseteq Garbles /\ up \in BOOLEAN /\ pr \subseteq Items /\ stale \subseteq Items /\ merged \subseteq Items
-  /\ Queues \subseteq Items /\ Retries \subseteq Queues /\ Resumes \subseteq Items /\ Hooked \subseteq Items /\ Fills \subseteq Machines /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN /\ retried \subseteq Queues /\ broken \subseteq Items
+  /\ Queues \subseteq Items /\ Retries \subseteq Queues /\ Resumes \subseteq Items /\ Hooked \subseteq Items /\ Fills \subseteq Machines /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN /\ retried \subseteq Queues /\ broken \subseteq Items /\ red \subseteq Items
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
   /\ thread \subseteq Items /\ pending \subseteq Items /\ twoThreads \in BOOLEAN /\ diedCleared \in BOOLEAN /\ unmarkedCleared \in BOOLEAN /\ refusedRerun \in BOOLEAN
@@ -22,7 +22,7 @@ Init ==
   /\ q = [m \in Machines |-> [i \in Items |-> "none"]]
   /\ held = {} /\ pre = Pre /\ unread = {} /\ up = TRUE /\ pr = {} /\ stale = {} /\ merged = {}
   /\ status = [i \in Items |-> "none"]
-  /\ inq = {} /\ gone = {} /\ lost = {} /\ dropped = {} /\ requeued = FALSE /\ retried = {} /\ broken = {}
+  /\ inq = {} /\ gone = {} /\ lost = {} /\ dropped = {} /\ requeued = FALSE /\ retried = {} /\ broken = {} /\ red = {}
   /\ by = [i \in Items |-> "none"] /\ okAtMerge = [i \in Items |-> FALSE]
   /\ thread = {} /\ pending = {} /\ twoThreads = FALSE /\ diedCleared = FALSE /\ unmarkedCleared = FALSE /\ refusedRerun = FALSE
   /\ full = {} /\ launchedFull = FALSE
@@ -30,7 +30,7 @@ Init ==
 
 Set(m, i, s) == q' = [q EXCEPT ![m][i] = s]
 Busy(m) == Cardinality({j \in Items : q[m][j] = "running"})
-drops == <<gone, lost, dropped, requeued, retried, broken>>
+drops == <<gone, lost, dropped, requeued, retried, broken, red>>
 work == <<pre, unread, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge>>
 history == <<startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull>>
 
@@ -57,20 +57,21 @@ Relaunch(m, i) == q[m][i] = "none" /\ i \in Resumes /\ i \in pr /\ i \notin held
 Takes(m, i) == q[m][i] \in {"running", "waiting"}
 Push(m, i) == Takes(m, i) /\ i \notin NoTree /\ i \notin merged
   /\ pr' = pr \cup {i} /\ status' = [status EXCEPT ![i] = "none"] /\ stale' = stale \cup {i}
-  /\ inq' = inq \ {i} /\ gone' = gone \ {i} /\ dropped' = dropped \ {i} /\ retried' = retried \ {i} /\ broken' = broken \ {i}
+  /\ inq' = inq \ {i} /\ gone' = gone \ {i} /\ dropped' = dropped \ {i} /\ retried' = retried \ {i} /\ broken' = broken \ {i} /\ red' = red \ {i}
   /\ UNCHANGED <<q, held, pre, unread, up, full, merged, lost, requeued, by, okAtMerge, history>>
 Verdict(m, i, v) == Takes(m, i) /\ i \in pr /\ i \notin merged
   /\ status' = [status EXCEPT ![i] = v] /\ stale' = stale \ {i}
   /\ UNCHANGED <<q, held, pre, unread, up, full, pr, merged, inq, drops, by, okAtMerge, history>>
 
 Open(i) == status[i] # "none" /\ ~NeedsPerson(i) /\ i \notin held /\ i \notin broken
-MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ ~Stands(i) /\ i \notin broken /\ (who = "pass" => i \in pre /\ i \notin Review)
+  /\ i \notin red
+MayMerge(i, who) == status[i] # "none" /\ i \notin stale /\ ~NeedsPerson(i) /\ i \notin held /\ ~Stands(i) /\ i \notin broken /\ i \notin red /\ (who = "pass" => i \in pre /\ i \notin Review)
 Merge(i, who) == i \in pr /\ i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = who]
   /\ okAtMerge' = [okAtMerge EXCEPT ![i] = MayMerge(i, who)] /\ inq' = inq \ {i}
   /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, drops, history>>
 Enqueue(i) == inq' = inq \cup {i} /\ okAtMerge' = [okAtMerge EXCEPT ![i] = MayMerge(i, "pass")] /\ requeued' = (requeued \/ i \in gone /\ (i \notin Retries \/ i \in retried))
   /\ retried' = retried \cup ({i} \cap gone) /\ gone' = gone \ {i} /\ dropped' = dropped \ {i}
-  /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, merged, lost, broken, by, history>>
+  /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, merged, lost, broken, red, by, history>>
 MergeOrQueue(i) == IF i \in Queues THEN Enqueue(i) ELSE Merge(i, "pass")
 ThreadMerge(m, i) == Takes(m, i) /\ Open(i) /\ ~Stands(i) /\ Merge(i, "thread")
 PassReady(m, i) == q[m][i] = "waiting" /\ i \in pr /\ i \notin merged /\ Open(i) /\ i \in pre /\ i \notin Review /\ i \notin unread /\ i \notin inq /\ i \notin lost /\ ~Stands(i)
@@ -79,9 +80,9 @@ Dequeue(m, i) == q[m][i] = "waiting" /\ i \in inq /\ i \in held /\ inq' = inq \ 
 Land(i) == i \in inq /\ i \notin merged /\ merged' = merged \cup {i} /\ by' = [by EXCEPT ![i] = "pass"] /\ inq' = inq \ {i}
   /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, drops, okAtMerge, history>>
 Drop(i) == i \in inq /\ inq' = inq \ {i} /\ gone' = gone \cup {i} /\ lost' = lost \cup {i}
-  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, dropped, requeued, retried, broken, by, okAtMerge, history>>
+  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, dropped, requeued, retried, broken, red, by, okAtMerge, history>>
 Observe(m, i) == q[m][i] = "waiting" /\ i \in lost /\ lost' = lost \ {i} /\ dropped' = dropped \cup ({i} \cap gone)
-  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, requeued, retried, broken, by, okAtMerge, history>>
+  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, requeued, retried, broken, red, by, okAtMerge, history>>
 HumanMerge(i) == (\E m \in Machines : Takes(m, i)) /\ Merge(i, "human")
 
 Unverified(i) == i \in pr /\ i \notin merged /\ i \in stale
@@ -127,7 +128,9 @@ Unhold(i) == i \in held /\ held' = held \ {i} /\ UNCHANGED <<q, work, history>>
 Approve(i) == i \notin pre /\ pre' = pre \cup {i} /\ UNCHANGED <<q, held, unread, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Garble(i) == i \in Garbles /\ i \in pr /\ i \notin merged /\ (\E m \in Machines : q[m][i] = "waiting") /\ i \notin unread /\ unread' = unread \cup {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Break(i) == i \in Resumes /\ i \in pr /\ i \notin merged /\ i \notin broken /\ broken' = broken \cup {i}
-  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, by, okAtMerge, history>>
+  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, red, by, okAtMerge, history>>
+Redden(i) == i \in Resumes /\ i \in pr /\ i \notin merged /\ i \notin red /\ red' = red \cup {i}
+  /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, by, okAtMerge, history>>
 Fill(m) == m \in Fills /\ m \notin full /\ full' = full \cup {m} /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Prune(m) == m \in full /\ full' = full \ {m} /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Mend(i) == i \in unread /\ unread' = unread \ {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
@@ -137,7 +140,7 @@ Next ==
        Launch(m, i) \/ Relaunch(m, i) \/ Push(m, i) \/ ThreadMerge(m, i) \/ PassMerge(m, i) \/ Dequeue(m, i) \/ Observe(m, i) \/ TurnEnd(m, i) \/ Freed(m, i) \/ Die(m, i) \/ Abort(m, i) \/ Settle(m, i)
        \/ Resume(m, i) \/ Unresume(m, i) \/ Unblock(m, i)
        \/ Verdict(m, i, "auto") \/ Verdict(m, i, "review") \/ Verdict(m, i, "none")
-  \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Break(i) \/ Started(i) \/ Lost(i)
+  \/ \E i \in Items : HumanMerge(i) \/ Hold(i) \/ Unhold(i) \/ Approve(i) \/ Garble(i) \/ Mend(i) \/ Break(i) \/ Redden(i) \/ Started(i) \/ Lost(i)
      \/ Land(i) \/ Drop(i)
   \/ \E m \in Machines : Fill(m) \/ Prune(m)
   \/ Flip

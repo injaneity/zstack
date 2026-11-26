@@ -1232,8 +1232,9 @@ def needs(pol, it, v, live):
     elif live.get("mergeable") == "CONFLICTING":
         out.append(("a merge conflict", f"GitHub says the PR conflicts with {base}. Merge origin/{base} into the branch, settle the conflicts, "
                                         "and push."))
-    if any((c.get("name") or c.get("context")) == gate_name and (c.get("conclusion") or c.get("state")) in RED
-           for c in live.get("statusCheckRollup") or []):
+    red = any((c.get("name") or c.get("context")) == gate_name and (c.get("conclusion") or c.get("state")) in RED
+              for c in live.get("statusCheckRollup") or [])
+    if red and (out or not passed):
         out.append((f"{gate_name} red", f"{gate_name} failed on head {head}. Read its logs, fix what the diff caused, rerun a job that failed "
                                          "for a reason outside the diff, and push."))
     if not passed:
