@@ -963,15 +963,22 @@ class Approve(Case):
                  ("draft", "fail", {"draft": True}, "failed"),
                  ("green", "auto", {}, "completed"), ("fork", "fail", {"fork": True}, "completed"),
                  ("red", "auto", {"ci": "FAILURE"}, "completed"), ("unverified", "fail", {}, "interrupted"),
-                 ("moved", "auto", {"head": H2}, "cancelled"), ("gone", "auto", {"mergeable": "CONFLICTING"}, "gone"))
+                 ("moved", "auto", {"head": H2}, "cancelled"), ("gone", "auto", {"mergeable": "CONFLICTING"}, "gone"),
+                 ("red-failed", "fail", {"ci": "FAILURE"}, "completed"), ("approved-red", "auto", {"ci": "FAILURE"}, "completed"),
+                 ("red-conflict", "auto", {"ci": "FAILURE", "mergeable": "CONFLICTING"}, "completed"))
         for n, (ident, said, pr, _) in enumerate(cases):
             self.waiting(ident, pr=60 + n, said=said)
             self.forge.prs[60 + n].update(pr)
         queue.approve(self.pol, "approved-flagged")
+        queue.approve(self.pol, "approved-red")
         self.status, self.pol["run"]["threads"] = {f"t-{c[0]}": c[3] for c in cases}, 0
         got = queue.step(self.pol)
-        work = {"red": f"{M['gate_check']} red", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
-                "gone": "a merge conflict"}
+        gate = f"{M['gate_check']} red"
+        work = {"unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}", "gone": "a merge conflict",
+                "red-failed": f"{gate}, no pass for head {H1[:12]}", "red-conflict": f"a merge conflict, {gate}"}
+        self.assertEqual({x["id"]: x["why"] for x in got["kept"] if x["id"] in ("red", "approved-red")},
+                         {"red": f"PR 69 waits for the owner: {M['gate_check']} has not passed on that head",
+                          "approved-red": f"PR 74 waits for the owner: {M['gate_check']} has not passed on that head"})
         self.assertEqual(sorted((x["id"], x["why"]) for x in got["cleared"]),
                          sorted((k, f"its thread has ended, and PR {60 + [c[0] for c in cases].index(k)} waits on that thread's work ({w}), so it "
                                     "goes back to tasks") for k, w in work.items()))
@@ -980,7 +987,7 @@ class Approve(Case):
         self.assertEqual((len(queue.step(self.pol)["cleared"]), self.file()["tasks"]), (len(work), tasks))
         self.assertIn(f"The verifier failed head {H1}: fix its findings and push.", tasks["unverified"]["task"])
         self.assertIn(f"The verifier has not passed head {H2}: have it check the head you end on.", tasks["moved"]["task"])
-        self.assertIn(f"{M['gate_check']} failed on head {H1}. Read its logs", tasks["red"]["task"])
+        self.assertIn(f"{M['gate_check']} failed on head {H1}. Read its logs", tasks["red-failed"]["task"])
         self.assertIn("GitHub says the PR conflicts with main. Merge origin/main", tasks["gone"]["task"])
 
     def test_a_wait_on_a_pr_another_item_holds_stays_and_of_two_ended_waits_on_one_pr_one_goes_back(self):
