@@ -971,8 +971,8 @@ class Approve(Case):
         queue.approve(self.pol, "approved-flagged")
         self.status, self.pol["run"]["threads"] = {f"t-{c[0]}": c[3] for c in cases}, 0
         got = queue.step(self.pol)
-        work = {"red-moved": f"{M['gate_check']} red, no pass for head {H2[:12]}", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
-                "gone": "a merge conflict"}
+        work = {"red-moved": f"{M['gate_check']} red, no pass for head {H2[:12]}", "unverified": f"no pass for head {H1[:12]}",
+                "moved": f"no pass for head {H2[:12]}", "gone": "a merge conflict"}
         self.assertEqual(sorted((x["id"], x["why"]) for x in got["cleared"]),
                          sorted((k, f"its thread has ended, and PR {60 + [c[0] for c in cases].index(k)} waits on that thread's work ({w}), so it "
                                     "goes back to tasks") for k, w in work.items()))

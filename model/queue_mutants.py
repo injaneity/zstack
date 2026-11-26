@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
-RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n',
-           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Hooked = {"i3"}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Hooked = {"i1", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -210,7 +210,7 @@ M = [
         [('Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i))\n'
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
-          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, by, okAtMerge, ')],
+          '  /\\ UNCHANGED <<held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, red, by, okAtMerge, ')],
         "ASecondDropIsNotQueued",
         RESUMES,
     ),
@@ -223,15 +223,30 @@ M = [
     ),
     (
         "a-broken-passed-head-is-stuck",
-        "a waiting PR whose passed head conflicts with its base or has a red ci-gate waits on its ended thread for good",
+        "a waiting PR whose passed head conflicts with its base waits on its ended thread for good",
         [(' \\/ Stands(i) \\/ i \\in broken)\nResume', ' \\/ Stands(i))\nResume')],
         LIVE,
         RESUMES,
     ),
     (
+        "resume-a-passed-red-head",
+        "a waiting PR whose ci-gate is red on a head that has a pass goes back to tasks on every pass, though main may be what is red",
+        [(' \\/ i \\in broken)\nResume', ' \\/ i \\in broken \\/ i \\in red)\nResume')],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
+        "resume-after-a-thread-that-pushed-nothing",
+        "a waiting PR whose ci-gate is red, whose head failed, and whose ended thread pushed nothing goes back to tasks on every pass",
+        [('(status[i] = "none" /\\ ~Quiet(i) \\/ Stands(i) \\/ i \\in broken)\nResume',
+          '(status[i] = "none" \\/ Stands(i) \\/ i \\in broken)\nResume')],
+        "AResumedThreadIsNeeded",
+        RESUMES,
+    ),
+    (
         "merge-a-broken-head",
         "the gate or the pass merges a passed head that conflicts with its base or has a red ci-gate",
-        [('/\\ i \\notin held /\\ i \\notin broken\n', '/\\ i \\notin held\n')],
+        [('/\\ i \\notin held /\\ i \\notin broken \\cup red\n', '/\\ i \\notin held\n')],
         "OnlyAVerifiedAllowedHeadMerges",
         RESUMES,
     ),

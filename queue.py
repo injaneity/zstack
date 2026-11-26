@@ -1198,7 +1198,7 @@ def in_queue(pol, key, it, live):
 RED = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE")
 
 
-def needs(pol, it, v, live):
+def needs(pol, it, v, live, died=False):
     if it["readonly"] or it["kind"] == "review" and it["pr"] == it["n"] or live.get("isCrossRepository"):
         return []
     if held(pol, it, live) or live.get("isDraft"):
@@ -1213,12 +1213,14 @@ def needs(pol, it, v, live):
     elif live.get("mergeable") == "CONFLICTING":
         out.append(("a merge conflict", f"GitHub says the PR conflicts with {base}. Merge origin/{base} into the branch, settle the conflicts, "
                                         "and push."))
-    if any((c.get("name") or c.get("context")) == gate_name and (c.get("conclusion") or c.get("state")) in RED
-           for c in live.get("statusCheckRollup") or []):
+    red = any((c.get("name") or c.get("context")) == gate_name and (c.get("conclusion") or c.get("state")) in RED
+              for c in live.get("statusCheckRollup") or [])
+    quiet = red and not died and bool(it["thread"]) and hooked(pol) and pushes(pol, it) == []
+    failed = bool(v) and v["result"] == "fail" and v["head"] == head
+    if red and not passed and not quiet:
         out.append((f"{gate_name} red", f"{gate_name} failed on head {head}. Read its logs, fix what the diff caused, rerun a job that failed "
                                          "for a reason outside the diff, and push."))
-    if not passed:
-        failed = bool(v) and v["result"] == "fail" and v["head"] == head
+    if not passed and not (failed and quiet):
         out.append((f"no pass for head {head[:12]}", f"The verifier failed head {head}: fix its findings and push." if failed else
                     f"The verifier has not passed head {head}: have it check the head you end on."))
     return out
@@ -1317,7 +1319,7 @@ def outcome(pol, q, key, merge=False, died=False):
         said = in_queue(pol, key, it, live) if merge and live and live["state"] == "OPEN" else None
         if said:
             v = q["verdicts"].get(str(it["pr"]))
-            need = needs(pol, it, v, live) if standing(it)[1] and standing(it) != was else []
+            need = needs(pol, it, v, live, died) if standing(it)[1] and standing(it) != was else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
@@ -1328,7 +1330,7 @@ def outcome(pol, q, key, merge=False, died=False):
             if not why:
                 live, why = pr_view(pol, it["pr"]), "the pass merged it, and GitHub still shows it open"
         if live and live["state"] == "OPEN":
-            need = needs(pol, it, v, live) if merge and not it.get("queued") else []
+            need = needs(pol, it, v, live, died) if merge and not it.get("queued") else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
             tidy(pol, it, False)
