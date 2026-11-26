@@ -962,7 +962,8 @@ class Approve(Case):
                  ("approved-flagged", "auto", {"labels": [M["review_label"]], "mergeable": "CONFLICTING"}, "completed"),
                  ("draft", "fail", {"draft": True}, "failed"),
                  ("green", "auto", {}, "completed"), ("fork", "fail", {"fork": True}, "completed"),
-                 ("red", "auto", {"ci": "FAILURE"}, "completed"), ("unverified", "fail", {}, "interrupted"),
+                 ("red", "auto", {"ci": "FAILURE"}, "completed"), ("red-moved", "auto", {"head": H2, "ci": "FAILURE"}, "completed"),
+                 ("unverified", "fail", {}, "interrupted"),
                  ("moved", "auto", {"head": H2}, "cancelled"), ("gone", "auto", {"mergeable": "CONFLICTING"}, "gone"))
         for n, (ident, said, pr, _) in enumerate(cases):
             self.waiting(ident, pr=60 + n, said=said)
@@ -970,7 +971,7 @@ class Approve(Case):
         queue.approve(self.pol, "approved-flagged")
         self.status, self.pol["run"]["threads"] = {f"t-{c[0]}": c[3] for c in cases}, 0
         got = queue.step(self.pol)
-        work = {"red": f"{M['gate_check']} red", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
+        work = {"red-moved": f"{M['gate_check']} red, no pass for head {H2[:12]}", "unverified": f"no pass for head {H1[:12]}", "moved": f"no pass for head {H2[:12]}",
                 "gone": "a merge conflict"}
         self.assertEqual(sorted((x["id"], x["why"]) for x in got["cleared"]),
                          sorted((k, f"its thread has ended, and PR {60 + [c[0] for c in cases].index(k)} waits on that thread's work ({w}), so it "
@@ -980,8 +981,32 @@ class Approve(Case):
         self.assertEqual((len(queue.step(self.pol)["cleared"]), self.file()["tasks"]), (len(work), tasks))
         self.assertIn(f"The verifier failed head {H1}: fix its findings and push.", tasks["unverified"]["task"])
         self.assertIn(f"The verifier has not passed head {H2}: have it check the head you end on.", tasks["moved"]["task"])
-        self.assertIn(f"{M['gate_check']} failed on head {H1}. Read its logs", tasks["red"]["task"])
+        self.assertIn(f"{M['gate_check']} failed on head {H2}. Read its logs", tasks["red-moved"]["task"])
         self.assertIn("GitHub says the PR conflicts with main. Merge origin/main", tasks["gone"]["task"])
+
+    def test_a_red_gate_on_a_head_with_a_pass_or_a_thread_that_pushed_nothing_waits_for_the_owner_on_every_pass(self):
+        for n, (ident, said) in enumerate((("passed", "auto"), ("quiet", "fail"), ("pushed", "fail"), ("died", "fail"))):
+            self.run_(ident, thread=f"t-{ident}")
+            self.pr_open(40 + n)
+            self.forge.prs[40 + n]["ci"] = "FAILURE"
+            queue.verified(self.pol, ident, 40 + n, H1, said)
+            if ident == "pushed":
+                queue.log_push(self.pol, "origin", "refs/heads/pushed", H1, cwd="/nowhere/wt-pushed")
+            self.assertEqual(queue.release(self.pol, ident, died=ident == "died")["state"], "waiting")
+        self.status = {f"t-{x}": "completed" for x in ("passed", "quiet", "pushed", "died")}
+        self.pol["run"]["threads"] = 0
+        red = f"{M['gate_check']} red, no pass for head {H1[:12]}"
+        kept = {"passed": f"PR 40 waits for the owner: {M['gate_check']} has not passed on that head",
+                "quiet": f"PR 41 waits for the owner: the verifier has not passed head {H1}"}
+        with self.trees():
+            got = queue.step(self.pol)
+            self.assertEqual(sorted((x["id"], x["why"]) for x in got["cleared"]),
+                             [(x, f"its thread has ended, and PR {pr} waits on that thread's work ({red}), so it goes back to tasks")
+                              for x, pr in (("died", 43), ("pushed", 42))])
+            self.assertEqual(({x["id"]: x["why"] for x in got["kept"]}, sorted(self.file()["waiting"])), (kept, ["passed", "quiet"]))
+            got = queue.step(self.pol)
+            self.assertEqual(({x["id"]: x["why"] for x in got["kept"]}, sorted(self.file()["waiting"])), (kept, ["passed", "quiet"]))
+        self.assertEqual(sorted(self.file()["tasks"]), ["died", "pushed"])
 
     def test_a_wait_on_a_pr_another_item_holds_stays_and_of_two_ended_waits_on_one_pr_one_goes_back(self):
         self.waiting("a", pr=40, said="fail")
