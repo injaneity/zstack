@@ -1067,6 +1067,15 @@ class Release(Case):
         self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
         self.assertEqual(len(self.wakes), 1)
 
+    def test_a_subagents_end_leaves_its_parents_slot_and_its_verdict_records_for_the_parents_item(self):
+        self.run_("a", thread="t-a")
+        self.pr_open(40)
+        with patch.dict(os.environ, {queue.THREAD_VAR: "subagent:s-a-verifier-1"}):
+            self.assertEqual(queue.release(self.pol), {"released": None})
+            self.assertIn("a", self.file()["running"])
+            queue.verified(self.pol, "a", 40, H1, "auto")
+        self.assertEqual(queue.gate(self.pol, 40, H1), {"merge": 40, "head": H1})
+
     def test_a_finished_item_is_forgotten_and_is_not_picked_up_again_while_the_repo_still_lists_it(self):
         self.cands = [cand(1), cand(2)]
         self.start("app-1", "t-1", "/nowhere/1")

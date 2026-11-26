@@ -10,6 +10,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { childEnv } from "./env.ts";
 import { buildChildPrompt, expandRules, onSeatProblem, ruleIds } from "./prompt.ts";
 
 const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -18,18 +19,6 @@ const QUEUE = path.join(PACKAGE_DIR, "queue.py");
 const CHILD_SESSIONS = path.join(getAgentDir(), "sessions", "subagents");
 const rawDepth = process.env.PI_SUBAGENT_DEPTH ?? "";
 const SUBAGENT_DEPTH = rawDepth === "" ? 0 : /^\d+$/.test(rawDepth) ? Number(rawDepth) : 1;
-const CREDENTIAL_ENV = /TOKEN|SECRET|PASSW|CREDENTIAL|API_KEY|ACCESS_KEY|PRIVATE_KEY|AUTH|ASKPASS/i;
-const MODEL_PROVIDER_ENV =
-	/^(ANTHROPIC|CLAUDE_CODE|OPENAI|AZURE_OPENAI|AI_GATEWAY|GEMINI|GOOGLE|GCLOUD|AWS|MISTRAL|GROQ|CEREBRAS|XAI|OPENROUTER|DEEPSEEK|MOONSHOT|KIMI|MINIMAX|ZAI|HF|FIREWORKS|TOGETHER|BASETEN|OPENCODE|META|CLOUDFLARE|XIAOMI|QWEN|ANT_LING|NVIDIA|RADIUS|TYPESAFE)_/;
-
-function childEnv(ghConfigDir: string): NodeJS.ProcessEnv {
-	const env: NodeJS.ProcessEnv = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (CREDENTIAL_ENV.test(key) && !MODEL_PROVIDER_ENV.test(key)) continue;
-		env[key] = value;
-	}
-	return { ...env, GH_CONFIG_DIR: ghConfigDir, GIT_TERMINAL_PROMPT: "0", PI_SUBAGENT_DEPTH: String(SUBAGENT_DEPTH + 1) };
-}
 
 interface Seat {
 	provider: string;
@@ -230,7 +219,7 @@ async function runSingleAgent(
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
-				env: childEnv(path.join(tmpPromptDir as string, "gh")),
+				env: childEnv(process.env, SUBAGENT_DEPTH, path.join(tmpPromptDir as string, "gh"), launch.sessionId),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
