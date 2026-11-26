@@ -146,7 +146,7 @@ M = [
         "an item whose thread's turn ended, or that went idle, holds its slot for good",
         [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
          ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up'),
-         ("Idle(m, i) == Die(m, i)", "Idle(m, i) == FALSE /\\ Die(m, i)")],
+         ('Idle(m, i) == q[m][i] = "running"', 'Idle(m, i) == FALSE /\\ q[m][i] = "running"')],
         LIVE,
     ),
     (
@@ -254,6 +254,18 @@ M = [
         "an-idle-thread-holds-its-slot",
         "a thread that hangs or waits on a question holds its slot for good, as when run.idle_min was read nowhere",
         [("Fair == \\A m \\in Machines, i \\in Items : WF_vars(Idle(m, i))", "Fair == \\A m \\in Machines, i \\in Items : TRUE")],
+        LIVE,
+    ),
+    (
+        "rerun-a-live-idle-thread",
+        "an item freed as idle runs again while its old thread still lives",
+        [("IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle /\\ i \\notin thread", "IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle")],
+        "OneThreadPerItem",
+    ),
+    (
+        "keep-an-ended-idle-item",
+        "an item freed as idle waits for good after its old thread ends",
+        [("Rerun(m, i) == IdleOver(m, i) /\\", "Rerun(m, i) == FALSE /\\ IdleOver(m, i) /\\")],
         LIVE,
     ),
     (

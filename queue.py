@@ -824,11 +824,13 @@ def reconcile(pol):
                 continue
             if not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
-            if seen["thread"]["status"] in DEAD:
-                dead.append((key, seen["thread"]["status"] in DIED))
-            elif since(seen["thread"]["updatedAt"]) >= pol["run"]["idle_min"] * 60:
+            t = seen["thread"]
+            if t["status"] in DEAD:
+                dead.append((key, t["status"] in DIED))
+            elif since(t["updatedAt"]) >= pol["run"]["idle_min"] * 60 and (
+                    t.get("pendingRequestCount") or not (t.get("pendingBackgroundTasks") or t.get("blockedOnThreadWait"))):
                 it["idle"], changed = pol["run"]["idle_min"], True
-                dead.append((key, True))
+                dead.append((key, False))
         return dead, changed
     return locked(pol, go)
 
@@ -1284,14 +1286,17 @@ def outcome(pol, q, key, merge=False, died=False):
     ran = key in q["running"]
     it = q["running"].pop(key, None) or q["waiting"].pop(key)
     tracked = it["pr"]
-    died, idle = died or it.pop("died", False), it.pop("idle", None)
+    died = died or it.pop("died", False)
     back = died or not it.get("complete")
-    ended_as = (f"its thread showed nothing new for run.idle_min ({idle} minutes)" if idle else
-                "its thread died" if died else "its thread ended, not marked complete,")
+    ended_as = "its thread died" if died else "its thread ended, not marked complete,"
+    if it.get("idle") and ended(pol, it):
+        it.pop("idle")
+    idle = (f"its thread showed nothing new for run.idle_min ({it['idle']} minutes) and has not ended, so its slot is freed, and it "
+            "runs again once that thread ends" if it.get("idle") else None)
 
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
-        return "waiting", why
+        return "waiting", f"{why}; {idle}" if idle and why != idle else why
 
     def note():
         known = "refused" not in it and it.get("logged") and (it["worktree"] or it["thread"])
@@ -1342,9 +1347,11 @@ def outcome(pol, q, key, merge=False, died=False):
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        if not it["pr"]:
+        if not it["pr"] and not idle:
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
+    if idle and not (live and live["state"] == "MERGED"):
+        return wait(idle)
     rows = pushes(pol, it) if live and live["state"] != "OPEN" and not tracked and (it["worktree"] or it["thread"]) else None
     before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
     stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})
