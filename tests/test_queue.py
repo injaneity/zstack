@@ -19,7 +19,7 @@ _spec.loader.exec_module(queue)
 BASE = queue.load()
 REPO, M = BASE["merge"]["repo"], BASE["merge"]
 READS = (queue.candidates, queue.open_prs)
-LAUNCH, T3 = queue.launch, queue.t3
+LAUNCH, T3, DISK = queue.launch, queue.t3, queue.disk_free
 H1, H2 = "a" * 40, "b" * 40
 GATE = {"name": M["gate_check"], "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "t"}
 
@@ -114,8 +114,9 @@ class Case(unittest.TestCase):
         self.pol["host"]["root"] = str(self.root)
         self.pol["run"]["threads"] = 2
         self.forge, self.cands, self.open, self.wakes, self.woken = Forge(), [], {}, [], []
-        self.threads, self.briefed, self.status, self.t3_down, self.listing = {}, [], {}, False, []
-        for p in (patch.object(queue, "gh", self.forge.gh),
+        self.threads, self.briefed, self.status, self.t3_down, self.listing, self.free = {}, [], {}, False, [], {}
+        for p in (patch.object(queue, "disk_free", lambda path: self.free.get(path, 2**50)),
+                  patch.object(queue, "gh", self.forge.gh),
                   patch.object(queue, "candidates", lambda errors, pol: list(self.cands)),
                   patch.object(queue, "open_prs", lambda errors, name: dict(self.open)),
                   patch.object(queue, "wake", self.wake), patch.object(queue, "launch", self.launch), patch.object(queue, "t3", self.t3)):
@@ -262,6 +263,23 @@ class Launch(Case):
         self.assertEqual([queue.step(self.pol)["launched"]["id"] for _ in range(2)], ["app-1", "c"])
         got = queue.step(self.pol)
         self.assertEqual((got["launched"], got["waiting"], got["skipped"], len(self.briefed)), (None, "nothing is ready", {"running": 1}, 4))
+
+    def test_nothing_is_launched_while_the_clone_or_a_held_worktree_is_below_the_disk_floor(self):
+        clone = os.path.expanduser(self.pol["host"]["clone"])
+        self.pol["run"]["threads"], self.pol["run"]["disk_floor_gb"] = 9, 20
+        self.run_("a")
+        self.add("b")
+        self.free = {clone: 20 * 2**30 - 1}
+        got = queue.step(self.pol)
+        said = "the machine is below its disk floor: 19G free at {}, under run.disk_floor_gb 20"
+        self.assertEqual((got["launched"], got["waiting"], sorted(self.file()["running"]), len(self.briefed)), (None, said.format(clone), ["a"], 1))
+        self.free = {clone: 20 * 2**30, "/nowhere/wt-a": 2**30}
+        self.assertEqual(queue.step(self.pol)["waiting"], said.format("/nowhere/wt-a").replace("19G", "1G"))
+        self.free = {clone: None, "/nowhere/wt-a": None}
+        self.assertEqual(queue.step(self.pol)["launched"]["id"], "b")
+
+    def test_free_space_is_read_from_the_filesystem_and_a_missing_path_has_none(self):
+        self.assertEqual((DISK(str(self.root)) > 0, DISK(str(self.root / "gone"))), (True, None))
 
     def test_an_item_is_recorded_before_its_thread_starts_and_a_start_that_failed_is_launched_again(self):
         self.add("a")
@@ -518,6 +536,15 @@ class Approve(Case):
         self.assertEqual([a for a in self.forge.calls if a[:2] == ("pr", "merge")],
                          [("pr", "merge", "40", "-R", REPO, "--squash", "--match-head-commit", H1)])
         self.assertEqual((self.file()["waiting"], self.file()["verdicts"], self.queued()), ({}, {}, []))
+
+    def test_below_the_disk_floor_a_pass_still_merges_an_approved_waiting_pr_and_clears_it(self):
+        self.waiting()
+        queue.approve(self.pol, "a")
+        self.add("b")
+        self.free = {os.path.expanduser(self.pol["host"]["clone"]): 0}
+        got = queue.step(self.pol)
+        self.assertEqual((got["cleared"], got["launched"], len(self.merges())), ([{"id": "a", "why": "PR 40 merged"}], None, 1))
+        self.assertTrue(got["waiting"].startswith("the machine is below its disk floor: 0G free at "), got["waiting"])
 
     def test_on_a_merge_queue_base_a_pass_queues_the_passed_head_keeps_it_in_flight_and_clears_it_once_merged(self):
         self.waiting()

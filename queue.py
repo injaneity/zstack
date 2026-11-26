@@ -668,9 +668,27 @@ def rank(labels):
     return 100 if "urgent" in labels else 0
 
 
+def disk_free(path):
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
+
+
+def below_floor(pol, q):
+    trees = sorted({it["worktree"] for part in ("running", "waiting") for it in q[part].values() if it.get("worktree")})
+    free, at = min(((f, p) for p in [os.path.expanduser(pol["host"]["clone"]), *trees] if (f := disk_free(p)) is not None), default=(None, None))
+    floor = pol["run"]["disk_floor_gb"]
+    if free is not None and free < floor * 2**30:
+        return f"the machine is below its disk floor: {free // 2**30}G free at {at}, under run.disk_floor_gb {floor}"
+    return None
+
+
 def first(pol, q):
     if len(q["running"]) >= pol["run"]["threads"]:
         return None, "the machine is at its thread cap", {}, None
+    if low := below_floor(pol, q):
+        return None, low, {}, None
     ready, skipped, errors, listed_ids = work(pol, q)
     if errors:
         return None, errors[0], skipped, None
