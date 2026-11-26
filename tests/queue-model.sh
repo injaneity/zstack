@@ -15,13 +15,12 @@ grep -q "Model checking completed. No error has been found." "$tmp/out" || { tai
 echo "ok    model/Queue.cfg with no merge queue: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
 mkdir "$tmp/resume" && cp "$src/model/Queue.tla" "$tmp/resume/"
 sed -e 's/^  Machines = {"mac", "linux"}$/  Machines = {"mac"}/' -e 's/^  Resumes = {}$/  Resumes = {"i1", "i2", "i3"}/' -e 's/^  Retries = {}$/  Retries = {"i1"}/' \
-  -e 's/^  Hooked = {"i3"}$/  Hooked = {"i1", "i3"}/' \
-  "$src/model/Queue.cfg" > "$tmp/resume/Queue.cfg"
-[ "$(grep -cxE '  (Machines = \{"mac"\}|Resumes = \{"i1", "i2", "i3"\}|Retries = \{"i1"\}|Hooked = \{"i1", "i3"\})' "$tmp/resume/Queue.cfg")" = 4 ] ||
-  { echo "FAIL  model/Queue.cfg has no Machines, Resumes, Retries and Hooked lines to set"; exit 1; }
+  -e 's/^  Fills = {}$/  Fills = {"mac"}/' -e 's/^  Hooked = {"i3"}$/  Hooked = {"i1", "i3"}/' "$src/model/Queue.cfg" > "$tmp/resume/Queue.cfg"
+[ "$(grep -cxE '  (Machines = \{"mac"\}|Resumes = \{"i1", "i2", "i3"\}|Retries = \{"i1"\}|Fills = \{"mac"\}|Hooked = \{"i1", "i3"\})' "$tmp/resume/Queue.cfg")" = 5 ] ||
+  { echo "FAIL  model/Queue.cfg has no Machines, Resumes, Retries, Fills and Hooked lines to set"; exit 1; }
 (cd "$tmp/resume" && "$checker" -workers auto -metadir meta -config Queue.cfg Queue.tla) > "$tmp/out" 2>&1
 grep -q "Model checking completed. No error has been found." "$tmp/out" ||
-  { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg on one machine that resumes every item, retries a dropped head and logs pushes"; exit 1; }
-echo "ok    model/Queue.cfg on one machine that resumes every item, retries a dropped head and logs pushes: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
+  { tail -40 "$tmp/out"; echo "FAIL  everystate did not pass model/Queue.cfg on one machine that resumes every item, retries a dropped head, logs pushes and falls below its disk floor"; exit 1; }
+echo "ok    model/Queue.cfg on one machine that resumes every item, retries a dropped head, logs pushes and falls below its disk floor: $(grep -E 'distinct states found' "$tmp/out" | tail -1)"
 python3 -I "$src/model/queue_mutants.py" "$checker" "$tmp/mutants" || { echo "FAIL  a model/queue_mutants.py mutant was not killed by its rule"; exit 1; }
 echo "ok    model/Queue.tla holds under everystate, and every mutant fails on its rule"
