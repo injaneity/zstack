@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills, Reds
 
 VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, idle, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull
 
@@ -11,7 +11,7 @@ States == {"none", "running", "waiting", "done"}
 TypeOK ==
   /\ q \in [Machines -> [Items -> States]] /\ Paged \subseteq Items
   /\ held \subseteq Items /\ pre \subseteq Items /\ unread \subseteq Garbles /\ up \in BOOLEAN /\ pr \subseteq Items /\ stale \subseteq Items /\ merged \subseteq Items
-  /\ Queues \subseteq Items /\ Retries \subseteq Queues /\ Resumes \subseteq Items /\ Hooked \subseteq Items /\ Fills \subseteq Machines /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN /\ retried \subseteq Queues /\ broken \subseteq Items /\ red \subseteq Items
+  /\ Queues \subseteq Items /\ Retries \subseteq Queues /\ Resumes \subseteq Items /\ Hooked \subseteq Items /\ Fills \subseteq Machines /\ Reds \subseteq Resumes /\ inq \subseteq Queues /\ gone \subseteq Queues /\ lost \subseteq Queues /\ dropped \subseteq Queues /\ requeued \in BOOLEAN /\ retried \subseteq Queues /\ broken \subseteq Items /\ red \subseteq Items
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
   /\ thread \subseteq Items /\ pending \subseteq Items /\ idle \subseteq Items /\ twoThreads \in BOOLEAN /\ diedCleared \in BOOLEAN /\ unmarkedCleared \in BOOLEAN /\ refusedRerun \in BOOLEAN
@@ -45,12 +45,12 @@ Launch(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m
   /\ Busy(m) < Cap
   /\ m \notin full
   /\ ~(i \in Resumes /\ i \in pr)
-  /\ Set(m, i, "running") /\ pending' = pending \cup {i} /\ idle' = idle \cup ({i} \cap Resumes \cap Hooked) /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread)
+  /\ Set(m, i, "running") /\ pending' = pending \cup {i} /\ idle' = idle \cup ({i} \cap Reds \cap Hooked) /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread)
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held) /\ crowded' = (crowded \/ Busy(m) >= Cap) /\ launchedFull' = (launchedFull \/ m \in full)
   /\ UNCHANGED <<held, work, needless, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun>>
 Relaunch(m, i) == q[m][i] = "none" /\ i \in Resumes /\ i \in pr /\ i \notin held /\ i \in Accepts[m] /\ First(m, i) /\ Busy(m) < Cap /\ m \notin full
   /\ Needed(i)
-  /\ Set(m, i, "running") /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread) /\ pending' = pending \cup {i} /\ idle' = idle \cup ({i} \cap Resumes \cap Hooked)
+  /\ Set(m, i, "running") /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread) /\ pending' = pending \cup {i} /\ idle' = idle \cup ({i} \cap Reds \cap Hooked)
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held)
   /\ needless' = (needless \/ ~Needed(i)) /\ crowded' = (crowded \/ Busy(m) >= Cap) /\ launchedFull' = (launchedFull \/ m \in full)
   /\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun>>
@@ -131,7 +131,7 @@ Approve(i) == i \notin pre /\ pre' = pre \cup {i} /\ UNCHANGED <<q, held, unread
 Garble(i) == i \in Garbles /\ i \in pr /\ i \notin merged /\ (\E m \in Machines : q[m][i] = "waiting") /\ i \notin unread /\ unread' = unread \cup {i} /\ UNCHANGED <<q, held, pre, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Break(i) == i \in Resumes /\ i \in pr /\ i \notin merged /\ i \notin broken /\ broken' = broken \cup {i}
   /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, red, by, okAtMerge, history>>
-Redden(i) == i \in Resumes /\ i \in pr /\ i \notin merged /\ i \notin red /\ red' = red \cup {i}
+Redden(i) == i \in Reds /\ i \in pr /\ i \notin merged /\ i \notin red /\ red' = red \cup {i}
   /\ UNCHANGED <<q, held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, by, okAtMerge, history>>
 Fill(m) == m \in Fills /\ m \notin full /\ full' = full \cup {m} /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Prune(m) == m \in full /\ full' = full \ {m} /\ UNCHANGED <<q, held, pre, unread, up, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>

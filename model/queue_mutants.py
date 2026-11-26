@@ -7,9 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
-RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n  Hooked = {"i3"}\n',
-           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n'
-           '  Hooked = {"i1", "i3"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n')
+REDS = (RESUMES[0] + '  Hooked = {"i3"}\n  Reds = {}\n', RESUMES[1] + '  Hooked = {"i1", "i3"}\n  Reds = {"i1"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -263,7 +263,7 @@ M = [
         "a waiting PR whose ci-gate is red on a head that has a pass goes back to tasks on every pass, though main may be what is red",
         [(' \\/ i \\in broken)\nResume', ' \\/ i \\in broken \\/ i \\in red)\nResume')],
         "AResumedThreadIsNeeded",
-        RESUMES,
+        REDS,
     ),
     (
         "resume-after-a-thread-that-pushed-nothing",
@@ -271,7 +271,7 @@ M = [
         [('(status[i] = "none" /\\ ~Quiet(i) \\/ Stands(i) \\/ i \\in broken)\nResume',
           '(status[i] = "none" \\/ Stands(i) \\/ i \\in broken)\nResume')],
         "AResumedThreadIsNeeded",
-        RESUMES,
+        REDS,
     ),
     (
         "merge-a-broken-head",
