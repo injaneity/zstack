@@ -1,7 +1,7 @@
 ---- MODULE Queue ----
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills
+CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills, Idles
 
 VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull, idle
 
@@ -106,7 +106,7 @@ Die(m, i) == q[m][i] = "running" /\ i \in thread /\ UNCHANGED endedUnverified
         /\ refusedRerun' = (refusedRerun \/ r /\ q'[m][i] = "none")
         /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, unmarkedCleared, launchedFull, idle>>)
   /\ diedCleared' = (diedCleared \/ q'[m][i] = "done" /\ i \notin pr)
-Idle(m, i) == q[m][i] = "running" /\ i \in thread /\ Set(m, i, "waiting") /\ idle' = idle \cup {i}
+Idle(m, i) == q[m][i] = "running" /\ i \in Idles /\ i \in thread /\ Set(m, i, "waiting") /\ idle' = idle \cup {i}
   /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull>>
 IdleEnds(i) == i \in idle /\ i \in thread /\ thread' = thread \ {i}
   /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
@@ -154,6 +154,7 @@ Next ==
 
 Fair == \A m \in Machines, i \in Items : WF_vars(Idle(m, i)) /\ WF_vars(Rerun(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
   /\ WF_vars(PassMerge(m, i)) /\ WF_vars(Dequeue(m, i)) /\ WF_vars(Observe(m, i))
+  /\ \A m \in Machines, i \in Items \ Idles : WF_vars(Freed(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
 OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "none"}) <= 1
