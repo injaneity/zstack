@@ -3,9 +3,9 @@ EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS Machines, Items, Cap, Accepts, Review, Pre, Prio, NoTree, Garbles, Paged, Queues, Retries, Resumes, Hooked, Fills, Idles
 
-VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull, idle
+VARIABLES q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull, idle, cleanedLive
 
-vars == <<q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull, idle>>
+vars == <<q, held, pre, unread, up, pr, status, stale, merged, inq, gone, lost, dropped, requeued, retried, broken, red, by, okAtMerge, thread, pending, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, full, launchedFull, idle, cleanedLive>>
 States == {"none", "running", "waiting", "done"}
 
 TypeOK ==
@@ -15,7 +15,7 @@ TypeOK ==
   /\ status \in [Items -> {"none", "auto", "review"}]
   /\ by \in [Items -> {"none", "thread", "pass", "human"}] /\ okAtMerge \in [Items -> BOOLEAN]
   /\ thread \subseteq Items /\ pending \subseteq Items /\ twoThreads \in BOOLEAN /\ diedCleared \in BOOLEAN /\ unmarkedCleared \in BOOLEAN /\ refusedRerun \in BOOLEAN
-  /\ full \subseteq Machines /\ launchedFull \in BOOLEAN /\ idle \subseteq Items
+  /\ full \subseteq Machines /\ launchedFull \in BOOLEAN /\ idle \subseteq Items /\ cleanedLive \in BOOLEAN
   /\ startedHeld \in BOOLEAN /\ needless \in BOOLEAN /\ jumped \in BOOLEAN /\ crowded \in BOOLEAN /\ endedUnverified \in BOOLEAN
 
 Init ==
@@ -25,14 +25,14 @@ Init ==
   /\ inq = {} /\ gone = {} /\ lost = {} /\ dropped = {} /\ requeued = FALSE /\ retried = {} /\ broken = {} /\ red = {}
   /\ by = [i \in Items |-> "none"] /\ okAtMerge = [i \in Items |-> FALSE]
   /\ thread = {} /\ pending = {} /\ twoThreads = FALSE /\ diedCleared = FALSE /\ unmarkedCleared = FALSE /\ refusedRerun = FALSE
-  /\ full = {} /\ launchedFull = FALSE /\ idle = {}
+  /\ full = {} /\ launchedFull = FALSE /\ idle = {} /\ cleanedLive = FALSE
   /\ startedHeld = FALSE /\ needless = FALSE /\ jumped = FALSE /\ crowded = FALSE /\ endedUnverified = FALSE
 
 Set(m, i, s) == q' = [q EXCEPT ![m][i] = s]
 Busy(m) == Cardinality({j \in Items : q[m][j] = "running"})
 drops == <<gone, lost, dropped, requeued, retried, broken, red>>
 work == <<pre, unread, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge>>
-history == <<startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
+history == <<startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 
 Ready(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held
 Stands(i) == i \in dropped /\ (i \notin pre \/ i \notin Retries \/ i \in retried)
@@ -46,13 +46,13 @@ Launch(m, i) == q[m][i] = "none" /\ i \in Accepts[m] /\ i \notin held /\ First(m
   /\ ~(i \in Resumes /\ i \in pr)
   /\ Set(m, i, "running") /\ pending' = pending \cup {i} /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread)
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held) /\ crowded' = (crowded \/ Busy(m) >= Cap) /\ launchedFull' = (launchedFull \/ m \in full)
-  /\ UNCHANGED <<held, work, needless, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun, idle>>
+  /\ UNCHANGED <<held, work, needless, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun, idle, cleanedLive>>
 Relaunch(m, i) == q[m][i] = "none" /\ i \in Resumes /\ i \in pr /\ i \notin held /\ i \in Accepts[m] /\ First(m, i) /\ Busy(m) < Cap /\ m \notin full
   /\ Needed(i)
   /\ Set(m, i, "running") /\ twoThreads' = (twoThreads \/ i \in pending \/ i \in thread) /\ pending' = pending \cup {i}
   /\ jumped' = (jumped \/ ~First(m, i)) /\ startedHeld' = (startedHeld \/ i \in held)
   /\ needless' = (needless \/ ~Needed(i)) /\ crowded' = (crowded \/ Busy(m) >= Cap) /\ launchedFull' = (launchedFull \/ m \in full)
-  /\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun, idle>>
+  /\ UNCHANGED <<held, work, endedUnverified, thread, diedCleared, unmarkedCleared, refusedRerun, idle, cleanedLive>>
 
 Takes(m, i) == q[m][i] \in {"running", "waiting"}
 Push(m, i) == Takes(m, i) /\ i \notin NoTree /\ i \notin merged
@@ -96,7 +96,7 @@ Leave(m, i, marked, refused) ==
   /\ unmarkedCleared' = (unmarkedCleared \/ q'[m][i] = "done" /\ i \notin pr /\ ~marked)
   /\ refusedRerun' = (refusedRerun \/ refused /\ i \notin pr /\ q'[m][i] = "none")
   /\ i \in thread /\ thread' = thread \ {i}
-  /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, launchedFull, idle>>
+  /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, launchedFull, idle, cleanedLive>>
 TurnEnd(m, i) == q[m][i] = "running" /\ (up \/ i \in NoTree) /\ ~Unverified(i)
   /\ endedUnverified' = (endedUnverified \/ Unverified(i)) /\ (\E c \in BOOLEAN, r \in Refusals(i) : Leave(m, i, c, r)) /\ UNCHANGED diedCleared
 Freed(m, i) == q[m][i] = "running" /\ UNCHANGED <<endedUnverified, diedCleared>> /\ \E c \in BOOLEAN, r \in Refusals(i) : Leave(m, i, c, r)
@@ -104,26 +104,27 @@ Die(m, i) == q[m][i] = "running" /\ i \in thread /\ UNCHANGED endedUnverified
   /\ (IF i \in pr THEN Leave(m, i, TRUE, FALSE)
       ELSE \E r \in Refusals(i) : Set(m, i, IF r THEN "waiting" ELSE "none") /\ thread' = thread \ {i}
         /\ refusedRerun' = (refusedRerun \/ r /\ q'[m][i] = "none")
-        /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, unmarkedCleared, launchedFull, idle>>)
+        /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, pending, twoThreads, unmarkedCleared, launchedFull, idle, cleanedLive>>)
   /\ diedCleared' = (diedCleared \/ q'[m][i] = "done" /\ i \notin pr)
 Idle(m, i) == q[m][i] = "running" /\ i \in Idles /\ i \in thread /\ Set(m, i, "waiting") /\ idle' = idle \cup {i}
+  /\ cleanedLive' = (cleanedLive \/ i \in pr /\ i \notin idle')
   /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull>>
 IdleEnds(i) == i \in idle /\ i \in thread /\ thread' = thread \ {i}
-  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
+  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 IdleOver(m, i) == q[m][i] = "waiting" /\ i \in idle /\ i \notin thread
 Rerun(m, i) == IdleOver(m, i) /\ idle' = idle \ {i} /\ (IF i \in pr THEN UNCHANGED q ELSE Set(m, i, "none"))
-  /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull>>
+  /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, cleanedLive>>
 Started(i) == i \in pending /\ pending' = pending \ {i} /\ thread' = thread \cup {i}
-  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
+  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 Lost(i) == i \in pending /\ pending' = pending \ {i}
-  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
+  /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 Abort(m, i) == q[m][i] = "running" /\ i \notin thread /\ i \notin pending /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
 Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>
 Ended(m, i) == i \in Resumes /\ q[m][i] = "waiting" /\ i \notin thread /\ i \notin idle /\ i \in pr
 Stuck(m, i) == Ended(m, i) /\ i \notin merged /\ i \notin held /\ i \notin inq
   /\ ~NeedsPerson(i) /\ i \notin Review /\ (status[i] = "none" \/ Stands(i) \/ i \in broken)
 Resume(m, i) == Stuck(m, i) /\ Set(m, i, "none") /\ needless' = (needless \/ ~Needed(i))
-  /\ UNCHANGED <<held, work, startedHeld, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
+  /\ UNCHANGED <<held, work, startedHeld, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 Unblock(m, i) == q[m][i] = "waiting" /\ i \in Hooked /\ i \notin pr /\ i \notin idle /\ pre' = pre \cup {i} /\ Set(m, i, "none")
   /\ UNCHANGED <<held, unread, up, full, pr, status, stale, merged, inq, drops, by, okAtMerge, history>>
 Unresume(m, i) == i \in Resumes /\ q[m][i] = "none" /\ i \in pr /\ i \notin pending /\ Set(m, i, "waiting")
@@ -152,15 +153,18 @@ Next ==
   \/ \E m \in Machines : Fill(m) \/ Prune(m)
   \/ Flip
 
-Fair == \A m \in Machines, i \in Items : WF_vars(Idle(m, i)) /\ WF_vars(Rerun(m, i)) /\ WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
-  /\ WF_vars(PassMerge(m, i)) /\ WF_vars(Dequeue(m, i)) /\ WF_vars(Observe(m, i))
+Fair ==
+  /\ \A m \in Machines, i \in Items : WF_vars(Abort(m, i)) /\ WF_vars(Settle(m, i)) /\ WF_vars(Lost(i)) /\ WF_vars(Resume(m, i))
+       /\ WF_vars(PassMerge(m, i)) /\ WF_vars(Dequeue(m, i)) /\ WF_vars(Observe(m, i))
   /\ \A m \in Machines, i \in Items \ Idles : WF_vars(Freed(m, i))
+  /\ \A m \in Machines, i \in Idles : WF_vars(Idle(m, i)) /\ WF_vars(Rerun(m, i))
 Spec == Init /\ [][Next]_vars /\ Fair
 
 OneMachinePerItem == \A i \in Items : Cardinality({m \in Machines : q[m][i] # "none"}) <= 1
 OneThreadPerItem == ~twoThreads
 CapHolds == ~crowded
 NoLaunchBelowTheDiskFloor == ~launchedFull
+ALiveThreadKeepsItsTree == ~cleanedLive
 HeldNeverStarted == ~startedHeld
 AResumedThreadIsNeeded == ~needless
 PriorityOrder == ~jumped
@@ -180,7 +184,7 @@ ASecondDropIsNotQueued == ~requeued
 OnlyADroppedHeadIsBlocked == dropped \subseteq gone
 AHeldEntryLeavesTheQueue == \A i \in Items : (i \in inq /\ i \in held) ~> (i \notin inq \/ i \notin held)
 AnEndedWaitIsRunAgain == \A m \in Machines, i \in Items : (Ended(m, i) /\ Needed(i)) ~> ~(Ended(m, i) /\ Needed(i))
-AnEndedIdleThreadIsRunAgain == \A m \in Machines, i \in Items : IdleOver(m, i) ~> ~IdleOver(m, i)
+AnEndedIdleThreadIsRunAgain == \A m \in Machines, i \in Idles : IdleOver(m, i) ~> ~IdleOver(m, i)
 AMergedWaitIsCleared == \A m \in Machines, i \in Items : (q[m][i] = "waiting" /\ i \in merged) ~> (q[m][i] = "done")
 
 MCAccepts == ("mac" :> {"i1", "i3"} @@ "linux" :> {"i2"})

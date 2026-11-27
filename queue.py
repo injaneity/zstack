@@ -1352,7 +1352,8 @@ def outcome(pol, q, key, merge=False, died=False):
             need = needs(pol, it, v, live) if standing(it)[1] and standing(it) != was else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
-            tidy(pol, it, False)
+            if not idle:
+                tidy(pol, it, False)
             return wait(said)
         if live and live["state"] == "OPEN":
             v = q["verdicts"].get(str(it["pr"]))
@@ -1363,7 +1364,8 @@ def outcome(pol, q, key, merge=False, died=False):
             need = needs(pol, it, v, live) if merge and not it.get("queued") else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
-            tidy(pol, it, False)
+            if not idle:
+                tidy(pol, it, False)
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:

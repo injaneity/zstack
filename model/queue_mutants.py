@@ -290,7 +290,7 @@ M = [
     (
         "an-idle-thread-holds-its-slot",
         "a thread that hangs or waits on a question holds its slot for good, as when run.idle_min was read nowhere",
-        [("Fair == \\A m \\in Machines, i \\in Items : WF_vars(Idle(m, i))", "Fair == \\A m \\in Machines, i \\in Items : TRUE")],
+        [("\\A m \\in Machines, i \\in Idles : WF_vars(Idle(m, i))", "\\A m \\in Machines, i \\in Idles : TRUE")],
         LIVE,
         IDLES,
     ),
@@ -306,6 +306,13 @@ M = [
         "an item freed as idle waits for good after its old thread ends",
         [("Rerun(m, i) == IdleOver(m, i) /\\", "Rerun(m, i) == FALSE /\\ IdleOver(m, i) /\\")],
         LIVE,
+        IDLES,
+    ),
+    (
+        "clean-a-live-idle-tree",
+        "the pass cleans the ignored files of an idle thread's worktree while that thread may still run",
+        [("/\\ cleanedLive' = (cleanedLive \\/ i \\in pr /\\ i \\notin idle')", "/\\ cleanedLive' = (cleanedLive \\/ i \\in pr)")],
+        "ALiveThreadKeepsItsTree",
         IDLES,
     ),
     (
