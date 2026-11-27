@@ -1128,8 +1128,8 @@ DEQUEUE = "mutation($id: ID!) { dequeuePullRequest(input: {id: $id}) { clientMut
 
 def approved_merge(pol, it, v, live):
     why = blocked(pol, it, v, live)
-    if why or not it["preapproved"]:
-        return why or "its thread did not merge it"
+    if why:
+        return why
     (owner, name), m = pol["merge"]["repo"].split("/"), pol["merge"]
     issue = f" issue(number: {it['n']}) {{ labels(first: 100) {{ nodes {{ name }} }} }}" if it["kind"] == "issue" else ""
     heads, labels, nodes, after = set(), set(), [], ()

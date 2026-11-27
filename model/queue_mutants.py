@@ -68,25 +68,25 @@ M = [
     (
         "pass-merges-a-labelled-pr",
         "the pass merges an approved waiting PR that carries the review label",
-        [("/\\ Open(i) /\\ i \\in pre /\\ i \\notin Review", "/\\ Open(i) /\\ i \\in pre")],
-        "OnlyAVerifiedAllowedHeadMerges",
-    ),
-    (
-        "pass-merges-an-unapproved-pr",
-        "the pass merges a waiting PR nobody approved",
-        [("/\\ Open(i) /\\ i \\in pre /\\ i \\notin Review", "/\\ Open(i) /\\ i \\notin Review")],
+        [("/\\ Open(i) /\\ i \\notin Review /\\ i \\notin unread", "/\\ Open(i) /\\ i \\notin unread")],
         "OnlyAVerifiedAllowedHeadMerges",
     ),
     (
         "pass-merges-an-unverified-pr",
-        "the pass merges an approved waiting PR whose head has no pass",
-        [("/\\ i \\notin merged /\\ Open(i) /\\ i \\in pre", "/\\ i \\notin merged /\\ i \\notin held /\\ i \\in pre")],
+        "the pass merges a waiting PR whose head has no pass",
+        [("/\\ i \\notin merged /\\ Open(i) /\\ i \\notin Review", "/\\ i \\notin merged /\\ i \\notin held /\\ i \\notin Review")],
         "OnlyAVerifiedAllowedHeadMerges",
     ),
     (
         "an-approved-wait-is-stuck",
         "an approved waiting PR whose head may merge stays waiting for the owner for good, as before `queue.py approve`",
         [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ FALSE /\\ Merge")],
+        LIVE,
+    ),
+    (
+        "an-unapproved-auto-wait-is-stuck",
+        "a waiting PR whose head passed as auto waits for the owner for good unless the item is preapproved",
+        [("PassMerge(m, i) == PassReady(m, i) /\\ Merge", "PassMerge(m, i) == PassReady(m, i) /\\ i \\in pre /\\ Merge")],
         LIVE,
     ),
     (
@@ -119,7 +119,7 @@ M = [
     (
         "requeue-a-dropped-head",
         "the pass queues again a head GitHub dropped from the merge queue after its one fresh run",
-        [("/\\ i \\notin lost /\\ ~Stands(i)\n", "/\\ i \\notin lost\n")],
+        [("/\\ i \\notin lost /\\ ~Stands(i)\n", "/\\ i \\notin lost /\\ (i \\in pre \\/ ~Stands(i))\n")],
         "ASecondDropIsNotQueued",
         ONE_MACHINE,
     ),
@@ -242,7 +242,7 @@ M = [
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
           '  /\\ UNCHANGED <<held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, red, '
-          'by, okAtMerge, ')],
+          'badMerge, okAtMerge, ')],
         "ASecondDropIsNotQueued",
         RESUMES,
     ),
