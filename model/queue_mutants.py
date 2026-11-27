@@ -242,7 +242,7 @@ M = [
           '  /\\ UNCHANGED <<held, work, ',
           'Resume(m, i) == Stuck(m, i) /\\ Set(m, i, "none") /\\ needless\' = (needless \\/ ~Needed(i)) /\\ dropped\' = dropped \\ {i}\n'
           '  /\\ UNCHANGED <<held, pre, unread, up, full, pr, status, stale, merged, inq, gone, lost, requeued, retried, broken, red, '
-          'by, okAtMerge, ')],
+          'badMerge, okAtMerge, ')],
         "ASecondDropIsNotQueued",
         RESUMES,
     ),
