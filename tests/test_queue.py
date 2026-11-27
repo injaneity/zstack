@@ -1265,8 +1265,11 @@ class Release(Case):
         def ago(minutes):
             return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
+        tidied, tidy = [], queue.tidy
+
         def pass_(pr=None):
-            with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: pr if it["thread"] == "t-p" else None):
+            with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: pr if it["thread"] == "t-p" else None), \
+                    patch.object(queue, "tidy", lambda pol, it, whole: tidied.append(it["thread"]) or tidy(pol, it, whole)):
                 return queue.run_pass(self.pol)
         self.updated = {"t-a": ago(idle - 1), "t-p": ago(idle + 1)}
         work = {"pendingBackgroundTasks": [{"taskId": "x", "kind": "command", "awaited": True}]}
@@ -1287,6 +1290,7 @@ class Release(Case):
         self.assertEqual(([x["id"] for x in got["launched"]], sorted(got_q["running"]), sorted(got_q["waiting"])), (["b"], ["b"], ["a", "p"]))
         self.assertEqual(sorted(self.wakes), [("blocked", f"a: {said['a']}", None), ("blocked", f"p: {said['p']}", 40)])
         self.assertEqual(sorted((x["id"], x["why"]) for x in pass_(40)["kept"]), sorted(said.items()))
+        self.assertEqual(tidied, [])
         self.status = {"t-a": "completed", "t-p": "interrupted", "t-b": "running"}
         got = pass_(40)
         self.assertEqual(sorted({(x["id"], x["why"]) for x in got["cleared"]}), [
