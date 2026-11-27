@@ -1300,6 +1300,29 @@ class Release(Case):
         self.assertEqual((got["kept"], [x["id"] for x in got["launched"]]), ([], ["a"]))
         self.assertEqual((sorted(got_q["running"]), sorted(got_q["tasks"])), (["a", "b"], ["p"]))
 
+    def test_an_idle_thread_whose_pr_merges_keeps_its_worktree_until_that_thread_ends(self):
+        self.run_("p")
+        idle = self.pol["run"]["idle_min"]
+        tidied, tidy = [], queue.tidy
+
+        def pass_():
+            with self.trees(), patch.object(queue, "branch_pr", lambda pol, it: 40), \
+                    patch.object(queue, "tidy", lambda pol, it, whole: tidied.append(it["thread"]) or tidy(pol, it, whole)):
+                return queue.run_pass(self.pol)
+        self.pr_open(40)
+        self.status = {"t-p": "running"}
+        self.updated = {"t-p": (datetime.now(timezone.utc) - timedelta(minutes=idle + 1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+        self.shown = {"t-p": {"pendingRequestCount": 1}}
+        self.assertEqual([(x["released"], x["state"]) for x in pass_()["released"]], [("p", "waiting")])
+        self.forge.prs[40]["state"] = "MERGED"
+        freed = (f"its thread showed nothing new for run.idle_min ({idle} minutes) and has not ended, so its slot is freed, and it runs again "
+                 "once that thread ends")
+        got = pass_()
+        self.assertEqual((got["kept"], got["cleared"], tidied), ([{"id": "p", "why": f"PR 40 merged; {freed}"}], [], []))
+        self.status = {"t-p": "completed"}
+        got = pass_()
+        self.assertEqual((got["kept"], got["cleared"], tidied, self.file()["waiting"]), ([], [{"id": "p", "why": "PR 40 merged"}], ["t-p"], {}))
+
     def test_a_turn_that_ends_with_no_pr_goes_back_to_tasks_unless_its_thread_marked_it_complete(self):
         self.pol["run"]["threads"] = 9
         for x in ("ended", "marked", "died", "open", "pushed", "unhooked"):
