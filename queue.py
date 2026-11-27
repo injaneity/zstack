@@ -812,6 +812,10 @@ def step(pol):
     return locked(pol, record)
 
 
+def since(at):
+    return (datetime.now(timezone.utc) - datetime.strptime(at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)).total_seconds()
+
+
 def reconcile(pol):
     def go(q):
         dead, changed, rows = [], False, None
@@ -825,8 +829,7 @@ def reconcile(pol):
             if not it["thread"]:
                 rows = listing() if rows is None else rows
                 mine = [r["threadId"] for r in rows if r["title"] == key and r["createdAt"] >= it["at"]]
-                asked = datetime.strptime(it["at"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-                if not mine and (datetime.now(timezone.utc) - asked).total_seconds() >= pol["run"]["lost_min"] * 60:
+                if not mine and since(it["at"]) >= pol["run"]["lost_min"] * 60:
                     del q["running"][key]
                     changed = True
                 if not mine:
@@ -840,8 +843,13 @@ def reconcile(pol):
                 continue
             if not it["worktree"] and seen["thread"]["worktreePath"]:
                 it["worktree"], changed = seen["thread"]["worktreePath"], True
-            if seen["thread"]["status"] in DEAD:
-                dead.append((key, seen["thread"]["status"] in DIED))
+            t = seen["thread"]
+            if t["status"] in DEAD:
+                dead.append((key, t["status"] in DIED))
+            elif since(t["updatedAt"]) >= pol["run"]["idle_min"] * 60 and (
+                    t.get("pendingRequestCount") or not (t.get("pendingBackgroundTasks") or t.get("blockedOnThreadWait"))):
+                it["idle"], changed = pol["run"]["idle_min"], True
+                dead.append((key, False))
         return dead, changed
     return locked(pol, go)
 
@@ -1301,10 +1309,14 @@ def outcome(pol, q, key, merge=False, died=False):
     died = died or it.pop("died", False)
     back = died or not it.get("complete")
     ended_as = "its thread died" if died else "its thread ended, not marked complete,"
+    if it.get("idle") and ended(pol, it):
+        it.pop("idle")
+    idle = (f"its thread showed nothing new for run.idle_min ({it['idle']} minutes) and has not ended, so its slot is freed, and it "
+            "runs again once that thread ends" if it.get("idle") else None)
 
     def wait(why):
         q["waiting"][key] = {**it, "died": True} if died else it
-        return "waiting", why
+        return "waiting", f"{why}; {idle}" if idle and why != idle else why
 
     def note():
         known = "refused" not in it and it.get("logged") and (it["worktree"] or it["thread"])
@@ -1340,7 +1352,8 @@ def outcome(pol, q, key, merge=False, died=False):
             need = needs(pol, it, v, live) if standing(it)[1] and standing(it) != was else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
-            tidy(pol, it, False)
+            if not idle:
+                tidy(pol, it, False)
             return wait(said)
         if live and live["state"] == "OPEN":
             v = q["verdicts"].get(str(it["pr"]))
@@ -1351,13 +1364,16 @@ def outcome(pol, q, key, merge=False, died=False):
             need = needs(pol, it, v, live) if merge and not it.get("queued") else []
             if need and ended(pol, it) and not shared(pol, q, it):
                 return resume(pol, q, key, it, live, need)
-            tidy(pol, it, False)
+            if not idle:
+                tidy(pol, it, False)
             return wait(f"PR {it['pr']} is in the merge queue at head {it['queued']}" if it.get("queued") else
                         f"PR {it['pr']} waits for the owner: {why}")
     except Refused as e:
-        if not it["pr"]:
+        if not it["pr"] and not idle:
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
+    if idle:
+        return wait(f"PR {it['pr']} merged" if live and live["state"] == "MERGED" else idle)
     rows = pushes(pol, it) if live and live["state"] != "OPEN" and not tracked and (it["worktree"] or it["thread"]) else None
     before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
     stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})

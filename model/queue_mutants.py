@@ -9,6 +9,8 @@ NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
 RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n',
            '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n')
+IDLES = ('  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n  Idles = {}\n',
+         '  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n  Idles = {"i1"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -171,9 +173,10 @@ M = [
     ("oldest-first", "the queue ignores priority", [("/\\ i \\notin held /\\ First(m, i)\n", "/\\ i \\notin held\n")], "PriorityOrder"),
     (
         "no-release",
-        "an item whose thread's turn ended holds its slot for good",
+        "an item whose thread's turn ended, or that went idle, holds its slot for good",
         [('Freed(m, i) == q[m][i] = "running" /\\ UNCHANGED', 'Freed(m, i) == q[m][i] = "running" /\\ FALSE /\\ UNCHANGED'),
-         ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up')],
+         ('TurnEnd(m, i) == q[m][i] = "running" /\\ (up', 'TurnEnd(m, i) == q[m][i] = "running" /\\ FALSE /\\ (up'),
+         ('Idle(m, i) == q[m][i] = "running"', 'Idle(m, i) == FALSE /\\ q[m][i] = "running"')],
         LIVE,
     ),
     (
@@ -286,10 +289,45 @@ M = [
         RESUMES,
     ),
     (
+        "an-idle-thread-holds-its-slot",
+        "a thread that hangs or waits on a question holds its slot for good, as when run.idle_min was read nowhere",
+        [("\\A m \\in Machines, i \\in Idles : WF_vars(Idle(m, i))", "\\A m \\in Machines, i \\in Idles : TRUE")],
+        LIVE,
+        IDLES,
+    ),
+    (
+        "rerun-a-live-idle-thread",
+        "an item freed as idle runs again while its old thread still lives",
+        [("IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle /\\ i \\notin thread", "IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle")],
+        "OneThreadPerItem",
+        IDLES,
+    ),
+    (
+        "keep-an-ended-idle-item",
+        "an item freed as idle waits for good after its old thread ends",
+        [("Rerun(m, i) == IdleOver(m, i) /\\", "Rerun(m, i) == FALSE /\\ IdleOver(m, i) /\\")],
+        LIVE,
+        IDLES,
+    ),
+    (
+        "clean-a-live-idle-tree",
+        "the pass cleans the ignored files of an idle thread's worktree while that thread may still run",
+        [("/\\ cleanedLive' = (cleanedLive \\/ i \\in pr /\\ i \\notin idle')", "/\\ cleanedLive' = (cleanedLive \\/ i \\in pr)")],
+        "ALiveThreadKeepsItsTree",
+        IDLES,
+    ),
+    (
         "keep-a-merged-item",
         "an item whose PR the owner merged stays in the queue for good",
         [('Settle(m, i) == q[m][i] = "waiting" /\\ i \\in merged', 'Settle(m, i) == q[m][i] = "waiting" /\\ FALSE /\\ i \\in merged')],
         LIVE,
+    ),
+    (
+        "settle-a-live-idle-tree",
+        "the pass clears an idle item whose PR merged, removing its worktree while its thread may still run",
+        [("/\\ i \\in merged /\\ i \\notin idle /\\ Set(m, i, \"done\")", "/\\ i \\in merged /\\ Set(m, i, \"done\")")],
+        "ALiveThreadKeepsItsTree",
+        IDLES,
     ),
 ]
 
@@ -328,7 +366,8 @@ def run(checker, scratch, src, cfg, name, why, edits, rule, *conf):
 def main(checker, scratch):
     src = open(os.path.join(HERE, "Queue.tla")).read()
     cfg = open(os.path.join(HERE, "Queue.cfg")).read()
-    with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
+    memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    with ThreadPoolExecutor(max(1, min((os.cpu_count() or 2) // 2, memory // (8 << 30)))) as pool:
         said = list(pool.map(lambda m: run(checker, scratch, src, cfg, *m), M))
     print("\n".join(said))
     return int(any(not x.startswith("killed") for x in said))
