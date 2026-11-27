@@ -7,10 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
-RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n'
-           '  Idles = {}\n',
-           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n'
-           '  Idles = {"i1", "i2", "i3"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n')
+IDLES = (RESUMES[0] + '  Idles = {}\n', RESUMES[1] + '  Idles = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
@@ -293,21 +292,21 @@ M = [
         "a thread that hangs or waits on a question holds its slot for good, as when run.idle_min was read nowhere",
         [("Fair == \\A m \\in Machines, i \\in Items : WF_vars(Idle(m, i))", "Fair == \\A m \\in Machines, i \\in Items : TRUE")],
         LIVE,
-        RESUMES,
+        IDLES,
     ),
     (
         "rerun-a-live-idle-thread",
         "an item freed as idle runs again while its old thread still lives",
         [("IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle /\\ i \\notin thread", "IdleOver(m, i) == q[m][i] = \"waiting\" /\\ i \\in idle")],
         "OneThreadPerItem",
-        RESUMES,
+        IDLES,
     ),
     (
         "keep-an-ended-idle-item",
         "an item freed as idle waits for good after its old thread ends",
         [("Rerun(m, i) == IdleOver(m, i) /\\", "Rerun(m, i) == FALSE /\\ IdleOver(m, i) /\\")],
         LIVE,
-        RESUMES,
+        IDLES,
     ),
     (
         "keep-a-merged-item",
