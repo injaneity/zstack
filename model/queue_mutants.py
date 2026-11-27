@@ -366,7 +366,8 @@ def run(checker, scratch, src, cfg, name, why, edits, rule, *conf):
 def main(checker, scratch):
     src = open(os.path.join(HERE, "Queue.tla")).read()
     cfg = open(os.path.join(HERE, "Queue.cfg")).read()
-    with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
+    memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    with ThreadPoolExecutor(max(1, min((os.cpu_count() or 2) // 2, memory // (8 << 30)))) as pool:
         said = list(pool.map(lambda m: run(checker, scratch, src, cfg, *m), M))
     print("\n".join(said))
     return int(any(not x.startswith("killed") for x in said))
