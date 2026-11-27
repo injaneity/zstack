@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 LIVE = "a temporal property"
 NO_QUEUE = ('  Queues = {"i1"}\n', "  Queues = {}\n")
 ONE_MACHINE = ('  Retries = {}\n  Machines = {"mac", "linux"}\n', '  Retries = {"i1"}\n  Machines = {"mac"}\n')
-RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n  Idles = {}\n',
-           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n  Idles = {"i1", "i2", "i3"}\n')
+RESUMES = ('  Retries = {}\n  Machines = {"mac", "linux"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {}\n  Fills = {}\n'
+           '  Idles = {}\n',
+           '  Retries = {"i1"}\n  Machines = {"mac"}\n  Garbles = {}\n  NoTree = {"i3"}\n  Resumes = {"i1", "i2", "i3"}\n  Fills = {"mac"}\n'
+           '  Idles = {"i1", "i2", "i3"}\n')
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = [
     (
