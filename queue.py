@@ -1372,8 +1372,8 @@ def outcome(pol, q, key, merge=False, died=False):
         if not it["pr"] and not idle:
             note()
         return wait(it["refused"]["why"] if it.get("refused") else str(e))
-    if idle and not (live and live["state"] == "MERGED"):
-        return wait(idle)
+    if idle:
+        return wait(f"PR {it['pr']} merged" if live and live["state"] == "MERGED" else idle)
     rows = pushes(pol, it) if live and live["state"] != "OPEN" and not tracked and (it["worktree"] or it["thread"]) else None
     before = (live or {}).get("closedAt") and live["closedAt"][:19] < it["at"][:19]
     stale = rows is not None and (bool(before) or live["headRefOid"] not in {r["head"] for r in rows})

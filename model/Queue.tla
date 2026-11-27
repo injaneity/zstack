@@ -119,7 +119,8 @@ Started(i) == i \in pending /\ pending' = pending \ {i} /\ thread' = thread \cup
 Lost(i) == i \in pending /\ pending' = pending \ {i}
   /\ UNCHANGED <<q, held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle, cleanedLive>>
 Abort(m, i) == q[m][i] = "running" /\ i \notin thread /\ i \notin pending /\ Set(m, i, "none") /\ UNCHANGED <<held, work, history>>
-Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ Set(m, i, "done") /\ UNCHANGED <<held, work, history>>
+Settle(m, i) == q[m][i] = "waiting" /\ i \in merged /\ i \notin idle /\ Set(m, i, "done") /\ cleanedLive' = (cleanedLive \/ i \in idle /\ i \in thread)
+  /\ UNCHANGED <<held, work, startedHeld, needless, jumped, crowded, endedUnverified, thread, pending, twoThreads, diedCleared, unmarkedCleared, refusedRerun, launchedFull, idle>>
 Ended(m, i) == i \in Resumes /\ q[m][i] = "waiting" /\ i \notin thread /\ i \notin idle /\ i \in pr
 Stuck(m, i) == Ended(m, i) /\ i \notin merged /\ i \notin held /\ i \notin inq
   /\ ~NeedsPerson(i) /\ i \notin Review /\ (status[i] = "none" \/ Stands(i) \/ i \in broken)
@@ -185,7 +186,7 @@ OnlyADroppedHeadIsBlocked == dropped \subseteq gone
 AHeldEntryLeavesTheQueue == \A i \in Items : (i \in inq /\ i \in held) ~> (i \notin inq \/ i \notin held)
 AnEndedWaitIsRunAgain == \A m \in Machines, i \in Items : (Ended(m, i) /\ Needed(i)) ~> ~(Ended(m, i) /\ Needed(i))
 AnEndedIdleThreadIsRunAgain == \A m \in Machines, i \in Idles : IdleOver(m, i) ~> ~IdleOver(m, i)
-AMergedWaitIsCleared == \A m \in Machines, i \in Items : (q[m][i] = "waiting" /\ i \in merged) ~> (q[m][i] = "done")
+AMergedWaitIsCleared == \A m \in Machines, i \in Items : (q[m][i] = "waiting" /\ i \in merged /\ ~(i \in idle /\ i \in thread)) ~> (q[m][i] = "done")
 
 MCAccepts == ("mac" :> {"i1", "i3"} @@ "linux" :> {"i2"})
 MCPrio == ("i1" :> 1 @@ "i2" :> 2 @@ "i3" :> 2)

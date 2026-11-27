@@ -310,6 +310,13 @@ M = [
         IDLES,
     ),
     (
+        "settle-a-live-idle-tree",
+        "the pass clears an idle item whose PR merged, removing its worktree while its thread may still run",
+        [("/\\ i \\in merged /\\ i \\notin idle /\\ Set(m, i, \"done\")", "/\\ i \\in merged /\\ Set(m, i, \"done\")")],
+        "ALiveThreadKeepsItsTree",
+        IDLES,
+    ),
+    (
         "clean-a-live-idle-tree",
         "the pass cleans the ignored files of an idle thread's worktree while that thread may still run",
         [("/\\ cleanedLive' = (cleanedLive \\/ i \\in pr /\\ i \\notin idle')", "/\\ cleanedLive' = (cleanedLive \\/ i \\in pr)")],
